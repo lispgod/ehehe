@@ -87,11 +87,70 @@ new component combinations.
 | `GameMapResource` | Wraps the 2D tile grid (`GameMap`). Kept as a resource because tiles are static spatial data best accessed by coordinate, not by query. |
 | `CameraPosition` | Cached viewport center, updated each frame by `camera_follow_system`. |
 | `SpatialIndex` | `HashMap<(i32,i32), Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries used by movement and combat. |
+| `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. Essential for debugging, replays, and future multiplayer sync. |
 
 > **Design note:** Tiles are *not* individual entities. A 120×80 map would
 > create 9,600 entities — expensive to query every frame. Storing the grid in
 > a resource with O(1) coordinate look-up is the standard ECS roguelike
 > approach (used by Bracket-lib, RLTK tutorials, and Cogmind).
+
+---
+
+## Procedural Generation
+
+Map generation uses layered deterministic noise from `noise.rs` (no external
+dependencies). The pipeline runs once at startup when `GameMap::new()` is
+called with the `MapSeed`.
+
+### Noise Primitives (`noise.rs`)
+
+| Function | Purpose |
+|---|---|
+| `squirrel3` | Positional hash (Squirrel3, GDC 2017). Maps `(position, seed)` → `u32` with full avalanche. |
+| `value_noise` | 2D lattice noise in [0, 1) from hashed grid points. |
+| `smooth_noise` | Bilinear interpolation with smoothstep (3t² − 2t³) over four lattice corners. Eliminates grid-axis artifacts. |
+| `fbm` | Fractal Brownian Motion — sums `n` octaves of `smooth_noise` with lacunarity 2 and configurable persistence. Produces 1/f self-similar patterns. |
+
+### Generation Layers
+
+```text
+  Biome layer (fBm, freq 0.03) ──▶ dominant terrain region
+  Detail layer (fBm, freq 0.10) ──▶ local floor variation within biome
+  Tree layer   (fBm, freq 0.05) ──▶ forest cluster density
+  Undergrowth  (fBm, freq 0.08) ──▶ bush / rock scatter
+```
+
+Each layer uses a decorrelated seed offset so layers are statistically independent.
+
+### Floor Selection
+
+The biome value (0–1) partitions the map into four terrain bands:
+
+| Biome range | Dominant terrain |
+|---|---|
+| 0.00 – 0.30 | Sandy / gravelly (Sand, Gravel, Dirt) |
+| 0.30 – 0.50 | Transition (Dirt, Grass, Gravel) |
+| 0.50 – 0.75 | Forest (Grass, TallGrass, Flowers, Moss, Dirt) |
+| 0.75 – 1.00 | Dense forest (Moss, TallGrass, Grass, Flowers) |
+
+The detail noise sub-selects within each band.
+
+### Furniture Placement
+
+- **Border walls** surround the map unconditionally.
+- **Spawn clearing** — Euclidean distance < 6 tiles from spawn: no furniture.
+  Distance 6–10: smooth density ramp via linear transition factor.
+- **Trees** — placed where `tree_fBm > (1 − biome × 0.5 − 0.1) × transition`
+  *and* per-tile jitter > 0.3. ~12% chance of `DeadTree` variant.
+- **Undergrowth** — bushes and rocks in medium-density pockets where
+  `undergrowth_fBm > 0.62` and jitter > 0.6.
+
+### Determinism
+
+All noise functions are pure: `f(x, y, seed) → value`. No global state,
+no floating-point rounding issues (smoothstep is computed in `f64`), and
+no dependency on evaluation order. Two runs with the same `MapSeed`
+produce bit-identical maps.
 
 ---
 
@@ -272,7 +331,8 @@ roguelike/src/
 ├── lib.rs               Module declarations
 ├── components.rs        All ECS components (Position, Player, Renderable, Viewshed, Health, CombatStats, …)
 ├── events.rs            MoveIntent, AttackIntent, DamageEvent
-├── resources.rs         GameMapResource, CameraPosition, SpatialIndex, GameState, TurnState
+├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
+├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, GameState, TurnState
 ├── plugins.rs           RoguelikePlugin + RoguelikeSet (groups systems + resources + states)
 ├── systems/
 │   ├── mod.rs           Re-exports
@@ -284,7 +344,7 @@ roguelike/src/
 │   ├── camera.rs        camera_follow_system
 │   ├── turn.rs          end_player_turn + end_world_turn (state transitions)
 │   └── render.rs        draw_system (three-state fog of war)
-├── gamemap.rs           GameMap struct & tile grid
+├── gamemap.rs           GameMap struct & noise-based procedural generation
 ├── voxel.rs             Voxel struct & rendering helpers
 ├── typeenums.rs         Floor / Furniture enums
 ├── typedefs.rs          Type aliases, constants, helpers
@@ -305,7 +365,7 @@ features slot in naturally:
 | Ranged combat | `RangedAttackIntent { attacker, target_pos }` + line-of-sight check via `SpatialIndex` |
 | Turn system (NPC AI) | Add `AiComponent` + `ai_system` gated on `TurnState::WorldTurn`; emit `MoveIntent`/`AttackIntent` |
 | Items & inventory | `Item` marker + `InBackpack(Entity)` component |
-| Procedural generation | Replace `GameMap::new()` with a generation plugin |
+| ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
 | Death / despawn | System that despawns entities when `health.current <= 0` |
 
 ---

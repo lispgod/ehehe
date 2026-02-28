@@ -2,6 +2,7 @@ pub mod components;
 pub mod events;
 pub mod gamemap;
 pub mod graphic_trait;
+pub mod noise;
 pub mod plugins;
 pub mod resources;
 pub mod systems;

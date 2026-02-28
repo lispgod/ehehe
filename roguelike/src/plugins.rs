@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::components::{CameraFollow, CombatStats, Health, Player, Position, Renderable, Viewshed};
 use crate::events::{AttackIntent, DamageEvent, MoveIntent};
 use crate::gamemap::GameMap;
-use crate::resources::{CameraPosition, GameMapResource, GameState, SpatialIndex, TurnState};
+use crate::resources::{CameraPosition, GameMapResource, GameState, MapSeed, SpatialIndex, TurnState};
 use crate::systems::{camera, combat, input, movement, render, spatial_index, turn, visibility};
 use crate::typedefs::{RatColor, SPAWN_X, SPAWN_Y};
 
@@ -42,13 +42,21 @@ pub struct RoguelikePlugin;
 
 impl Plugin for RoguelikePlugin {
     fn build(&self, app: &mut App) {
+        // Use an existing MapSeed if the user inserted one, otherwise default.
+        let seed = app
+            .world()
+            .get_resource::<MapSeed>()
+            .map(|s| s.0)
+            .unwrap_or(42);
+
         app.add_plugins(bevy::state::app::StatesPlugin)
             // ── Messages ──
             .add_message::<MoveIntent>()
             .add_message::<AttackIntent>()
             .add_message::<DamageEvent>()
             // ── Resources ──
-            .insert_resource(GameMapResource(GameMap::new(120, 80)))
+            .insert_resource(MapSeed(seed))
+            .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
             .insert_resource(CameraPosition((SPAWN_X, SPAWN_Y)))
             .init_resource::<SpatialIndex>()
             // ── States ──

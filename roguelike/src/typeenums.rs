@@ -5,6 +5,9 @@ pub enum Floor {
     Sand,
     Dirt,
     Grass,
+    TallGrass,
+    Flowers,
+    Moss,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.
@@ -12,4 +15,7 @@ pub enum Floor {
 pub enum Furniture {
     Wall,
     Tree,
+    Bush,
+    Rock,
+    DeadTree,
 }

@@ -67,7 +67,7 @@ pub fn draw_system(
         };
         frame.render_widget(Paragraph::new(Text::from(render_lines)).on_black(), game_area);
 
-        // Status bar — query the player entity for its position
+        // Status bar — show player position (gracefully handles missing player)
         let player_info = player_query
             .single()
             .map(|p| format!("({}, {})", p.x, p.y))

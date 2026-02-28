@@ -76,7 +76,7 @@ new component combinations.
 | `CameraPosition` | Cached viewport center, updated each frame by `camera_follow_system`. |
 
 > **Design note:** Tiles are *not* individual entities. A 120×80 map would
-> create 9 600 entities — expensive to query every frame. Storing the grid in
+> create 9,600 entities — expensive to query every frame. Storing the grid in
 > a resource with O(1) coordinate look-up is the standard ECS roguelike
 > approach (used by Bracket-lib, RLTK tutorials, and Cogmind).
 

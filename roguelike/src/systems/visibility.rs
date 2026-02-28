@@ -66,7 +66,8 @@ struct Slope {
 
 impl Slope {
     /// self > other  ⟺  self.y / self.x > other.y / other.x
-    fn _gt(self, other: Self) -> bool {
+    #[allow(dead_code)]
+    fn gt(self, other: Self) -> bool {
         self.y * other.x > other.y * self.x
     }
 
@@ -180,16 +181,15 @@ fn shadowcast_octant(
     }
 }
 
-/// ⌊row * slope⌋ — integer floor of (row * slope.y / slope.x).
+/// Computes the maximum column index for this row: ⌈row × slope⌉.
+/// Uses ceiling division to ensure we don't miss the first column in the scan.
 fn round_up(row: CoordinateUnit, slope: Slope) -> CoordinateUnit {
-    // floor(row * y / x)  using integer division that rounds toward −∞.
     (row * slope.y + slope.x - 1).div_euclid(slope.x)
 }
 
-/// ⌈row * slope⌉ — but we want the lower bound, so this is actually
-/// floor(row * slope.y / slope.x) for the end slope.
+/// Computes the minimum column index for this row using the half-tile
+/// centre convention of the symmetric shadowcasting algorithm.
+/// Returns ⌊(2 × row × slope + 1) / (2 × slope.x)⌋, clamped to ≥ 0.
 fn round_down(row: CoordinateUnit, slope: Slope) -> CoordinateUnit {
-    // We compute floor((row * 2 * slope.y + slope.x) / (2 * slope.x))
-    // to match the half-tile centre convention used by the algorithm.
     ((row * 2 * slope.y + slope.x) / (2 * slope.x)).max(0)
 }

@@ -1,5 +1,5 @@
 use crate::typeenums::{Floor, Furniture};
-use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket};
+use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_X, SPAWN_Y};
 use crate::voxel::Voxel;
 
 /// The game map: a simple 2D grid of voxels.
@@ -12,19 +12,16 @@ pub struct GameMap {
 impl GameMap {
     /// Creates a new game map filled with a simple pattern of floor and furniture tiles.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit) -> Self {
-        let spawn_x = 60;
-        let spawn_y = 40;
-
         // Positions of trees placed around the spawn point
         let spawn_trees: &[(CoordinateUnit, CoordinateUnit)] = &[
-            (spawn_x - 3, spawn_y + 2),
-            (spawn_x + 4, spawn_y + 1),
-            (spawn_x - 2, spawn_y - 3),
-            (spawn_x + 3, spawn_y - 2),
-            (spawn_x + 5, spawn_y + 3),
-            (spawn_x - 4, spawn_y - 1),
-            (spawn_x + 1, spawn_y + 4),
-            (spawn_x - 1, spawn_y - 4),
+            (SPAWN_X - 3, SPAWN_Y + 2),
+            (SPAWN_X + 4, SPAWN_Y + 1),
+            (SPAWN_X - 2, SPAWN_Y - 3),
+            (SPAWN_X + 3, SPAWN_Y - 2),
+            (SPAWN_X + 5, SPAWN_Y + 3),
+            (SPAWN_X - 4, SPAWN_Y - 1),
+            (SPAWN_X + 1, SPAWN_Y + 4),
+            (SPAWN_X - 1, SPAWN_Y - 4),
         ];
 
         let mut voxels = Vec::with_capacity(height as usize);

@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use roguelike::gamemap::GameMap;
-use roguelike::typedefs::{CoordinateUnit, MyPoint, RatColor};
+use roguelike::typedefs::{CoordinateUnit, MyPoint, RatColor, SPAWN_X, SPAWN_Y};
 
 /// Bevy resource holding the game map.
 #[derive(Resource)]
@@ -22,9 +22,6 @@ struct CameraPosition(MyPoint);
 /// Bevy resource holding the player's world position.
 #[derive(Resource)]
 struct PlayerPosition(MyPoint);
-
-const SPAWN_X: CoordinateUnit = 60;
-const SPAWN_Y: CoordinateUnit = 40;
 
 fn main() {
     App::new()

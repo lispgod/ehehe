@@ -1,5 +1,9 @@
+pub mod components;
+pub mod events;
 pub mod gamemap;
 pub mod graphic_trait;
+pub mod plugins;
+pub mod systems;
 pub mod typeenums;
 pub mod typedefs;
 pub mod voxel;

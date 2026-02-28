@@ -18,24 +18,87 @@ roguelike, built with Bevy and rendered through `bevy_ratatui`.
 
 ---
 
+## Mathematical Foundations
+
+### GridVec — Algebraic 2D Integer Vector
+
+All grid coordinates use the `GridVec` type, which forms an **Abelian group** (ℤ², +):
+
+| Property | Expression | Meaning |
+|---|---|---|
+| **Closure** | `GridVec + GridVec → GridVec` | Sum of two vectors is a vector |
+| **Associativity** | `(a + b) + c = a + (b + c)` | Grouping doesn't matter |
+| **Identity** | `GridVec::ZERO` | Adding zero changes nothing |
+| **Inverse** | `-v` for every `v` | Every vector has a negation |
+| **Commutativity** | `a + b = b + a` | Order doesn't matter |
+
+Additionally, `GridVec` supports scalar multiplication (ℤ-module structure) and three
+distance metrics:
+
+| Metric | Formula | Use case |
+|---|---|---|
+| Manhattan (L₁) | `\|Δx\| + \|Δy\|` | 4-connected grid distance |
+| Chebyshev (L∞) | `max(\|Δx\|, \|Δy\|)` | 8-connected (king move) distance |
+| Squared Euclidean | `Δx² + Δy²` | Comparison without sqrt (monotonic) |
+
+All group axioms are verified by unit tests.
+
+### Energy-Based Turn Scheduling
+
+The turn system uses a **discrete-event energy scheduler**, the mathematically correct
+algorithm for multi-actor turn ordering in roguelikes (used by Angband, DCSS, Cogmind):
+
+```
+Each world tick:
+  for each actor:
+    energy += speed
+
+  for each actor where energy ≥ ACTION_COST:
+    perform action
+    energy -= ACTION_COST
+```
+
+**Properties:**
+- **Exact fairness**: over N ticks, an entity with speed S takes exactly ⌊N × S / ACTION_COST⌋ actions.
+- **Integer-only**: no floating-point, no rounding errors.
+- **Deterministic**: same inputs → same scheduling order.
+- **Speed ratios**: Speed(100) = 1 action/tick; Speed(50) = 1 action per 2 ticks; Speed(200) = 2 actions/tick.
+
+### Symmetric Shadowcasting
+
+Field-of-view uses recursive symmetric shadowcasting (Albert Ford, 2017) with
+rational slopes (integer y/x) to avoid floating-point:
+
+- **Symmetry**: A sees B ⟺ B sees A.
+- **Completeness**: no visible tile is missed.
+- **Efficiency**: O(visible tiles) — each tile visited at most once per octant.
+
+---
+
 ## Components
 
 | Component | Type | Purpose |
 |---|---|---|
 | `Position` | `{ x: i32, y: i32 }` | World-grid coordinate for any entity |
 | `Player` | marker (unit struct) | Tags the player-controlled entity |
+| `Name` | `Name(String)` | Display name for combat messages, UI, and logs |
 | `Renderable` | `{ symbol: String, fg: Color, bg: Color }` | Visual representation of an entity |
 | `CameraFollow` | marker | Tags the entity the camera tracks |
 | `BlocksMovement` | marker | Marks an entity as impassable (enforced via `SpatialIndex`) |
+| `Hostile` | marker | Tags entities hostile to the player (triggers bump-to-attack) |
 | `Viewshed` | `{ range, visible_tiles, revealed_tiles, dirty }` | Field-of-view + fog-of-war memory |
 | `Health` | `{ current: i32, max: i32 }` | Hit-point pool for damageable entities |
 | `CombatStats` | `{ attack: i32, defense: i32 }` | Offensive/defensive power for combat resolution |
+| `Speed` | `Speed(i32)` | Energy gained per world tick (100 = normal) |
+| `Energy` | `Energy(i32)` | Accumulated action points; act when ≥ ACTION_COST |
+| `AiState` | `Idle \| Chasing` | AI behaviour state for non-player entities |
 
 ### Why markers?
 
 Bevy queries use component presence for filtering. `Player` lets any system
 find the player with `Query<&Position, With<Player>>` without coupling to a
-concrete "player struct."
+concrete "player struct." `Hostile` enables bump-to-attack without the movement
+system knowing anything about combat rules.
 
 ---
 
@@ -47,22 +110,30 @@ concrete "player struct."
 Entity
  ├─ Position { x, y }
  ├─ Player          (marker)
+ ├─ Name("Player")
  ├─ Renderable { symbol: "@", fg: White, bg: Black }
  ├─ CameraFollow    (marker)
  ├─ Health { current: 30, max: 30 }
  ├─ CombatStats { attack: 5, defense: 2 }
+ ├─ Speed(100)      (normal speed)
+ ├─ Energy(0)
  └─ Viewshed { range: 15, dirty: true }
 ```
 
-### Future: NPC / Monster
+### Monster (Goblin / Orc / Rat)
 
 ```text
 Entity
  ├─ Position { x, y }
- ├─ Renderable { symbol: "g", fg: Red, … }
- ├─ BlocksMovement
- ├─ Health { current: 10, max: 10 }
+ ├─ Name("Goblin")
+ ├─ Renderable { symbol: "g", fg: Green, … }
+ ├─ BlocksMovement  (marker)
+ ├─ Hostile         (marker)
+ ├─ Health { current: 8, max: 8 }
  ├─ CombatStats { attack: 3, defense: 1 }
+ ├─ Speed(80)       (slower than player)
+ ├─ Energy(0)
+ ├─ AiState::Idle
  └─ Viewshed { range: 8 }
 ```
 
@@ -86,8 +157,9 @@ new component combinations.
 |---|---|
 | `GameMapResource` | Wraps the 2D tile grid (`GameMap`). Kept as a resource because tiles are static spatial data best accessed by coordinate, not by query. |
 | `CameraPosition` | Cached viewport center, updated each frame by `camera_follow_system`. |
-| `SpatialIndex` | `HashMap<(i32,i32), Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries used by movement and combat. |
-| `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. Essential for debugging, replays, and future multiplayer sync. |
+| `SpatialIndex` | `HashMap<GridVec, Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries used by movement and combat. |
+| `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. |
+| `CombatLog` | Accumulator for combat messages displayed in the status bar. Cleared after each render frame. |
 
 > **Design note:** Tiles are *not* individual entities. A 120×80 map would
 > create 9,600 entities — expensive to query every frame. Storing the grid in
@@ -145,12 +217,20 @@ The detail noise sub-selects within each band.
 - **Undergrowth** — bushes and rocks in medium-density pockets where
   `undergrowth_fBm > 0.62` and jitter > 0.6.
 
+### Monster Spawning
+
+Monsters are placed deterministically using noise-based spawn probability:
+- ~2% of passable tiles spawn a monster.
+- Minimum distance of 12 tiles from player spawn.
+- Monster type (Goblin, Orc, Rat) selected by a separate noise layer.
+- Each type has distinct stats: health, attack, defense, speed, and sight range.
+
 ### Determinism
 
 All noise functions are pure: `f(x, y, seed) → value`. No global state,
 no floating-point rounding issues (smoothstep is computed in `f64`), and
 no dependency on evaluation order. Two runs with the same `MapSeed`
-produce bit-identical maps.
+produce bit-identical maps and monster placements.
 
 ---
 
@@ -169,7 +249,7 @@ produce bit-identical maps.
 |---|---|---|
 | `AwaitingInput` (default) | `input_system` accepts movement/action keys | Player presses a key → `PlayerTurn` |
 | `PlayerTurn` | movement, combat, visibility, camera | After consequence systems → `WorldTurn` |
-| `WorldTurn` | (future: NPC AI, world tick) | After world systems → `AwaitingInput` |
+| `WorldTurn` | energy accumulation, AI, movement, combat | After AI systems → `AwaitingInput` |
 
 ```text
 ┌──────────────┐  key press  ┌────────────┐  end_player_turn  ┌───────────┐  end_world_turn
@@ -186,12 +266,25 @@ The input system always runs so the player can unpause or quit.
 
 | Message | Fields | Emitted by | Consumed by |
 |---|---|---|---|
-| `MoveIntent` | `entity, dx, dy` | `input_system` (future: AI) | `movement_system` |
-| `AttackIntent` | `attacker, target` | (future: input/AI) | `combat_system` |
+| `MoveIntent` | `entity, dx, dy` | `input_system`, `ai_system` | `movement_system` |
+| `AttackIntent` | `attacker, target` | `movement_system` (bump-to-attack) | `combat_system` |
 | `DamageEvent` | `target, amount` | `combat_system` | `apply_damage_system` |
 
-Events decouple intent from physics. Tomorrow you can add AI systems that
-also emit `MoveIntent` or `AttackIntent` without touching the resolution code.
+Events decouple intent from physics. AI systems emit the same `MoveIntent`
+as the player input system — the resolution pipeline is completely shared.
+
+### Bump-to-Attack Flow
+
+```text
+Player presses 'd' (move right)
+  → input_system emits MoveIntent { entity: player, dx: 1, dy: 0 }
+  → movement_system detects Hostile entity at target tile
+  → movement_system emits AttackIntent { attacker: player, target: goblin }
+  → combat_system resolves damage = max(0, attack - defense)
+  → combat_system emits DamageEvent { target: goblin, amount: 3 }
+  → apply_damage_system reduces goblin health
+  → death_system despawns goblin if health ≤ 0
+```
 
 ---
 
@@ -206,7 +299,7 @@ also emit `MoveIntent` or `AttackIntent` without touching the resolution code.
 | Set | Purpose | State gate |
 |---|---|---|
 | `Index` | Rebuild `SpatialIndex` | Always |
-| `Action` | Process intents (movement, combat, damage) | `GameState::Playing` |
+| `Action` | Process intents (movement, combat, damage, death) | `GameState::Playing` |
 | `Consequence` | Recalculate FOV, update camera | `GameState::Playing` |
 | `Render` | Draw frame to terminal | Always |
 
@@ -218,22 +311,27 @@ PreUpdate
 
 Update
   ├─ [Index]
-  │   └─ spatial_index_system    rebuilds HashMap<Point, Vec<Entity>>
+  │   └─ spatial_index_system    rebuilds HashMap<GridVec, Vec<Entity>>
   │
   ├─ [Action]  (gated on GameState::Playing)
-  │   ├─ movement_system         reads MoveIntent → collision (map + spatial) → mutates Position
-  │   ├─ combat_system           reads AttackIntent → computes damage → emits DamageEvent
-  │   └─ apply_damage_system     reads DamageEvent → mutates Health
+  │   ├─ movement_system         reads MoveIntent → collision (map + spatial) → bump-to-attack or mutate Position
+  │   ├─ combat_system           reads AttackIntent → computes damage → emits DamageEvent → logs messages
+  │   ├─ apply_damage_system     reads DamageEvent → mutates Health
+  │   └─ death_system            despawns entities with health ≤ 0
   │
   ├─ [Consequence]  (gated on GameState::Playing)
   │   ├─ visibility_system       symmetric shadowcasting → updates visible_tiles + revealed_tiles
   │   └─ camera_follow_system    copies Position+CameraFollow → CameraPosition
   │
   ├─ end_player_turn             (gated on TurnState::PlayerTurn) → transitions to WorldTurn
-  ├─ end_world_turn              (gated on TurnState::WorldTurn) → transitions to AwaitingInput
+  │
+  ├─ [WorldTurn phase]  (gated on TurnState::WorldTurn)
+  │   ├─ energy_accumulate_system  energy += speed for all actors
+  │   ├─ ai_system                 AI decisions → emits MoveIntent
+  │   └─ end_world_turn           → transitions to AwaitingInput
   │
   └─ [Render]
-      └─ draw_system             renders map + entities + fog-of-war + status bar
+      └─ draw_system             renders map + entities + fog-of-war + health + combat log + status bar
 ```
 
 ### System Details
@@ -251,22 +349,41 @@ Update
   Transitions to `PlayerTurn` when a movement key is accepted.
 
 #### `movement_system`
-- **Reads:** `MessageReader<MoveIntent>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<(), With<BlocksMovement>>`
-- **Writes:** `Query<(&mut Position, Option<&mut Viewshed>)>`
-- For each `MoveIntent`, checks:
-  1. Map tile walkability (no blocking furniture).
-  2. Spatial index for entities with `BlocksMovement` at the target.
+- **Reads:** `MessageReader<MoveIntent>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<(), With<BlocksMovement>>`, `Query<(), With<Hostile>>`
+- **Writes:** `MessageWriter<AttackIntent>`, `Query<(&mut Position, Option<&mut Viewshed>)>`
+- For each `MoveIntent`:
+  1. **Bump-to-attack**: if a `Hostile` entity occupies the target, emit `AttackIntent`.
+  2. Check map tile walkability (no blocking furniture).
+  3. Check spatial index for entities with `BlocksMovement` at the target.
 - Updates `Position` only if both checks pass. Marks `Viewshed` dirty.
 
 #### `combat_system`
-- **Reads:** `MessageReader<AttackIntent>`, `Query<&CombatStats>`
-- **Writes:** `MessageWriter<DamageEvent>`
+- **Reads:** `MessageReader<AttackIntent>`, `Query<(&CombatStats, Option<&Name>)>`
+- **Writes:** `MessageWriter<DamageEvent>`, `ResMut<CombatLog>`
 - Resolves damage = max(0, attacker.attack − target.defense).
+- Logs combat messages to `CombatLog`.
 
 #### `apply_damage_system`
 - **Reads:** `MessageReader<DamageEvent>`
 - **Writes:** `Query<&mut Health>`
 - Subtracts damage from health, clamping at zero.
+
+#### `death_system`
+- **Reads:** `Query<(Entity, &Health, Option<&Name>)>`
+- **Writes:** `Commands` (despawn), `ResMut<CombatLog>`
+- Despawns entities with `health.current <= 0` and logs death messages.
+
+#### `energy_accumulate_system`
+- **Reads:** `Query<(&Speed, &mut Energy)>`
+- Adds `speed` to `energy` for every actor. Runs during `WorldTurn`.
+
+#### `ai_system`
+- **Reads:** `Query<(Entity, &Position, &mut AiState, Option<&Viewshed>, &mut Energy)>`
+- **Writes:** `MessageWriter<MoveIntent>`
+- For entities with enough energy (≥ ACTION_COST):
+  - **Idle**: check if player is visible → transition to `Chasing`.
+  - **Chasing**: emit `MoveIntent` toward player (greedy best-first, minimise Chebyshev distance).
+- Deducts ACTION_COST from energy after acting.
 
 #### `visibility_system`  (Symmetric Shadowcasting)
 - **Reads:** `Res<GameMapResource>`
@@ -287,15 +404,15 @@ Update
 
 #### `draw_system`
 - **Reads:** `Res<GameMapResource>`, `Res<CameraPosition>`,
-  `Query<(&Position, &Renderable)>`, `Query<(&Position, Option<&Viewshed>), With<Player>>`,
-  `Res<State<GameState>>`
+  `Query<(&Position, &Renderable)>`, `Query<(&Position, Option<&Viewshed>, Option<&Health>), With<Player>>`,
+  `Res<State<GameState>>`, `ResMut<CombatLog>`
 - **Writes:** `ResMut<RatatuiContext>`
 - Renders the map with three-state fog of war:
   - **Visible tiles**: full brightness.
   - **Revealed tiles** (seen before but not now): dimmed.
   - **Unseen tiles**: solid black.
 - Overlays `Renderable` entities (only if currently visible).
-- Shows PAUSED overlay and status bar.
+- Shows PAUSED overlay, health display, combat log, and status bar.
 
 #### `end_player_turn` / `end_world_turn`
 - Advance the `TurnState` state machine after each phase completes.
@@ -308,10 +425,10 @@ Update
 
 1. Adds `StatesPlugin` (required for `MinimalPlugins` setups)
 2. Registers all message types (`MoveIntent`, `AttackIntent`, `DamageEvent`)
-3. Inserts resources (`GameMapResource`, `CameraPosition`, `SpatialIndex`)
+3. Inserts resources (`GameMapResource`, `CameraPosition`, `SpatialIndex`, `CombatLog`)
 4. Initializes `GameState` and `TurnState`
 5. Configures `RoguelikeSet` ordering (`Index → Action → Consequence → Render`)
-6. Registers the `spawn_player` startup system
+6. Registers startup systems (`spawn_player`, `spawn_monsters`)
 7. Registers all gameplay systems with correct set membership and state gating
 
 `main.rs` only needs:
@@ -329,25 +446,27 @@ App::new()
 roguelike/src/
 ├── main.rs              App entry point (minimal — just plugin registration)
 ├── lib.rs               Module declarations
-├── components.rs        All ECS components (Position, Player, Renderable, Viewshed, Health, CombatStats, …)
+├── grid_vec.rs          GridVec: algebraic 2D integer vector (Abelian group, distances, tests)
+├── components.rs        All ECS components (Position, Player, Name, Renderable, Viewshed, Health, CombatStats, Speed, Energy, AiState, Hostile, …)
 ├── events.rs            MoveIntent, AttackIntent, DamageEvent
 ├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
-├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, GameState, TurnState
-├── plugins.rs           RoguelikePlugin + RoguelikeSet (groups systems + resources + states)
+├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, CombatLog, GameState, TurnState
+├── plugins.rs           RoguelikePlugin + RoguelikeSet + spawn_player + spawn_monsters + monster templates
 ├── systems/
 │   ├── mod.rs           Re-exports
 │   ├── input.rs         input_system
 │   ├── spatial_index.rs spatial_index_system
-│   ├── movement.rs      movement_system (uses SpatialIndex + BlocksMovement)
-│   ├── combat.rs        combat_system + apply_damage_system
+│   ├── movement.rs      movement_system (uses SpatialIndex + BlocksMovement + bump-to-attack)
+│   ├── combat.rs        combat_system + apply_damage_system + death_system
+│   ├── ai.rs            ai_system + energy_accumulate_system
 │   ├── visibility.rs    visibility_system (recursive symmetric shadowcasting)
 │   ├── camera.rs        camera_follow_system
 │   ├── turn.rs          end_player_turn + end_world_turn (state transitions)
-│   └── render.rs        draw_system (three-state fog of war)
+│   └── render.rs        draw_system (three-state fog of war + health + combat log)
 ├── gamemap.rs           GameMap struct & noise-based procedural generation
 ├── voxel.rs             Voxel struct & rendering helpers
 ├── typeenums.rs         Floor / Furniture enums
-├── typedefs.rs          Type aliases, constants, helpers
+├── typedefs.rs          Type aliases (GridVec-based MyPoint), constants, helpers
 └── graphic_trait.rs     GraphicElement trait implementations
 ```
 
@@ -360,13 +479,14 @@ features slot in naturally:
 
 | Feature | Implementation |
 |---|---|
-| NPCs / Monsters | Spawn entities with `Position + Renderable + AI + BlocksMovement + Health + CombatStats + Viewshed` |
-| Melee combat | Input system emits `AttackIntent` when moving into a tile occupied by a hostile. `combat_system` already resolves damage. |
+| ~~NPCs / Monsters~~ | ✅ Implemented: Goblin, Orc, Rat with distinct stats, AI, and energy-based scheduling |
+| ~~Melee combat~~ | ✅ Implemented: bump-to-attack triggers `AttackIntent` → `combat_system` → `DamageEvent` → `death_system` |
+| ~~Turn system (NPC AI)~~ | ✅ Implemented: energy-based scheduling + `AiState` (Idle/Chasing) + greedy best-first movement |
+| ~~Death / despawn~~ | ✅ Implemented: `death_system` despawns at 0 HP with combat log |
 | Ranged combat | `RangedAttackIntent { attacker, target_pos }` + line-of-sight check via `SpatialIndex` |
-| Turn system (NPC AI) | Add `AiComponent` + `ai_system` gated on `TurnState::WorldTurn`; emit `MoveIntent`/`AttackIntent` |
 | Items & inventory | `Item` marker + `InBackpack(Entity)` component |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
-| Death / despawn | System that despawns entities when `health.current <= 0` |
+| Pathfinding AI | Replace greedy best-first with A* using `GridVec::manhattan_distance` as heuristic |
 
 ---
 

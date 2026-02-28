@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{CameraFollow, Player, Position, Renderable, Viewshed};
+use crate::events::MoveIntent;
 use crate::gamemap::GameMap;
 use crate::resources::{CameraPosition, GameMapResource, GameState};
 use crate::systems::{camera, input, movement, render, visibility};
@@ -16,6 +17,7 @@ pub struct RoguelikePlugin;
 impl Plugin for RoguelikePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(bevy::state::app::StatesPlugin)
+            .add_message::<MoveIntent>()
             .insert_resource(GameMapResource(GameMap::new(120, 80)))
             .insert_resource(CameraPosition((SPAWN_X, SPAWN_Y)))
             .init_state::<GameState>()

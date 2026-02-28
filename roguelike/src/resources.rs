@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::gamemap::GameMap;
+use crate::noise::NoiseSeed;
 use crate::typedefs::MyPoint;
 
 /// Bevy resource wrapping the game map for ECS access.
@@ -12,6 +13,14 @@ pub struct GameMapResource(pub GameMap);
 /// Bevy resource holding the camera position (follows the tracked entity).
 #[derive(Resource)]
 pub struct CameraPosition(pub MyPoint);
+
+/// Bevy resource holding the seed used for deterministic procedural generation.
+///
+/// Changing this seed produces a completely different but equally valid map.
+/// Keeping the same seed always reproduces exactly the same world, which is
+/// essential for debugging, replays, and multiplayer synchronization.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MapSeed(pub NoiseSeed);
 
 /// Top-level game state managed by Bevy's state machine.
 /// Systems that should only run during gameplay use

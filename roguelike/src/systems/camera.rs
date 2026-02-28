@@ -1,11 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::{CameraFollow, Position};
-use crate::typedefs::MyPoint;
-
-/// Bevy resource holding the camera position (follows the tracked entity).
-#[derive(Resource)]
-pub struct CameraPosition(pub MyPoint);
+use crate::resources::CameraPosition;
 
 /// Copies the position of the entity tagged with `CameraFollow` into the
 /// `CameraPosition` resource so the renderer can use it for viewport math.

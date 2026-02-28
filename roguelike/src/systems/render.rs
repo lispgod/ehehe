@@ -5,8 +5,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crate::components::{Player, Position, Renderable};
-use crate::systems::camera::CameraPosition;
-use crate::systems::movement::GameMapResource;
+use crate::resources::{CameraPosition, GameMapResource, GameState};
 use crate::typedefs::CoordinateUnit;
 
 /// Renders the game map and all `Renderable` entities to the terminal.
@@ -16,6 +15,7 @@ pub fn draw_system(
     camera: Res<CameraPosition>,
     renderables: Query<(&Position, &Renderable)>,
     player_query: Query<&Position, With<Player>>,
+    state: Res<State<GameState>>,
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -67,6 +67,26 @@ pub fn draw_system(
         };
         frame.render_widget(Paragraph::new(Text::from(render_lines)).on_black(), game_area);
 
+        // Show "PAUSED" overlay centered on screen when paused
+        if *state.get() == GameState::Paused {
+            let label = " PAUSED — press P to resume ";
+            let label_width = label.len() as u16;
+            if render_width >= label_width && render_height >= 1 {
+                let cx = area.x + (render_width - label_width) / 2;
+                let cy = area.y + render_height / 2;
+                let pause_area = ratatui::layout::Rect {
+                    x: cx,
+                    y: cy,
+                    width: label_width,
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(label).bold()).on_dark_gray(),
+                    pause_area,
+                );
+            }
+        }
+
         // Status bar — show player position (gracefully handles missing player)
         let player_info = player_query
             .single()
@@ -80,7 +100,7 @@ pub fn draw_system(
             height: 1,
         };
         let status = Line::from(format!(
-            " Roguelike | Player: {} | WASD/Arrows: move | Q: quit",
+            " Roguelike | Player: {} | WASD/Arrows: move | P: pause | Q: quit",
             player_info
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);

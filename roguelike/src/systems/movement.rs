@@ -2,11 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::Position;
 use crate::events::MoveIntent;
-use crate::gamemap::GameMap;
-
-/// Bevy resource holding the game map.
-#[derive(Resource)]
-pub struct GameMapResource(pub GameMap);
+use crate::resources::GameMapResource;
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability, then updates the entity's `Position` if the move is valid.

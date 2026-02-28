@@ -30,32 +30,18 @@ pub fn draw_system(
             .and_then(|(_, vs)| vs)
             .map(|vs| &vs.visible_tiles);
 
+        let mut render_packet = game_map.0.create_render_packet_with_visibility(
+            &camera.0,
+            render_width,
+            render_height,
+            visible_tiles,
+        );
+
+        // Overlay all renderable entities at their screen-relative positions
         let w_radius = render_width as CoordinateUnit / 2;
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left_x = camera.0 .0 - w_radius;
         let bottom_left_y = camera.0 .1 - h_radius;
-
-        // Build the render packet with per-tile visibility
-        let mut render_packet = crate::typedefs::create_2d_array(
-            render_width as usize,
-            render_height as usize,
-        );
-
-        for ry in 0..render_height as CoordinateUnit {
-            for rx in 0..render_width as CoordinateUnit {
-                let world_x = bottom_left_x + rx;
-                let world_y = bottom_left_y + ry;
-
-                if let Some(voxel) = game_map.0.get_voxel_at(&(world_x, world_y)) {
-                    let visible = visible_tiles
-                        .map(|vt| vt.contains(&(world_x, world_y)))
-                        .unwrap_or(true); // if no viewshed, show everything
-                    render_packet[ry as usize][rx as usize] = voxel.to_graphic(visible);
-                }
-            }
-        }
-
-        // Overlay all renderable entities at their screen-relative positions
         for (pos, renderable) in &renderables {
             let screen_x = pos.x - bottom_left_x;
             let screen_y = pos.y - bottom_left_y;
@@ -133,7 +119,7 @@ pub fn draw_system(
             height: 1,
         };
         let status = Line::from(format!(
-            " Roguelike | Player: {} | WASD/Arrows: move | P: pause | Q: quit",
+            " Roguelike | Player: {} | WASD/Arrows: move | P: pause/resume | Q: quit",
             player_info
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);

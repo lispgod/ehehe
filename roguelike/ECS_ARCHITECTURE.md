@@ -169,7 +169,7 @@ Update  (always runs, after camera_follow_system)
 
 1. Adds `StatesPlugin` (required for `MinimalPlugins` setups)
 2. Inserts resources (`GameMapResource`, `CameraPosition`)
-3. Initialises `GameState`
+3. Initializes `GameState`
 4. Registers the `spawn_player` startup system
 5. Registers all gameplay systems with correct ordering and state gating
 

@@ -79,6 +79,19 @@ impl GameMap {
         render_width: u16,
         render_height: u16,
     ) -> RenderPacket {
+        self.create_render_packet_with_visibility(center, render_width, render_height, None)
+    }
+
+    /// Creates a RenderPacket with per-tile visibility support.
+    /// When `visible_tiles` is `Some`, tiles outside the set are dimmed.
+    /// When `None`, all tiles are shown at full brightness.
+    pub fn create_render_packet_with_visibility(
+        &self,
+        center: &MyPoint,
+        render_width: u16,
+        render_height: u16,
+        visible_tiles: Option<&std::collections::HashSet<MyPoint>>,
+    ) -> RenderPacket {
         let w_radius = render_width as CoordinateUnit / 2;
         let h_radius = render_height as CoordinateUnit / 2;
 
@@ -92,7 +105,10 @@ impl GameMap {
                 let world_y = bottom_left.1 + ry;
 
                 if let Some(voxel) = self.get_voxel_at(&(world_x, world_y)) {
-                    grid[ry as usize][rx as usize] = voxel.to_graphic(true);
+                    let visible = visible_tiles
+                        .map(|vt| vt.contains(&(world_x, world_y)))
+                        .unwrap_or(true);
+                    grid[ry as usize][rx as usize] = voxel.to_graphic(visible);
                 }
             }
         }

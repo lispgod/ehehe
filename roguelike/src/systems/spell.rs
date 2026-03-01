@@ -8,7 +8,7 @@ use crate::resources::{CombatLog, SpellParticles};
 const SPELL_MANA_COST: i32 = 10;
 
 /// Lifetime (in frames) for spell particle animations.
-const PARTICLE_LIFETIME: u32 = 6;
+const PARTICLE_LIFETIME: u32 = 8;
 
 /// Resolves area-of-effect spell casts.
 ///
@@ -41,7 +41,6 @@ pub fn spell_system(
         let origin = caster_pos.as_grid_vec();
         let c_name = caster_name.map_or("???", |n| &n.0);
         let mut hit_count = 0;
-        let mut hit_positions = Vec::new();
 
         for (target_entity, target_pos, target_name) in &targets {
             let target_vec = target_pos.as_grid_vec();
@@ -59,14 +58,13 @@ pub fn spell_system(
                     combat_log.push(format!(
                         "{c_name}'s spell hits {t_name} for {damage} damage"
                     ));
-                    hit_positions.push(target_vec);
                     hit_count += 1;
                 }
             }
         }
 
         // Generate particle animation for the AoE effect.
-        spell_particles.add_aoe(origin, &hit_positions, PARTICLE_LIFETIME);
+        spell_particles.add_aoe(origin, PARTICLE_LIFETIME);
 
         if hit_count == 0 {
             combat_log.push(format!("{c_name} casts a spell but hits nothing"));

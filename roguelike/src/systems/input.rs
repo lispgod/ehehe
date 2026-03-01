@@ -4,7 +4,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Mana, Player};
 use crate::events::{MoveIntent, PickupItemIntent, SpellCastIntent, UseItemIntent};
-use crate::resources::{CombatLog, GameState, HelpVisible, TurnState};
+use crate::resources::{CombatLog, GameState, HelpVisible, TurnState, WelcomeVisible};
 
 /// Default radius for the player's area-of-effect spell.
 const SPELL_RADIUS: i32 = 3;
@@ -23,7 +23,7 @@ pub const KEYBINDINGS: &[(&str, &str)] = &[
     ("G", "Pick up item on ground"),
     ("1-9", "Use inventory item by slot"),
     ("P", "Pause / Resume"),
-    ("?", "Toggle this help screen"),
+    ("? / /", "Toggle this help screen"),
     ("Q / Esc", "Quit game"),
 ];
 
@@ -44,6 +44,7 @@ pub fn input_system(
     turn_state: Option<Res<State<TurnState>>>,
     mut next_turn_state: Option<ResMut<NextState<TurnState>>>,
     mut help_visible: ResMut<HelpVisible>,
+    mut welcome_visible: ResMut<WelcomeVisible>,
     mut combat_log: ResMut<CombatLog>,
 ) {
     let Ok((player_entity, player_mana)) = player_query.single() else {
@@ -55,6 +56,12 @@ pub fn input_system(
         .is_some_and(|s| *s.get() == TurnState::AwaitingInput);
 
     for message in messages.read() {
+        // Dismiss the welcome screen on any key press.
+        if welcome_visible.0 {
+            welcome_visible.0 = false;
+            continue; // consume the key that dismissed the welcome
+        }
+
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
             // ── Global keys (always active) ─────────────────────
@@ -69,7 +76,7 @@ pub fn input_system(
                 };
                 next_game_state.set(new);
             }
-            KeyCode::Char('?') => {
+            KeyCode::Char('?') | KeyCode::Char('/') => {
                 help_visible.0 = !help_visible.0;
             }
             // ── Movement keys (only while awaiting input) ───────

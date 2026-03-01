@@ -89,41 +89,68 @@ pub struct CombatLog {
 /// Maximum number of messages retained in the combat log.
 const MAX_COMBAT_LOG_MESSAGES: usize = 50;
 
-/// Whether the help overlay is currently shown (toggled by `?`).
+/// Whether the help overlay is currently shown (toggled by `?` or `/`).
 #[derive(Resource, Debug, Default)]
 pub struct HelpVisible(pub bool);
 
+/// Whether the welcome screen is currently shown (visible at game start).
+#[derive(Resource, Debug)]
+pub struct WelcomeVisible(pub bool);
+
+impl Default for WelcomeVisible {
+    fn default() -> Self {
+        Self(true) // shown on first launch
+    }
+}
+
 /// Active spell particles for rendering AoE animations.
-/// Each entry is (position, remaining_lifetime_frames).
+/// Each entry is (position, remaining_lifetime_frames, delay_before_visible).
+/// Particles with delay > 0 are not yet visible; they count down each tick.
 #[derive(Resource, Debug, Default)]
 pub struct SpellParticles {
-    pub particles: Vec<(MyPoint, u32)>,
+    pub particles: Vec<(MyPoint, u32, u32)>,
 }
 
 /// Maximum number of active spell particles to prevent unbounded growth.
-const MAX_PARTICLES: usize = 500;
+const MAX_PARTICLES: usize = 800;
 
 impl SpellParticles {
-    /// Adds particles for an AoE spell centered on `origin` hitting `targets`.
-    pub fn add_aoe(&mut self, origin: MyPoint, targets: &[MyPoint], lifetime: u32) {
-        // Add a particle at the origin.
-        if self.particles.len() < MAX_PARTICLES {
-            self.particles.push((origin, lifetime));
-        }
-        // Add particles at each target.
-        for &t in targets {
-            if self.particles.len() >= MAX_PARTICLES {
-                break;
+    /// Adds an expanding ring of particles for an AoE spell.
+    /// Particles at greater distances from the origin appear later, creating
+    /// an outward-traveling wave effect.
+    pub fn add_aoe(&mut self, origin: MyPoint, lifetime: u32) {
+        let radius = 3i32; // visual radius of the particle ring
+        let frames_per_ring = 2u32; // ticks of delay per distance unit
+
+        for r in 1..=radius {
+            // Generate a ring of particles at Chebyshev distance r
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    // Only the perimeter of the Chebyshev ring
+                    if dx.abs().max(dy.abs()) != r {
+                        continue;
+                    }
+                    if self.particles.len() >= MAX_PARTICLES {
+                        return;
+                    }
+                    let pos = origin + MyPoint::new(dx, dy);
+                    let delay = (r as u32 - 1) * frames_per_ring;
+                    self.particles.push((pos, lifetime, delay));
+                }
             }
-            self.particles.push((t, lifetime));
         }
     }
 
-    /// Ticks all particles, removing expired ones.
+    /// Ticks all particles: counts down delays, then lifetimes. Removes expired ones.
     pub fn tick(&mut self) {
-        self.particles.retain_mut(|(_, life)| {
-            *life = life.saturating_sub(1);
-            *life > 0
+        self.particles.retain_mut(|(_, life, delay)| {
+            if *delay > 0 {
+                *delay -= 1;
+                true // still waiting to appear
+            } else {
+                *life = life.saturating_sub(1);
+                *life > 0
+            }
         });
     }
 }

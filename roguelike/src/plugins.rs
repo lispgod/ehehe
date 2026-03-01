@@ -12,7 +12,7 @@ use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
     CameraPosition, CombatLog, GameMapResource, GameState, HelpVisible, KillCount, MapSeed,
-    SpatialIndex, SpellParticles, TurnCounter, TurnState,
+    SpatialIndex, SpellParticles, TurnCounter, TurnState, WelcomeVisible,
 };
 use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
 use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y, GATE_POINT, GATE_X, GATE_Y};
@@ -75,6 +75,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<KillCount>()
             .init_resource::<HelpVisible>()
             .init_resource::<SpellParticles>()
+            .init_resource::<WelcomeVisible>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()

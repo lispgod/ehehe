@@ -5,20 +5,20 @@ use bevy_ratatui::RatatuiContext;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
 use crate::components::{Health, Inventory, Mana, Name, Player, Position, Renderable, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{
     CameraPosition, CombatLog, GameMapResource, GameState, HelpVisible, KillCount,
-    SpellParticles, TurnCounter,
+    SpellParticles, TurnCounter, WelcomeVisible,
 };
 use crate::systems::input::KEYBINDINGS;
 use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
 
 /// Lifetime (in frames) for spell particle animations.
 /// Must match the lifetime used in spell.rs when creating particles.
-const PARTICLE_LIFETIME: f32 = 6.0;
+const PARTICLE_LIFETIME: f32 = 8.0;
 
 /// Number of recent combat log messages shown in the status bar.
 const STATUS_BAR_MESSAGE_COUNT: usize = 2;
@@ -50,12 +50,14 @@ pub fn draw_system(
         (&Position, Option<&Viewshed>, Option<&Health>, Option<&Mana>, Option<&Inventory>),
         With<Player>,
     >,
+    item_names: Query<Option<&Name>, With<crate::components::Item>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
     turn_counter: Res<TurnCounter>,
     kill_count: Res<KillCount>,
     help_visible: Res<HelpVisible>,
     spell_particles: Res<SpellParticles>,
+    welcome_visible: Res<WelcomeVisible>,
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -149,7 +151,11 @@ pub fn draw_system(
         }
 
         // Overlay spell particles on the render packet.
-        for (particle_pos, lifetime) in &spell_particles.particles {
+        // Only show particles whose delay has reached 0 (already visible).
+        for (particle_pos, lifetime, delay) in &spell_particles.particles {
+            if *delay > 0 {
+                continue; // not yet visible
+            }
             let screen = *particle_pos - bottom_left;
             if screen.x >= 0
                 && screen.x < render_width as CoordinateUnit
@@ -164,7 +170,7 @@ pub fn draw_system(
                     let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).min(1.0);
                     let r = (255.0 * intensity) as u8;
                     let g = (165.0 * intensity) as u8;
-                    let symbol = if *lifetime > 3 { "*" } else { "·" };
+                    let symbol = if *lifetime > 4 { "✦" } else if *lifetime > 2 { "*" } else { "·" };
                     let bg = render_packet[screen.y as usize][screen.x as usize].2;
                     render_packet[screen.y as usize][screen.x as usize] =
                         (symbol.into(), RatColor::Rgb(r, g, 0), bg);
@@ -189,6 +195,22 @@ pub fn draw_system(
 
         frame.render_widget(Paragraph::new(Text::from(render_lines)).on_black(), game_area);
 
+        // Collect inventory item names for the side panel.
+        let inv_item_names: Vec<String> = player_inv
+            .map(|inv| {
+                inv.items
+                    .iter()
+                    .map(|&ent| {
+                        item_names
+                            .get(ent)
+                            .ok()
+                            .flatten()
+                            .map_or("item".to_string(), |n| n.0.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // ── Side Panel ──────────────────────────────────────────
         render_side_panel(
             frame,
@@ -196,6 +218,7 @@ pub fn draw_system(
             player_hp,
             player_mana,
             player_inv,
+            &inv_item_names,
             &visible_entity_infos,
             &combat_log,
         );
@@ -247,6 +270,11 @@ pub fn draw_system(
             render_help_overlay(frame, game_area);
         }
 
+        // Show welcome screen at game start
+        if welcome_visible.0 {
+            render_welcome_overlay(frame, game_area);
+        }
+
         // ── Status bar ──────────────────────────────────────────
         let player_info = player_query
             .single()
@@ -257,7 +285,7 @@ pub fn draw_system(
         let last_msg = recent_msgs.join(" | ");
 
         let status = Line::from(format!(
-            " Gate of Hell | {player_info} | Turn:{} Kills:{} | {last_msg} | ?: help",
+            " Gate of Hell | {player_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
             turn_counter.0, kill_count.0,
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);
@@ -266,24 +294,30 @@ pub fn draw_system(
     Ok(())
 }
 
-/// Renders the side panel with HP gauge, Mana gauge, inventory, and visible entities.
+/// Renders the side panel with HP gauge, Mana gauge, inventory, visible entities, and combat log.
 fn render_side_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
     player_mana: Option<&Mana>,
     player_inv: Option<&Inventory>,
+    inv_item_names: &[String],
     visible_entities: &[(String, RatColor, RatColor, String)],
     _combat_log: &CombatLog,
 ) {
+    // Dynamic inventory height: 2 (border) + max(1, item_count)
+    let item_count = player_inv.map_or(1, |inv| inv.items.len().max(1));
+    let inv_height = (item_count as u16) + 2; // +2 for borders
+
     // Divide the side panel into sections.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // HP gauge
-            Constraint::Length(3), // Mana gauge
-            Constraint::Length(6), // Inventory
-            Constraint::Min(1),   // Visible entities
+            Constraint::Length(3),          // HP gauge
+            Constraint::Length(3),          // Mana gauge
+            Constraint::Length(inv_height), // Inventory (dynamic)
+            Constraint::Length(5),          // Combat log
+            Constraint::Min(1),            // Visible entities
         ])
         .split(area);
 
@@ -302,7 +336,7 @@ fn render_side_panel(
                     .bg(ratatui::style::Color::DarkGray),
             )
             .ratio(ratio)
-            .label(format!("{}/{}", hp.current, hp.max));
+            .label(Span::from(format!("{}/{}", hp.current, hp.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[0]);
     } else {
         frame.render_widget(
@@ -326,7 +360,7 @@ fn render_side_panel(
                     .bg(ratatui::style::Color::DarkGray),
             )
             .ratio(ratio)
-            .label(format!("{}/{}", mana.current, mana.max));
+            .label(Span::from(format!("{}/{}", mana.current, mana.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[1]);
     } else {
         frame.render_widget(
@@ -341,8 +375,8 @@ fn render_side_panel(
         if inv.items.is_empty() {
             inv_lines.push(Line::from(" (empty)".dark_gray()));
         } else {
-            for (i, _item) in inv.items.iter().enumerate().take(9) {
-                inv_lines.push(Line::from(format!(" {}: item", i + 1)));
+            for (i, name) in inv_item_names.iter().enumerate().take(9) {
+                inv_lines.push(Line::from(format!(" {}: {name}", i + 1)));
             }
         }
     } else {
@@ -354,8 +388,25 @@ fn render_side_panel(
         chunks[2],
     );
 
+    // ── Combat Log ──────────────────────────────────────────────
+    let log_lines: Vec<Line> = _combat_log
+        .recent(3)
+        .into_iter()
+        .map(|s| Line::from(format!(" {s}")).dark_gray())
+        .collect();
+    frame.render_widget(
+        Paragraph::new(if log_lines.is_empty() {
+            vec![Line::from(" (no events)".dark_gray())]
+        } else {
+            log_lines
+        })
+        .block(Block::default().borders(Borders::ALL).title("Log"))
+        .wrap(Wrap { trim: true }),
+        chunks[3],
+    );
+
     // ── Visible Entities ────────────────────────────────────────
-    let max_visible = (chunks[3].height.saturating_sub(2)) as usize;
+    let max_visible = (chunks[4].height.saturating_sub(2)) as usize;
     let mut vis_lines: Vec<Line> = Vec::new();
     // Deduplicate: show each unique name only once.
     let mut seen_names: HashSet<String> = HashSet::new();
@@ -377,27 +428,34 @@ fn render_side_panel(
     frame.render_widget(
         Paragraph::new(vis_lines)
             .block(Block::default().borders(Borders::ALL).title("Visible")),
-        chunks[3],
+        chunks[4],
     );
 }
 
 /// Renders the help overlay listing all keybindings.
 fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
-    let help_width = 42u16;
-    let help_height = (KEYBINDINGS.len() as u16) + 4; // +4 for border + title + padding
+    let help_width = 50u16;
+    let help_height = (KEYBINDINGS.len() as u16) + 6; // +6 for border + title + padding
 
-    if game_area.width < help_width || game_area.height < help_height {
+    // Clamp to game area to avoid overflow
+    let w = help_width.min(game_area.width.saturating_sub(2));
+    let h = help_height.min(game_area.height.saturating_sub(2));
+
+    if w < 10 || h < 5 {
         return;
     }
 
-    let cx = game_area.x + (game_area.width - help_width) / 2;
-    let cy = game_area.y + (game_area.height - help_height) / 2;
+    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
+    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
     let help_area = Rect {
         x: cx,
         y: cy,
-        width: help_width,
-        height: help_height,
+        width: w,
+        height: h,
     };
+
+    // Clear the area first so no map ASCII bleeds through.
+    frame.render_widget(Clear, help_area);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
@@ -407,16 +465,84 @@ fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
             Span::from(format!("{desc}")).white(),
         ]));
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from(" Press ? or / to close".dark_gray()));
 
     frame.render_widget(
         Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Controls (? to close) ")
+                    .title(" Controls ")
                     .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
             )
+            .wrap(Wrap { trim: false })
             .on_black(),
         help_area,
+    );
+}
+
+/// Renders the welcome screen shown at game start.
+fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
+    let w = 56u16.min(game_area.width.saturating_sub(4));
+    let h = 16u16.min(game_area.height.saturating_sub(4));
+
+    if w < 20 || h < 10 {
+        return;
+    }
+
+    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
+    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
+    let welcome_area = Rect {
+        x: cx,
+        y: cy,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, welcome_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from("  ⚔  GATE OF HELL  ⚔").bold().yellow(),
+        Line::from(""),
+        Line::from("  Destroy the Gate of Hell (Ω) to win!").white(),
+        Line::from("  Monsters will keep spawning from it.").white(),
+        Line::from(""),
+        Line::from(vec![
+            Span::from("  WASD / Arrows").bold().yellow(),
+            Span::from("  Move").white(),
+        ]),
+        Line::from(vec![
+            Span::from("  F / Space    ").bold().yellow(),
+            Span::from("  Cast AoE spell").white(),
+        ]),
+        Line::from(vec![
+            Span::from("  G            ").bold().yellow(),
+            Span::from("  Pick up items").white(),
+        ]),
+        Line::from(vec![
+            Span::from("  1-9          ").bold().yellow(),
+            Span::from("  Use inventory item").white(),
+        ]),
+        Line::from(vec![
+            Span::from("  ? or /       ").bold().yellow(),
+            Span::from("  Help screen").white(),
+        ]),
+        Line::from(""),
+        Line::from("  Press any key to begin...").dark_gray(),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Welcome ")
+                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
+            )
+            .wrap(Wrap { trim: false })
+            .on_black(),
+        welcome_area,
     );
 }

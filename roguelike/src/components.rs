@@ -143,9 +143,27 @@ pub struct HellGate;
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum Faction {
     Wildlife,
-    Bandits,
-    Scavengers,
-    Military,
+    Outlaws,
+    Vaqueros,
+    Cowboys,
+}
+
+/// Bullet caliber for period-accurate cap-and-ball revolvers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Caliber {
+    /// .36 caliber (Colt Navy, Colt Pocket)
+    Cal36,
+    /// .44 caliber (Colt Army, Remington New Model Army)
+    Cal44,
+}
+
+impl std::fmt::Display for Caliber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Caliber::Cal36 => write!(f, ".36"),
+            Caliber::Cal44 => write!(f, ".44"),
+        }
+    }
 }
 
 /// Stamina pool for entities that can perform special actions.
@@ -156,8 +174,8 @@ pub struct Stamina {
     pub max: CoordinateUnit,
 }
 
-/// Ammo supply for ranged weapon attacks.
-/// Ranged attacks consume ammo; ammo can be found as loot.
+/// Ammo supply for AI ranged attacks (enemies only).
+/// Player weapons use per-gun `ItemKind::Gun { loaded, .. }` instead.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Ammo {
     pub current: CoordinateUnit,
@@ -186,22 +204,34 @@ pub struct InBackpack {
 /// The kind of item and its associated effect.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub enum ItemKind {
-    /// Restores `amount` health when used.
-    HealingPotion { amount: CoordinateUnit },
-    /// An explosive charge: deals `damage` in a radius when used.
-    Explosive { damage: CoordinateUnit, radius: CoordinateUnit },
-    /// Armor: provides `defense` bonus when equipped.
-    Armor { defense: CoordinateUnit },
-    /// Weapon: provides `attack` bonus when equipped.
-    Weapon { attack: CoordinateUnit },
-    /// A gun magazine containing `ammo` rounds. Auto-picked up on contact.
-    /// When used from inventory, reloads the player's active weapon.
-    Magazine { ammo: CoordinateUnit },
+    /// A cap-and-ball revolver. Tracks loaded rounds and caliber.
+    Gun {
+        loaded: i32,
+        capacity: i32,
+        caliber: Caliber,
+        attack: i32,
+        name: String,
+    },
+    /// A throwing knife. Can be recovered after landing.
+    Knife { attack: i32 },
+    /// A throwing tomahawk. Can be recovered after landing.
+    Tomahawk { attack: i32 },
+    /// A grenade (dynamite stick). Deals area damage.
+    Grenade { damage: i32, radius: i32 },
+    /// Whiskey bottle. Restores health when consumed.
+    Whiskey { heal: i32 },
+    /// A hat. Provides defense when equipped.
+    Hat { defense: i32 },
 }
 
 /// Marker component indicating the item is currently equipped.
 #[derive(Component, Debug)]
 pub struct Equipped;
+
+/// Marker component for a thrown item (knife/tomahawk) that has landed
+/// and can be recovered by walking over it.
+#[derive(Component, Debug)]
+pub struct Thrown;
 
 /// Inventory component: holds item entities belonging to an entity.
 #[derive(Component, Debug, Default)]

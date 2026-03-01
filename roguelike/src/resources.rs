@@ -251,6 +251,43 @@ impl CombatLog {
 #[derive(Resource, Debug, Default)]
 pub struct RestartRequested(pub bool);
 
+/// Collectible supplies stored separately from inventory slots.
+/// These don't occupy inventory slots and are tracked by quantity.
+#[derive(Resource, Debug, Clone)]
+pub struct Collectibles {
+    /// Percussion caps (needed for reloading: 1 per round)
+    pub caps: i32,
+    /// .36 caliber lead bullets
+    pub bullets_36: i32,
+    /// .44 caliber lead bullets
+    pub bullets_44: i32,
+    /// Black powder charges (needed for reloading: 1 per round)
+    pub powder: i32,
+    /// Bandages (healing item)
+    pub bandages: i32,
+    /// Dollars (currency)
+    pub dollars: i32,
+}
+
+impl Default for Collectibles {
+    fn default() -> Self {
+        Self {
+            caps: 30,
+            bullets_36: 20,
+            bullets_44: 20,
+            powder: 30,
+            bandages: 5,
+            dollars: 0,
+        }
+    }
+}
+
+/// The cursor position in world coordinates.
+/// Moved with IJKL keys. Used for aiming and directional actions.
+/// Always visible on the map.
+#[derive(Resource, Debug, Clone)]
+pub struct CursorPosition(pub MyPoint);
+
 #[cfg(test)]
 mod tests {
     use super::*;

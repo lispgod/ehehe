@@ -48,18 +48,25 @@ fn a_star_first_step(
         return Some(goal - start);
     }
 
-    // Min-heap: (f_score, position). Reverse gives min-first ordering.
-    let mut open: BinaryHeap<Reverse<(i32, GridVec)>> = BinaryHeap::new();
+    // Min-heap: (f_score, h_score, position). Reverse gives min-first ordering.
+    //
+    // **Tie-breaking**: when two nodes share the same f-score, we prefer the
+    // one with the lower h-score (i.e., higher g-score, meaning closer to the
+    // goal along the discovered path). This is a standard A* optimisation that
+    // reduces the number of expanded nodes while preserving optimality, since
+    // among equal-f nodes, those with smaller h are nearer to the goal.
+    let mut open: BinaryHeap<Reverse<(i32, i32, GridVec)>> = BinaryHeap::new();
     let mut came_from: HashMap<GridVec, GridVec> = HashMap::new();
     let mut g_score: HashMap<GridVec, i32> = HashMap::new();
     let mut closed: HashSet<GridVec> = HashSet::new();
 
+    let h_start = start.chebyshev_distance(goal);
     g_score.insert(start, 0);
-    open.push(Reverse((start.chebyshev_distance(goal), start)));
+    open.push(Reverse((h_start, h_start, start)));
 
     let mut explored = 0usize;
 
-    while let Some(Reverse((_, current))) = open.pop() {
+    while let Some(Reverse((_, _, current))) = open.pop() {
         if current == goal {
             // Reconstruct path to extract the first step.
             let mut step = current;
@@ -99,8 +106,9 @@ fn a_star_first_step(
             if new_g < *g_score.get(&neighbor).unwrap_or(&i32::MAX) {
                 came_from.insert(neighbor, current);
                 g_score.insert(neighbor, new_g);
-                let f = new_g + neighbor.chebyshev_distance(goal);
-                open.push(Reverse((f, neighbor)));
+                let h = neighbor.chebyshev_distance(goal);
+                let f = new_g + h;
+                open.push(Reverse((f, h, neighbor)));
             }
         }
     }

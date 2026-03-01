@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CombatStats, ExpReward, Experience, Health, HellGate, Hostile, Level, LootTable, Stamina, Ammo, Name, Player, Position};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, GameState, KillCount, MapSeed, PendingExp};
+use crate::resources::{CombatLog, GameMapResource, GameState, KillCount, MapSeed, PendingExp};
 use crate::systems::inventory::spawn_loot;
 
 /// Resolves attack intents into damage events.
@@ -147,7 +147,13 @@ pub fn level_up_system(
 }
 
 /// Resolves targeted ranged attack intents using player-chosen trajectory.
-/// The bullet travels along the chosen direction (dx, dy) for up to `range` tiles.
+///
+/// The bullet path is computed using **Bresenham's line algorithm** from the
+/// caster's position to the maximum range endpoint. This provides a
+/// mathematically correct, integer-only trajectory that visits each tile
+/// exactly once. Targets are hit if and only if the Bresenham line passes
+/// through their tile, eliminating the previous fuzzy directional heuristic.
+///
 /// The bullet penetrates through multiple enemies: remaining penetration
 /// decreases by each target's defense value. Consumes 1 ammo per shot.
 /// Also spawns bullet travel particles for visual feedback.
@@ -158,6 +164,7 @@ pub fn ranged_attack_system(
     targets: Query<(Entity, &Position, &CombatStats, Option<&Name>), With<Hostile>>,
     mut combat_log: ResMut<CombatLog>,
     mut spell_particles: ResMut<crate::resources::SpellParticles>,
+    game_map: Res<GameMapResource>,
 ) {
     for intent in intents.read() {
         let Ok((caster_pos, mut ammo, caster_stats, caster_name)) = caster_query.get_mut(intent.attacker) else {
@@ -185,45 +192,47 @@ pub fn ranged_attack_system(
         let mut penetration = damage;
         let mut hit_count = 0;
 
-        // Spawn bullet travel particles along the path.
-        for step in 1..=intent.range {
-            let bullet_pos = origin + crate::grid_vec::GridVec::new(dx * step, dy * step);
-            spell_particles.particles.push((bullet_pos, 3, (step as u32).saturating_sub(1)));
-        }
+        // Compute the bullet endpoint using the direction and range.
+        let endpoint = origin + crate::grid_vec::GridVec::new(dx * intent.range, dy * intent.range);
 
-        // Collect targets along the bullet path sorted by distance.
-        let mut targets_in_line: Vec<(Entity, i32, i32, String)> = Vec::new();
+        // Generate the bullet path using Bresenham's line algorithm.
+        // This produces the mathematically correct sequence of tiles the
+        // bullet traverses — integer-only, no floating-point, O(range).
+        let bullet_path = origin.bresenham_line(endpoint);
+
+        // Build a lookup of hostile entities by position for O(1) hit detection.
+        let mut target_by_pos: std::collections::HashMap<crate::grid_vec::GridVec, (Entity, i32, String)> =
+            std::collections::HashMap::new();
         for (target_entity, target_pos, target_stats, target_name) in &targets {
             let target_vec = target_pos.as_grid_vec();
-            let rel = target_vec - origin;
-            let dist = origin.chebyshev_distance(target_vec);
-            if dist > 0 && dist <= intent.range {
-                // Check if the target is on the bullet's trajectory.
-                let on_line = (dx == 0 || rel.x.signum() == dx)
-                    && (dy == 0 || rel.y.signum() == dy)
-                    && (dx == 0 || dy == 0 || (rel.x.abs() - rel.y.abs()).abs() <= 1);
-                if on_line {
-                    let t_name = target_name.map_or("???".to_string(), |n| n.0.clone());
-                    targets_in_line.push((target_entity, dist, target_stats.defense, t_name));
-                }
-            }
+            let t_name = target_name.map_or("???".to_string(), |n| n.0.clone());
+            target_by_pos.insert(target_vec, (target_entity, target_stats.defense, t_name));
         }
-        targets_in_line.sort_by_key(|&(_, dist, _, _)| dist);
 
-        for (target_entity, _dist, target_def, t_name) in &targets_in_line {
-            if penetration <= 0 {
+        // Walk the bullet path (skip index 0 which is the caster's tile).
+        for (step_idx, &tile) in bullet_path.iter().enumerate().skip(1) {
+            // Spawn particle for visual feedback.
+            spell_particles.particles.push((tile, 3, (step_idx as u32).saturating_sub(1)));
+
+            // Stop the bullet if it hits an impassable wall.
+            if !game_map.0.is_passable(&tile) {
                 break;
             }
-            let hit_damage = penetration;
-            if hit_damage > 0 {
+
+            // Check if a hostile entity is at this tile.
+            if let Some((target_entity, target_def, t_name)) = target_by_pos.get(&tile) {
+                if penetration <= 0 {
+                    break;
+                }
+                let hit_damage = penetration;
                 damage_events.write(DamageEvent {
                     target: *target_entity,
                     amount: hit_damage,
                 });
                 combat_log.push(format!("{c_name} shoots {t_name} for {hit_damage} damage!"));
                 hit_count += 1;
+                penetration -= target_def;
             }
-            penetration -= target_def;
         }
 
         if hit_count == 0 {

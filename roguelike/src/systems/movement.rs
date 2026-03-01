@@ -80,12 +80,9 @@ pub fn movement_system(
             pos.y = target.y;
 
             // ── Maintain spatial index invariant ─────────────────
-            // Update inline so subsequent intents in this frame see
-            // accurate occupancy (prevents simultaneous overlap).
-            if let Some(entities) = spatial.map.get_mut(&old_pos) {
-                entities.retain(|&e| e != intent.entity);
-            }
-            spatial.map.entry(target).or_default().push(intent.entity);
+            // Atomically move the entity in the index so subsequent
+            // intents in this frame see accurate occupancy.
+            spatial.move_entity(&old_pos, target, intent.entity);
 
             // Mark viewshed dirty so visibility is recalculated.
             if let Some(mut vs) = viewshed {

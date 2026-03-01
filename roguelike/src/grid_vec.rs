@@ -10,7 +10,7 @@
 /// Using a named struct instead of a raw tuple `(i32, i32)` gives us type
 /// safety (cannot accidentally swap x/y with unrelated tuples), enables
 /// method syntax, and makes the code self-documenting.
-use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::typedefs::CoordinateUnit;
 
@@ -150,6 +150,105 @@ impl GridVec {
             y: self.y.signum(),
         }
     }
+
+    /// 90° clockwise rotation on the ℤ² lattice.
+    ///
+    /// Applies the rotation matrix R₉₀_cw = [[0, 1], [−1, 0]]:
+    ///   (x, y) ↦ (y, −x)
+    ///
+    /// This is an element of SO(2) restricted to the integer lattice,
+    /// forming a cyclic group of order 4: {I, R, R², R³}.
+    /// Four applications return to the original vector (R⁴ = I).
+    #[inline]
+    pub fn rotate_90_cw(self) -> Self {
+        Self {
+            x: self.y,
+            y: -self.x,
+        }
+    }
+
+    /// 90° counter-clockwise rotation on the ℤ² lattice.
+    ///
+    /// Applies the rotation matrix R₉₀_ccw = [[0, −1], [1, 0]]:
+    ///   (x, y) ↦ (−y, x)
+    ///
+    /// Inverse of `rotate_90_cw`: `v.rotate_90_cw().rotate_90_ccw() == v`.
+    #[inline]
+    pub fn rotate_90_ccw(self) -> Self {
+        Self {
+            x: -self.y,
+            y: self.x,
+        }
+    }
+
+    /// Bresenham line from `self` to `other`, inclusive of both endpoints.
+    ///
+    /// Returns the sequence of integer grid points that best approximates
+    /// the straight line segment between two grid positions. Uses the
+    /// standard Bresenham algorithm with integer-only arithmetic.
+    ///
+    /// **Properties:**
+    /// - **Exact endpoints**: first element is `self`, last is `other`.
+    /// - **Connectivity**: each successive pair differs by at most 1 in
+    ///   each axis (8-connected), and by exactly 1 in the major axis.
+    /// - **Deterministic**: pure function of endpoints, no floating-point.
+    /// - **Time**: O(max(|Δx|, |Δy|)) — visits each pixel exactly once.
+    /// - **Symmetry**: `a.bresenham_line(b)` and `b.bresenham_line(a)`
+    ///   traverse the same set of points (in reverse order).
+    pub fn bresenham_line(self, other: Self) -> Vec<Self> {
+        let dx = (other.x - self.x).abs();
+        let dy = (other.y - self.y).abs();
+        let sx = if self.x < other.x { 1 } else { -1 };
+        let sy = if self.y < other.y { 1 } else { -1 };
+        let mut err = dx - dy;
+
+        let mut points = Vec::with_capacity((dx.max(dy) + 1) as usize);
+        let mut current = self;
+
+        loop {
+            points.push(current);
+            if current == other {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 > -dy {
+                err -= dy;
+                current.x += sx;
+            }
+            if e2 < dx {
+                err += dx;
+                current.y += sy;
+            }
+        }
+
+        points
+    }
+
+    /// Returns the 4 cardinal (Von Neumann) neighbours of this point.
+    #[inline]
+    pub fn cardinal_neighbors(self) -> [Self; 4] {
+        [
+            self + Self::NORTH,
+            self + Self::EAST,
+            self + Self::SOUTH,
+            self + Self::WEST,
+        ]
+    }
+
+    /// Returns all 8 (Moore) neighbours of this point.
+    #[inline]
+    pub fn all_neighbors(self) -> [Self; 8] {
+        [
+            self + Self::NORTH,
+            self + Self::NORTHEAST,
+            self + Self::EAST,
+            self + Self::SOUTHEAST,
+            self + Self::SOUTH,
+            self + Self::SOUTHWEST,
+            self + Self::WEST,
+            self + Self::NORTHWEST,
+        ]
+    }
 }
 
 // ─── Abelian group operations ───────────────────────────────────────────────
@@ -212,6 +311,15 @@ impl Mul<CoordinateUnit> for GridVec {
             x: self.x * scalar,
             y: self.y * scalar,
         }
+    }
+}
+
+/// Scalar multiplication assignment: allows `grid_vec *= scalar`.
+impl MulAssign<CoordinateUnit> for GridVec {
+    #[inline]
+    fn mul_assign(&mut self, scalar: CoordinateUnit) {
+        self.x *= scalar;
+        self.y *= scalar;
     }
 }
 
@@ -398,6 +506,190 @@ mod tests {
     fn king_step_unit_stays_same() {
         for dir in &GridVec::DIRECTIONS_8 {
             assert_eq!(dir.king_step(), *dir);
+        }
+    }
+
+    // ─── Rotation tests ─────────────────────────────────────────
+
+    #[test]
+    fn rotate_90_cw_cardinal_directions() {
+        // N → E → S → W → N (clockwise cycle)
+        assert_eq!(GridVec::NORTH.rotate_90_cw(), GridVec::EAST);
+        assert_eq!(GridVec::EAST.rotate_90_cw(), GridVec::SOUTH);
+        assert_eq!(GridVec::SOUTH.rotate_90_cw(), GridVec::WEST);
+        assert_eq!(GridVec::WEST.rotate_90_cw(), GridVec::NORTH);
+    }
+
+    #[test]
+    fn rotate_90_ccw_cardinal_directions() {
+        // N → W → S → E → N (counter-clockwise cycle)
+        assert_eq!(GridVec::NORTH.rotate_90_ccw(), GridVec::WEST);
+        assert_eq!(GridVec::WEST.rotate_90_ccw(), GridVec::SOUTH);
+        assert_eq!(GridVec::SOUTH.rotate_90_ccw(), GridVec::EAST);
+        assert_eq!(GridVec::EAST.rotate_90_ccw(), GridVec::NORTH);
+    }
+
+    #[test]
+    fn rotate_cyclic_group_order_4() {
+        // R⁴ = I: four CW rotations return to original.
+        let v = GridVec::new(3, -7);
+        let r1 = v.rotate_90_cw();
+        let r2 = r1.rotate_90_cw();
+        let r3 = r2.rotate_90_cw();
+        let r4 = r3.rotate_90_cw();
+        assert_eq!(r4, v, "R⁴ should equal identity");
+    }
+
+    #[test]
+    fn rotate_cw_ccw_are_inverses() {
+        let v = GridVec::new(5, -2);
+        assert_eq!(v.rotate_90_cw().rotate_90_ccw(), v);
+        assert_eq!(v.rotate_90_ccw().rotate_90_cw(), v);
+    }
+
+    #[test]
+    fn rotate_preserves_squared_magnitude() {
+        // Rotation is an isometry: |Rv|² = |v|².
+        let v = GridVec::new(3, 4);
+        let origin = GridVec::ZERO;
+        assert_eq!(
+            v.distance_squared(origin),
+            v.rotate_90_cw().distance_squared(origin)
+        );
+    }
+
+    #[test]
+    fn rotate_zero_stays_zero() {
+        assert_eq!(GridVec::ZERO.rotate_90_cw(), GridVec::ZERO);
+        assert_eq!(GridVec::ZERO.rotate_90_ccw(), GridVec::ZERO);
+    }
+
+    // ─── MulAssign tests ────────────────────────────────────────
+
+    #[test]
+    fn mul_assign_scalar() {
+        let mut v = GridVec::new(3, -4);
+        v *= 2;
+        assert_eq!(v, GridVec::new(6, -8));
+    }
+
+    #[test]
+    fn mul_assign_zero() {
+        let mut v = GridVec::new(5, 7);
+        v *= 0;
+        assert_eq!(v, GridVec::ZERO);
+    }
+
+    // ─── Bresenham line tests ───────────────────────────────────
+
+    #[test]
+    fn bresenham_single_point() {
+        let p = GridVec::new(5, 5);
+        let line = p.bresenham_line(p);
+        assert_eq!(line, vec![p]);
+    }
+
+    #[test]
+    fn bresenham_horizontal() {
+        let a = GridVec::new(0, 0);
+        let b = GridVec::new(4, 0);
+        let line = a.bresenham_line(b);
+        assert_eq!(line.len(), 5);
+        assert_eq!(line[0], a);
+        assert_eq!(line[4], b);
+        // All points should have y=0.
+        for p in &line {
+            assert_eq!(p.y, 0);
+        }
+    }
+
+    #[test]
+    fn bresenham_vertical() {
+        let a = GridVec::new(3, 1);
+        let b = GridVec::new(3, 5);
+        let line = a.bresenham_line(b);
+        assert_eq!(line.len(), 5);
+        assert_eq!(line[0], a);
+        assert_eq!(line[4], b);
+        for p in &line {
+            assert_eq!(p.x, 3);
+        }
+    }
+
+    #[test]
+    fn bresenham_diagonal() {
+        let a = GridVec::new(0, 0);
+        let b = GridVec::new(3, 3);
+        let line = a.bresenham_line(b);
+        assert_eq!(line.len(), 4);
+        for p in &line {
+            assert_eq!(p.x, p.y, "Diagonal line should have x == y");
+        }
+    }
+
+    #[test]
+    fn bresenham_negative_direction() {
+        let a = GridVec::new(5, 5);
+        let b = GridVec::new(2, 3);
+        let line = a.bresenham_line(b);
+        assert_eq!(line[0], a);
+        assert_eq!(*line.last().unwrap(), b);
+    }
+
+    #[test]
+    fn bresenham_8_connected() {
+        // Verify that consecutive points differ by at most 1 in each axis.
+        let a = GridVec::new(0, 0);
+        let b = GridVec::new(7, 3);
+        let line = a.bresenham_line(b);
+        for i in 1..line.len() {
+            let dx = (line[i].x - line[i - 1].x).abs();
+            let dy = (line[i].y - line[i - 1].y).abs();
+            assert!(dx <= 1 && dy <= 1, "Step {i} not 8-connected: dx={dx}, dy={dy}");
+        }
+    }
+
+    #[test]
+    fn bresenham_reverse_same_points() {
+        // a→b and b→a should cover the same set of grid points.
+        let a = GridVec::new(1, 2);
+        let b = GridVec::new(8, 5);
+        let forward = a.bresenham_line(b);
+        let backward = b.bresenham_line(a);
+        let mut fwd_set: Vec<GridVec> = forward.clone();
+        let mut bwd_set: Vec<GridVec> = backward.clone();
+        fwd_set.sort();
+        bwd_set.sort();
+        assert_eq!(fwd_set, bwd_set, "Forward and backward should cover same points");
+    }
+
+    // ─── Neighbor tests ─────────────────────────────────────────
+
+    #[test]
+    fn cardinal_neighbors_count() {
+        let p = GridVec::new(5, 5);
+        assert_eq!(p.cardinal_neighbors().len(), 4);
+    }
+
+    #[test]
+    fn cardinal_neighbors_at_distance_1() {
+        let p = GridVec::new(5, 5);
+        for n in &p.cardinal_neighbors() {
+            assert_eq!(p.manhattan_distance(*n), 1);
+        }
+    }
+
+    #[test]
+    fn all_neighbors_count() {
+        let p = GridVec::new(5, 5);
+        assert_eq!(p.all_neighbors().len(), 8);
+    }
+
+    #[test]
+    fn all_neighbors_at_chebyshev_distance_1() {
+        let p = GridVec::new(5, 5);
+        for n in &p.all_neighbors() {
+            assert_eq!(p.chebyshev_distance(*n), 1);
         }
     }
 }

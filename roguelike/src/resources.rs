@@ -104,6 +104,37 @@ impl SpatialIndex {
     pub fn entities_at(&self, point: &MyPoint) -> &[Entity] {
         self.map.get(point).map_or(&[], |v| v.as_slice())
     }
+
+    /// Removes an entity from a specific tile in the index.
+    ///
+    /// Used by the movement system to maintain the spatial index invariant
+    /// inline when an entity moves: the entity is removed from its old tile
+    /// before being added to the new one.
+    pub fn remove_entity(&mut self, point: &MyPoint, entity: Entity) {
+        if let Some(entities) = self.map.get_mut(point) {
+            entities.retain(|&e| e != entity);
+        }
+    }
+
+    /// Adds an entity to a specific tile in the index.
+    pub fn add_entity(&mut self, point: MyPoint, entity: Entity) {
+        self.map.entry(point).or_default().push(entity);
+    }
+
+    /// Atomically moves an entity from one tile to another in the index.
+    ///
+    /// This is the correct primitive for maintaining the spatial index
+    /// invariant during movement: it ensures the entity is never present
+    /// in both the old and new tile simultaneously, and never absent from
+    /// both. This prevents the stale-read race condition where two entities
+    /// could move to the same tile in the same frame.
+    ///
+    /// **Invariant**: after `move_entity(old, new, e)`, the entity `e` is
+    /// present at `new` and absent from `old`.
+    pub fn move_entity(&mut self, old: &MyPoint, new: MyPoint, entity: Entity) {
+        self.remove_entity(old, entity);
+        self.add_entity(new, entity);
+    }
 }
 
 /// Counts elapsed world turns. Used by the wave spawning system to
@@ -338,5 +369,57 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.contains(&e1));
         assert!(result.contains(&e2));
+    }
+
+    #[test]
+    fn spatial_index_remove_entity() {
+        let mut index = SpatialIndex::default();
+        let point = GridVec::new(5, 5);
+        let e1 = Entity::from_bits(10);
+        let e2 = Entity::from_bits(20);
+        index.add_entity(point, e1);
+        index.add_entity(point, e2);
+        assert_eq!(index.entities_at(&point).len(), 2);
+        index.remove_entity(&point, e1);
+        let result = index.entities_at(&point);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], e2);
+    }
+
+    #[test]
+    fn spatial_index_remove_entity_from_empty_tile() {
+        let mut index = SpatialIndex::default();
+        let point = GridVec::new(1, 1);
+        let entity = Entity::from_bits(42);
+        // Should not panic when removing from a tile with no entries.
+        index.remove_entity(&point, entity);
+        assert!(index.entities_at(&point).is_empty());
+    }
+
+    #[test]
+    fn spatial_index_add_entity() {
+        let mut index = SpatialIndex::default();
+        let point = GridVec::new(7, 3);
+        let entity = Entity::from_bits(99);
+        index.add_entity(point, entity);
+        let result = index.entities_at(&point);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], entity);
+    }
+
+    #[test]
+    fn spatial_index_move_entity_atomicity() {
+        let mut index = SpatialIndex::default();
+        let old = GridVec::new(0, 0);
+        let new = GridVec::new(1, 0);
+        let entity = Entity::from_bits(50);
+        index.add_entity(old, entity);
+        assert_eq!(index.entities_at(&old).len(), 1);
+        // Move the entity atomically.
+        index.move_entity(&old, new, entity);
+        // Old tile should be empty, new tile should have the entity.
+        assert!(index.entities_at(&old).is_empty());
+        assert_eq!(index.entities_at(&new).len(), 1);
+        assert_eq!(index.entities_at(&new)[0], entity);
     }
 }

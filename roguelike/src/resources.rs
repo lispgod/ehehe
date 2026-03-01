@@ -66,6 +66,16 @@ impl SpatialIndex {
     }
 }
 
+/// Counts elapsed world turns. Used by the wave spawning system to
+/// determine how many and how often new enemies appear.
+#[derive(Resource, Debug, Default)]
+pub struct TurnCounter(pub u32);
+
+/// Tracks the total number of hostile entities killed by the player.
+/// Displayed in the status bar as the player's score.
+#[derive(Resource, Debug, Default)]
+pub struct KillCount(pub u32);
+
 /// Accumulator for combat log messages displayed in the status bar.
 /// Maintains a rolling history of recent messages.
 #[derive(Resource, Debug, Default)]

@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::components::{Health, Player, Position, Renderable, Viewshed};
 use crate::grid_vec::GridVec;
-use crate::resources::{CameraPosition, CombatLog, GameMapResource, GameState};
+use crate::resources::{CameraPosition, CombatLog, GameMapResource, GameState, KillCount, TurnCounter};
 use crate::typedefs::{CoordinateUnit, MyPoint};
 
 /// Renders the game map and all `Renderable` entities to the terminal.
@@ -22,6 +22,8 @@ pub fn draw_system(
     player_query: Query<(&Position, Option<&Viewshed>, Option<&Health>), With<Player>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
+    turn_counter: Res<TurnCounter>,
+    kill_count: Res<KillCount>,
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -134,7 +136,8 @@ pub fn draw_system(
             height: 1,
         };
         let status = Line::from(format!(
-            " Roguelike | {player_info} | {last_msg} | WASD: move | P: pause | Q: quit",
+            " Survivor | {player_info} | Turn:{} Kills:{} | {last_msg} | WASD: move | F/Space: spell | P: pause | Q: quit",
+            turn_counter.0, kill_count.0,
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);
     })?;

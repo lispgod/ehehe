@@ -20,8 +20,6 @@ use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
 /// Must match the lifetime used in spell.rs when creating particles.
 const PARTICLE_LIFETIME: f32 = 8.0;
 
-/// Number of recent combat log messages shown in the status bar.
-const STATUS_BAR_MESSAGE_COUNT: usize = 2;
 
 /// Ticks and renders spell particles each frame.
 pub fn particle_tick_system(mut particles: ResMut<SpellParticles>) {
@@ -33,14 +31,13 @@ pub fn particle_tick_system(mut particles: ResMut<SpellParticles>) {
 /// `revealed_tiles` set for fog-of-war memory (dimmed rendering).
 ///
 /// Layout:
-/// ┌─────────────────────────────┬──────────────┐
-/// │         Game Area           │  Side Panel   │
-/// │                             │  (HP/Stamina  │
-/// │                             │   Inventory   │
-/// │                             │   Visible)    │
-/// ├─────────────────────────────┴──────────────┤
-/// │  Status Bar                                 │
-/// └─────────────────────────────────────────────┘
+/// ┌─────────────────────────────────────────────┐
+/// │              Game Area (full width)          │
+/// ├────────┬────────────────────────┬───────────┤
+/// │ Stats  │    Central Log         │  Info     │
+/// │ HP/STA │    (combat log)        │  Inv/Vis  │
+/// │ Ammo   │                       │           │
+/// └────────┴────────────────────────┴───────────┘
 pub fn draw_system(
     mut context: ResMut<RatatuiContext>,
     game_map: Res<GameMapResource>,
@@ -61,27 +58,15 @@ pub fn draw_system(
     context.draw(|frame| {
         let area = frame.area();
 
-        // ── Top-level layout: main area + status bar (1 row) ────
+        // ── Top-level layout: game area + bottom panel ──────────
+        let bottom_panel_height = 10u16;
         let vert_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([Constraint::Min(1), Constraint::Length(bottom_panel_height)])
             .split(area);
 
-        let main_area = vert_chunks[0];
-        let status_area = vert_chunks[1];
-
-        // ── Main area: game viewport + side panel ───────────────
-        let side_panel_width = 22u16;
-        let horiz_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(side_panel_width),
-            ])
-            .split(main_area);
-
-        let game_area = horiz_chunks[0];
-        let side_area = horiz_chunks[1];
+        let game_area = vert_chunks[0];
+        let bottom_area = vert_chunks[1];
 
         let render_width = game_area.width;
         let render_height = game_area.height;
@@ -120,7 +105,7 @@ pub fn draw_system(
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left = camera.0 - GridVec::new(w_radius, h_radius);
 
-        // Collect visible entities for the side panel.
+        // Collect visible entities for the info panel.
         let mut visible_entity_infos: Vec<(String, RatColor, RatColor, String)> = Vec::new();
 
         for (pos, renderable, name) in &renderables {
@@ -152,8 +137,7 @@ pub fn draw_system(
             }
         }
 
-        // Overlay spell particles on the render packet.
-        // Only show particles whose delay has reached 0 (already visible).
+        // Overlay combat particles on the render packet.
         for (particle_pos, lifetime, delay) in &spell_particles.particles {
             if *delay > 0 {
                 continue; // not yet visible
@@ -197,7 +181,7 @@ pub fn draw_system(
 
         frame.render_widget(Paragraph::new(Text::from(render_lines)).on_black(), game_area);
 
-        // Collect inventory item names and kinds for the side panel and inventory overlay.
+        // Collect inventory item names and kinds for the bottom panel and inventory overlay.
         let inv_item_info: Vec<(String, String)> = player_inv
             .map(|inv| {
                 inv.items
@@ -225,10 +209,10 @@ pub fn draw_system(
             .unwrap_or_default();
         let inv_item_names: Vec<String> = inv_item_info.iter().map(|(n, _)| n.clone()).collect();
 
-        // ── Side Panel ──────────────────────────────────────────
-        render_side_panel(
+        // ── Bottom Panel ────────────────────────────────────────
+        render_bottom_panel(
             frame,
-            side_area,
+            bottom_area,
             player_hp,
             player_stamina,
             player_ammo,
@@ -238,6 +222,8 @@ pub fn draw_system(
             &combat_log,
             player_level,
             player_exp,
+            &turn_counter,
+            &kill_count,
         );
 
         // ── Overlays ────────────────────────────────────────────
@@ -336,30 +322,14 @@ pub fn draw_system(
         if input_state.mode == InputMode::Inventory {
             render_inventory_overlay(frame, game_area, &inv_item_info, input_state.inv_selection);
         }
-
-        // ── Status bar ──────────────────────────────────────────
-        let player_info = player_query
-            .single()
-            .map(|(p, _, _, _, _, _, _, _)| format!("({}, {})", p.x, p.y))
-            .unwrap_or_default();
-
-        let level_info = player_level.map_or(String::new(), |l| format!(" Lv:{}", l.0));
-
-        let recent_msgs = combat_log.recent(STATUS_BAR_MESSAGE_COUNT);
-        let last_msg = recent_msgs.join(" | ");
-
-        let status = Line::from(format!(
-            " Dead Zone | {player_info}{level_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
-            turn_counter.0, kill_count.0,
-        ));
-        frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);
     })?;
 
     Ok(())
 }
 
-/// Renders the side panel with HP gauge, Stamina gauge, Ammo, Level/EXP, inventory, visible entities, and combat log.
-fn render_side_panel(
+/// Renders the bottom panel with stats, central combat log, and info.
+/// Layout: [Stats | Central Log | Info]
+fn render_bottom_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
@@ -368,123 +338,139 @@ fn render_side_panel(
     player_inv: Option<&Inventory>,
     inv_item_names: &[String],
     visible_entities: &[(String, RatColor, RatColor, String)],
-    _combat_log: &CombatLog,
+    combat_log: &CombatLog,
     player_level: Option<&Level>,
     player_exp: Option<&Experience>,
+    turn_counter: &TurnCounter,
+    kill_count: &KillCount,
 ) {
-    // Dynamic inventory height: 2 (border) + max(1, item_count)
-    let item_count = player_inv.map_or(1, |inv| inv.items.len().max(1));
-    let inv_height = (item_count as u16) + 2; // +2 for borders
-
-    // Divide the side panel into sections.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
+    // Split bottom panel into three horizontal columns: stats | log | info
+    let horiz_chunks = Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(3),          // HP gauge
-            Constraint::Length(3),          // Stamina gauge
-            Constraint::Length(3),          // Ammo gauge
-            Constraint::Length(3),          // EXP gauge
-            Constraint::Length(inv_height), // Inventory (dynamic)
-            Constraint::Length(5),          // Combat log
-            Constraint::Min(1),            // Visible entities
+            Constraint::Length(22),   // Stats column (HP, Stamina, Ammo, Level)
+            Constraint::Min(1),       // Central log (wide, fills remaining space)
+            Constraint::Length(22),   // Info column (Inventory, Visible entities)
         ])
         .split(area);
 
-    // ── HP Gauge ────────────────────────────────────────────────
+    let stats_area = horiz_chunks[0];
+    let log_area = horiz_chunks[1];
+    let info_area = horiz_chunks[2];
+
+    // ── Stats Column (left) ─────────────────────────────────────
+    render_stats_column(frame, stats_area, player_hp, player_stamina, player_ammo, player_level, player_exp);
+
+    // ── Central Log (middle) ────────────────────────────────────
+    let log_height = log_area.height.saturating_sub(2) as usize; // subtract border
+    let log_lines: Vec<Line> = combat_log
+        .recent(log_height.max(1))
+        .into_iter()
+        .map(|s| Line::from(format!(" {s}")).dark_gray())
+        .collect();
+
+    let title = format!(" Log | Turn:{} Kills:{} | ?:help ", turn_counter.0, kill_count.0);
+    frame.render_widget(
+        Paragraph::new(if log_lines.is_empty() {
+            vec![Line::from(" (no events)".dark_gray())]
+        } else {
+            log_lines
+        })
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: true }),
+        log_area,
+    );
+
+    // ── Info Column (right) ─────────────────────────────────────
+    render_info_column(frame, info_area, player_inv, inv_item_names, visible_entities);
+}
+
+/// Renders the stats column (HP, Stamina, Ammo, Level gauges stacked vertically).
+fn render_stats_column(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    player_hp: Option<&Health>,
+    player_stamina: Option<&Stamina>,
+    player_ammo: Option<&Ammo>,
+    player_level: Option<&Level>,
+    player_exp: Option<&Experience>,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // HP gauge (compact, no border)
+            Constraint::Length(1), // Stamina gauge
+            Constraint::Length(1), // Ammo gauge
+            Constraint::Length(1), // EXP gauge
+            Constraint::Min(0),   // padding
+        ])
+        .split(Block::default().borders(Borders::ALL).title("Stats").inner(area));
+
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("Stats"),
+        area,
+    );
+
+    // HP
     if let Some(hp) = player_hp {
-        let ratio = if hp.max > 0 {
-            (hp.current as f64 / hp.max as f64).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let ratio = if hp.max > 0 { (hp.current as f64 / hp.max as f64).clamp(0.0, 1.0) } else { 0.0 };
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("HP"))
-            .gauge_style(
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Red)
-                    .bg(ratatui::style::Color::DarkGray),
-            )
+            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Red).bg(ratatui::style::Color::DarkGray))
             .ratio(ratio)
-            .label(Span::from(format!("{}/{}", hp.current, hp.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
+            .label(Span::from(format!("HP {}/{}", hp.current, hp.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[0]);
-    } else {
-        frame.render_widget(
-            Block::default().borders(Borders::ALL).title("HP"),
-            chunks[0],
-        );
     }
 
-    // ── Stamina Gauge ───────────────────────────────────────────
+    // Stamina
     if let Some(stamina) = player_stamina {
-        let ratio = if stamina.max > 0 {
-            (stamina.current as f64 / stamina.max as f64).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let ratio = if stamina.max > 0 { (stamina.current as f64 / stamina.max as f64).clamp(0.0, 1.0) } else { 0.0 };
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Stamina"))
-            .gauge_style(
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Blue)
-                    .bg(ratatui::style::Color::DarkGray),
-            )
+            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Blue).bg(ratatui::style::Color::DarkGray))
             .ratio(ratio)
-            .label(Span::from(format!("{}/{}", stamina.current, stamina.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
+            .label(Span::from(format!("STA {}/{}", stamina.current, stamina.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[1]);
-    } else {
-        frame.render_widget(
-            Block::default().borders(Borders::ALL).title("Stamina"),
-            chunks[1],
-        );
     }
 
-    // ── Ammo Gauge ──────────────────────────────────────────────
+    // Ammo
     if let Some(ammo) = player_ammo {
-        let ratio = if ammo.max > 0 {
-            (ammo.current as f64 / ammo.max as f64).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let ratio = if ammo.max > 0 { (ammo.current as f64 / ammo.max as f64).clamp(0.0, 1.0) } else { 0.0 };
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Ammo"))
-            .gauge_style(
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Yellow)
-                    .bg(ratatui::style::Color::DarkGray),
-            )
+            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow).bg(ratatui::style::Color::DarkGray))
             .ratio(ratio)
-            .label(Span::from(format!("{}/{}", ammo.current, ammo.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
+            .label(Span::from(format!("AMMO {}/{}", ammo.current, ammo.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[2]);
-    } else {
-        frame.render_widget(
-            Block::default().borders(Borders::ALL).title("Ammo"),
-            chunks[2],
-        );
     }
 
-    // ── EXP Gauge ───────────────────────────────────────────────
+    // EXP
     if let (Some(exp), Some(level)) = (player_exp, player_level) {
-        let ratio = if exp.next_level > 0 {
-            (exp.current as f64 / exp.next_level as f64).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let ratio = if exp.next_level > 0 { (exp.current as f64 / exp.next_level as f64).clamp(0.0, 1.0) } else { 0.0 };
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title(format!("Lv.{}", level.0)))
-            .gauge_style(
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Green)
-                    .bg(ratatui::style::Color::DarkGray),
-            )
+            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Green).bg(ratatui::style::Color::DarkGray))
             .ratio(ratio)
-            .label(Span::from(format!("{}/{}", exp.current, exp.next_level)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
+            .label(Span::from(format!("Lv.{} {}/{}", level.0, exp.current, exp.next_level)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
         frame.render_widget(gauge, chunks[3]);
-    } else {
-        frame.render_widget(
-            Block::default().borders(Borders::ALL).title("EXP"),
-            chunks[3],
-        );
     }
+}
+
+/// Renders the info column (Inventory + Visible entities stacked vertically).
+fn render_info_column(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    player_inv: Option<&Inventory>,
+    inv_item_names: &[String],
+    visible_entities: &[(String, RatColor, RatColor, String)],
+) {
+    let inv_item_count = player_inv.map_or(0, |inv| inv.items.len());
+    let inv_display_count = inv_item_count.max(1).min(4); // show at most 4 items
+    let inv_height = (inv_display_count as u16) + 2; // +2 for borders
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(inv_height), // Inventory
+            Constraint::Min(1),            // Visible entities
+        ])
+        .split(area);
 
     // ── Inventory ───────────────────────────────────────────────
     let mut inv_lines: Vec<Line> = Vec::new();
@@ -492,8 +478,11 @@ fn render_side_panel(
         if inv.items.is_empty() {
             inv_lines.push(Line::from(" (empty)".dark_gray()));
         } else {
-            for (i, name) in inv_item_names.iter().enumerate().take(9) {
+            for (i, name) in inv_item_names.iter().enumerate().take(4) {
                 inv_lines.push(Line::from(format!(" {}: {name}", i + 1)));
+            }
+            if inv_item_names.len() > 4 {
+                inv_lines.push(Line::from(format!(" +{} more [I]", inv_item_names.len() - 4)).dark_gray());
             }
         }
     } else {
@@ -502,30 +491,12 @@ fn render_side_panel(
     frame.render_widget(
         Paragraph::new(inv_lines)
             .block(Block::default().borders(Borders::ALL).title("Bag [I]")),
-        chunks[4],
-    );
-
-    // ── Combat Log ──────────────────────────────────────────────
-    let log_lines: Vec<Line> = _combat_log
-        .recent(3)
-        .into_iter()
-        .map(|s| Line::from(format!(" {s}")).dark_gray())
-        .collect();
-    frame.render_widget(
-        Paragraph::new(if log_lines.is_empty() {
-            vec![Line::from(" (no events)".dark_gray())]
-        } else {
-            log_lines
-        })
-        .block(Block::default().borders(Borders::ALL).title("Log"))
-        .wrap(Wrap { trim: true }),
-        chunks[5],
+        chunks[0],
     );
 
     // ── Visible Entities ────────────────────────────────────────
-    let max_visible = (chunks[6].height.saturating_sub(2)) as usize;
+    let max_visible = (chunks[1].height.saturating_sub(2)) as usize;
     let mut vis_lines: Vec<Line> = Vec::new();
-    // Deduplicate: show each unique name only once.
     let mut seen_names: HashSet<String> = HashSet::new();
     for (sym, fg, _bg, name) in visible_entities {
         if seen_names.insert(name.clone()) {
@@ -545,7 +516,7 @@ fn render_side_panel(
     frame.render_widget(
         Paragraph::new(vis_lines)
             .block(Block::default().borders(Borders::ALL).title("Visible")),
-        chunks[6],
+        chunks[1],
     );
 }
 

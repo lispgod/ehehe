@@ -33,7 +33,7 @@ All grid coordinates use the `GridVec` type, which forms an **Abelian group** (�
 | **Commutativity** | `a + b = b + a` | Order doesn't matter |
 
 Additionally, `GridVec` supports scalar multiplication (ℤ-module structure), three
-distance metrics, and bilinear operations:
+distance metrics, bilinear operations, and lattice rotations:
 
 | Metric | Formula | Use case |
 |---|---|---|
@@ -46,8 +46,40 @@ distance metrics, and bilinear operations:
 | **Dot product** | `aₓbₓ + aᵧbᵧ` | Projection, alignment test (positive → same half-plane, zero → orthogonal) |
 | **2D cross product** | `aₓbᵧ − aᵧbₓ` | Signed area / orientation test (det of 2×2 matrix [a\|b]) |
 | **King step** | `(signum(x), signum(y))` | Normalize to Chebyshev unit ball — single-step 8-directional movement |
+| **Rotate 90° CW** | `(x, y) ↦ (y, −x)` | SO(2) lattice rotation (cyclic group C₄: R⁴ = I) |
+| **Rotate 90° CCW** | `(x, y) ↦ (−y, x)` | Inverse rotation (R_ccw ∘ R_cw = I) |
+| **Bresenham line** | Integer rasterization | Exact tile sequence between two points for line-of-sight and ranged attacks |
 
-All group axioms are verified by unit tests.
+#### Lattice Rotations (C₄ Cyclic Group)
+
+The `rotate_90_cw` and `rotate_90_ccw` methods apply the SO(2) rotation
+matrices restricted to ℤ²:
+
+```
+R_cw  = [[0, 1], [−1, 0]]     R_ccw = [[0, −1], [1, 0]]
+```
+
+These form a **cyclic group of order 4**: {I, R, R², R³} where R⁴ = I.
+Properties verified by unit tests:
+- **Closure**: rotation of a `GridVec` produces a `GridVec`.
+- **Isometry**: `|Rv|² = |v|²` (preserves squared Euclidean distance).
+- **Inverse**: `R_cw ∘ R_ccw = R_ccw ∘ R_cw = I`.
+- **Order**: `R⁴ = I` (four rotations return to original).
+
+#### Bresenham Line Algorithm
+
+`bresenham_line(self, other)` computes the integer-only rasterization of a
+line segment between two grid points. This is the fundamental primitive for
+ranged attack trajectories and line-of-sight checks.
+
+**Properties:**
+- **Exact endpoints**: first element is `self`, last is `other`.
+- **8-connected**: each successive pair of points differs by at most 1 in each axis.
+- **Deterministic**: pure function of endpoints, no floating-point.
+- **Time**: O(max(|Δx|, |Δy|)) — visits each tile exactly once.
+- **Symmetry**: `a.bresenham_line(b)` and `b.bresenham_line(a)` traverse the same set of points.
+
+All group axioms, rotation properties, and Bresenham invariants are verified by unit tests.
 
 ### Energy-Based Turn Scheduling
 
@@ -81,16 +113,16 @@ rational slopes (integer y/x) to avoid floating-point:
 
 ### A* Pathfinding (AI Navigation)
 
-AI entities use **A\* search** with the **Chebyshev heuristic** (L∞ norm) to find
-optimal paths to the player, navigating around walls, furniture, and other
-blocking entities. This replaces greedy best-first chase, which could get stuck
-behind obstacles.
+AI entities use **A\* search** with the **Chebyshev heuristic** (L∞ norm) and
+**lexicographic tie-breaking** to find optimal paths to the player, navigating
+around walls, furniture, and other blocking entities.
 
 **Mathematical guarantees:**
 
 | Property | Explanation |
 |---|---|
 | **Optimality** | Chebyshev distance is *admissible* (`h(n) ≤ h*(n)` — never overestimates) and *consistent* (`h(n) ≤ c(n,n') + h(n')` — satisfies triangle inequality). Therefore A* finds the shortest path. |
+| **Tie-breaking** | When multiple open nodes share the same f-score, we prefer the node with the lower h-score (i.e., higher g-score, meaning further along the path). This lexicographic ordering `(f, h)` reduces the number of expanded nodes without affecting optimality — among equal-f nodes, those nearer the goal are expanded first, pruning the search frontier. |
 | **Completeness** | If a path exists within the 256-node exploration budget, it will be found. |
 | **Time** | O(k log k) where k = nodes explored (≤ 256). Each node visits ≤ 8 neighbours. |
 | **Space** | O(k) for the open set (binary heap), closed set, g-score map, and came-from map. |
@@ -102,15 +134,25 @@ Chebyshev the tightest admissible heuristic, minimising node expansions.
 
 ### Spatial Index Atomicity
 
-The `movement_system` maintains the **spatial index invariant** inline: after
-each successful move, the entity is removed from its old tile and added to
-the new tile in the `SpatialIndex` resource. This ensures that when multiple
+The `SpatialIndex` resource provides three encapsulated operations for
+maintaining the position→entity mapping:
+
+| Method | Signature | Purpose |
+|---|---|---|
+| `add_entity` | `(point, entity)` | Register an entity at a tile |
+| `remove_entity` | `(point, entity)` | Unregister an entity from a tile |
+| `move_entity` | `(old, new, entity)` | Atomic remove + add (single call) |
+
+The `movement_system` uses `move_entity` to maintain the **spatial index
+invariant** after each successful move. This ensures that when multiple
 `MoveIntent`s are processed in a single frame (e.g., AI moves during WorldTurn),
 each subsequent intent sees the up-to-date occupancy map.
 
 **Without this invariant**, two entities could move to the same tile
 simultaneously because the index would still show their original positions
-(stale read). The inline update prevents this race condition entirely.
+(stale read). The atomic `move_entity` prevents this race condition entirely,
+and encapsulating it as a method (rather than ad-hoc field manipulation)
+ensures all callers maintain the invariant correctly.
 
 ---
 
@@ -196,7 +238,7 @@ new component combinations.
 |---|---|
 | `GameMapResource` | Wraps the 2D tile grid (`GameMap`). Kept as a resource because tiles are static spatial data best accessed by coordinate, not by query. |
 | `CameraPosition` | Cached viewport center, updated each frame by `camera_follow_system`. |
-| `SpatialIndex` | `HashMap<GridVec, Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries used by movement and combat. |
+| `SpatialIndex` | `HashMap<GridVec, Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries. Exposes `add_entity`, `remove_entity`, and `move_entity` for atomic inline updates during movement. |
 | `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. |
 | `CombatLog` | Accumulator for combat messages displayed in the status bar. Cleared after each render frame. |
 | `TurnCounter` | `TurnCounter(u32)` — Counts elapsed world turns. Incremented by `end_world_turn`. Used by `wave_spawn_system` to determine when to spawn new waves. |
@@ -412,13 +454,23 @@ Update
   2. Check map tile walkability (no blocking furniture).
   3. Check spatial index for entities with `BlocksMovement` at the target.
 - Updates `Position` only if both checks pass. Marks `Viewshed` dirty.
-- **Spatial index atomicity**: after each successful move, updates the `SpatialIndex` inline (remove from old tile, add to new tile) so subsequent intents in the same frame see accurate occupancy data.
+- **Spatial index atomicity**: after each successful move, calls `SpatialIndex::move_entity()` to atomically update the index so subsequent intents in the same frame see accurate occupancy data.
 
 #### `combat_system`
 - **Reads:** `MessageReader<AttackIntent>`, `Query<(&CombatStats, Option<&Name>)>`
 - **Writes:** `MessageWriter<DamageEvent>`, `ResMut<CombatLog>`
 - Resolves damage = max(0, attacker.attack − target.defense).
 - Logs combat messages to `CombatLog`.
+
+#### `ranged_attack_system` (Bresenham Line-of-Sight)
+- **Reads:** `MessageReader<RangedAttackIntent>`, `Query<(&Position, &mut Ammo, &CombatStats)>`, `Query<(Entity, &Position, &CombatStats), With<Hostile>>`, `Res<GameMapResource>`
+- **Writes:** `MessageWriter<DamageEvent>`, `ResMut<CombatLog>`, `ResMut<SpellParticles>`
+- Computes the bullet trajectory using **Bresenham's line algorithm** from the
+  caster's position to the maximum range endpoint. The bullet path is the
+  mathematically correct sequence of integer grid tiles — no floating-point,
+  no directional heuristics. Bullets stop at impassable walls and can penetrate
+  through multiple enemies (penetration decreases by each target's defense).
+- Spawns visual particle effects along the trajectory.
 
 #### `apply_damage_system`
 - **Reads:** `MessageReader<DamageEvent>`
@@ -455,7 +507,9 @@ Update
 - **Writes:** `MessageWriter<MoveIntent>`
 - For entities with enough energy (≥ ACTION_COST):
   - **Idle**: check if player is visible → transition to `Chasing`.
-  - **Chasing**: use **A\* pathfinding** (Chebyshev heuristic, 256-node budget) to find optimal route around walls and blocking entities. Falls back to greedy king-step if no path found.
+  - **Chasing**: use **A\* pathfinding** (Chebyshev heuristic, 256-node budget,
+    lexicographic `(f, h)` tie-breaking) to find optimal route around walls and
+    blocking entities. Falls back to greedy king-step if no path found.
 - Deducts ACTION_COST from energy after acting.
 
 #### `visibility_system`  (Symmetric Shadowcasting)
@@ -521,7 +575,7 @@ App::new()
 roguelike/src/
 ├── main.rs              App entry point (minimal — just plugin registration)
 ├── lib.rs               Module declarations
-├── grid_vec.rs          GridVec: algebraic 2D integer vector (Abelian group, distances, tests)
+├── grid_vec.rs          GridVec: algebraic 2D integer vector (Abelian group, distances, rotations, Bresenham, tests)
 ├── components.rs        All ECS components (Position, Player, Name, Renderable, Viewshed, Health, CombatStats, Speed, Energy, AiState, Hostile, …)
 ├── events.rs            MoveIntent, AttackIntent, DamageEvent, SpellCastIntent
 ├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
@@ -532,7 +586,7 @@ roguelike/src/
 │   ├── input.rs         input_system
 │   ├── spatial_index.rs spatial_index_system
 │   ├── movement.rs      movement_system (uses SpatialIndex + BlocksMovement + bump-to-attack)
-│   ├── combat.rs        combat_system + apply_damage_system + death_system
+│   ├── combat.rs        combat_system + ranged_attack_system (Bresenham LoS) + apply_damage_system + death_system
 │   ├── ai.rs            ai_system + energy_accumulate_system
 │   ├── visibility.rs    visibility_system (recursive symmetric shadowcasting)
 │   ├── camera.rs        camera_follow_system
@@ -564,10 +618,10 @@ features slot in naturally:
 | ~~Enemy wave spawning~~ | ✅ Implemented: `wave_spawn_system` spawns escalating waves every 5 turns near the player |
 | ~~Kill tracking / scoring~~ | ✅ Implemented: `KillCount` resource incremented by `death_system`, displayed in status bar |
 | ~~Turn counter~~ | ✅ Implemented: `TurnCounter` resource incremented by `end_world_turn`, displayed in status bar |
-| Ranged combat | `RangedAttackIntent { attacker, target_pos }` + line-of-sight check via `SpatialIndex` |
+| ~~Ranged combat~~ | ✅ Implemented: `RangedAttackIntent` with Bresenham line trajectory, wall obstruction, and bullet penetration mechanics |
 | Items & inventory | `Item` marker + `InBackpack(Entity)` component |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
-| ~~Pathfinding AI~~ | ✅ Implemented: A* with Chebyshev heuristic (admissible + consistent for 8-connected grids). 256-node exploration budget with greedy fallback. |
+| ~~Pathfinding AI~~ | ✅ Implemented: A* with Chebyshev heuristic (admissible + consistent for 8-connected grids), lexicographic (f, h) tie-breaking for reduced node expansion. 256-node exploration budget with greedy fallback. |
 
 ---
 

@@ -117,9 +117,12 @@ pub fn input_system(
                             next.set(TurnState::PlayerTurn);
                         }
                         input_state.mode = InputMode::Game;
-                        // Adjust selection if we removed the last item.
-                        if input_state.inv_selection >= item_count.saturating_sub(1) {
-                            input_state.inv_selection = item_count.saturating_sub(2).max(0);
+                        // Adjust selection so it doesn't exceed the new last index.
+                        let new_count = item_count.saturating_sub(1);
+                        if new_count > 0 && input_state.inv_selection >= new_count {
+                            input_state.inv_selection = new_count - 1;
+                        } else if new_count == 0 {
+                            input_state.inv_selection = 0;
                         }
                     } else {
                         combat_log.push("No item selected.".into());

@@ -167,7 +167,7 @@ pub fn ranged_attack_system(
         for (target_entity, target_pos, target_name) in &targets {
             let dist = origin.chebyshev_distance(target_pos.as_grid_vec());
             if dist > 0 && dist <= intent.range {
-                if best.is_none() || dist < best.as_ref().unwrap().1 {
+                if best.as_ref().map_or(true, |(_, best_dist, _)| dist < *best_dist) {
                     let t_name = target_name.map_or("???".to_string(), |n| n.0.clone());
                     best = Some((target_entity, dist, t_name));
                 }

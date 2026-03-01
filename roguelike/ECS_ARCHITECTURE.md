@@ -160,6 +160,8 @@ new component combinations.
 | `SpatialIndex` | `HashMap<GridVec, Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries used by movement and combat. |
 | `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. |
 | `CombatLog` | Accumulator for combat messages displayed in the status bar. Cleared after each render frame. |
+| `TurnCounter` | `TurnCounter(u32)` — Counts elapsed world turns. Incremented by `end_world_turn`. Used by `wave_spawn_system` to determine when to spawn new waves. |
+| `KillCount` | `KillCount(u32)` — Tracks total hostile entities killed. Incremented by `death_system`. Displayed in the status bar as the player's score. |
 
 > **Design note:** Tiles are *not* individual entities. A 120×80 map would
 > create 9,600 entities — expensive to query every frame. Storing the grid in
@@ -247,9 +249,9 @@ produce bit-identical maps and monster placements.
 
 | Variant | Active Systems | Transition |
 |---|---|---|
-| `AwaitingInput` (default) | `input_system` accepts movement/action keys | Player presses a key → `PlayerTurn` |
-| `PlayerTurn` | movement, combat, visibility, camera | After consequence systems → `WorldTurn` |
-| `WorldTurn` | energy accumulation, AI, movement, combat | After AI systems → `AwaitingInput` |
+| `AwaitingInput` (default) | `input_system` accepts movement/spell/action keys | Player presses a key → `PlayerTurn` |
+| `PlayerTurn` | movement, spell, combat, visibility, camera | After consequence systems → `WorldTurn` |
+| `WorldTurn` | energy accumulation, AI, wave spawning, movement, combat | After AI + wave systems → `AwaitingInput` |
 
 ```text
 ┌──────────────┐  key press  ┌────────────┐  end_player_turn  ┌───────────┐  end_world_turn
@@ -268,7 +270,8 @@ The input system always runs so the player can unpause or quit.
 |---|---|---|---|
 | `MoveIntent` | `entity, dx, dy` | `input_system`, `ai_system` | `movement_system` |
 | `AttackIntent` | `attacker, target` | `movement_system` (bump-to-attack) | `combat_system` |
-| `DamageEvent` | `target, amount` | `combat_system` | `apply_damage_system` |
+| `DamageEvent` | `target, amount` | `combat_system`, `spell_system` | `apply_damage_system` |
+| `SpellCastIntent` | `caster: Entity, radius: CoordinateUnit` | `input_system` | `spell_system` |
 
 Events decouple intent from physics. AI systems emit the same `MoveIntent`
 as the player input system — the resolution pipeline is completely shared.
@@ -284,6 +287,17 @@ Player presses 'd' (move right)
   → combat_system emits DamageEvent { target: goblin, amount: 3 }
   → apply_damage_system reduces goblin health
   → death_system despawns goblin if health ≤ 0
+```
+
+### AoE Spell Flow
+
+```text
+Player presses 'f' or Space (cast spell)
+  → input_system emits SpellCastIntent { caster: player, radius: 5 }
+  → spell_system finds all Hostile entities within Chebyshev radius
+  → spell_system emits DamageEvent { target: goblin, amount: 5 } for each
+  → apply_damage_system reduces each target's health
+  → death_system despawns killed hostiles, increments KillCount
 ```
 
 ---
@@ -307,7 +321,7 @@ Player presses 'd' (move right)
 
 ```text
 PreUpdate
-  └─ input_system            reads KeyMessage → emits MoveIntent / toggles states
+  └─ input_system            reads KeyMessage → emits MoveIntent or SpellCastIntent / toggles states
 
 Update
   ├─ [Index]
@@ -315,9 +329,10 @@ Update
   │
   ├─ [Action]  (gated on GameState::Playing)
   │   ├─ movement_system         reads MoveIntent → collision (map + spatial) → bump-to-attack or mutate Position
+  │   ├─ spell_system            reads SpellCastIntent → finds Hostile in radius → emits DamageEvent for each
   │   ├─ combat_system           reads AttackIntent → computes damage → emits DamageEvent → logs messages
   │   ├─ apply_damage_system     reads DamageEvent → mutates Health
-  │   └─ death_system            despawns entities with health ≤ 0
+  │   └─ death_system            despawns entities with health ≤ 0, increments KillCount for Hostile kills
   │
   ├─ [Consequence]  (gated on GameState::Playing)
   │   ├─ visibility_system       symmetric shadowcasting → updates visible_tiles + revealed_tiles
@@ -328,10 +343,11 @@ Update
   ├─ [WorldTurn phase]  (gated on TurnState::WorldTurn)
   │   ├─ energy_accumulate_system  energy += speed for all actors
   │   ├─ ai_system                 AI decisions → emits MoveIntent
-  │   └─ end_world_turn           → transitions to AwaitingInput
+  │   ├─ wave_spawn_system         spawns enemy waves every 5 turns based on TurnCounter
+  │   └─ end_world_turn           increments TurnCounter → transitions to AwaitingInput
   │
   └─ [Render]
-      └─ draw_system             renders map + entities + fog-of-war + health + combat log + status bar
+      └─ draw_system             renders map + entities + fog-of-war + health + combat log + status bar (turn count, kill count, spell keybind)
 ```
 
 ### System Details
@@ -343,10 +359,11 @@ Update
 
 #### `input_system`
 - **Reads:** `MessageReader<KeyMessage>`, `Res<State<GameState>>`, `Res<State<TurnState>>`
-- **Writes:** `MessageWriter<MoveIntent>`, `MessageWriter<AppExit>`, `ResMut<NextState<GameState>>`, `ResMut<NextState<TurnState>>`
-- Translates key presses into `MoveIntent` events (only when `AwaitingInput`).
+- **Writes:** `MessageWriter<MoveIntent>`, `MessageWriter<SpellCastIntent>`, `MessageWriter<AppExit>`, `ResMut<NextState<GameState>>`, `ResMut<NextState<TurnState>>`
+- Translates key presses into `MoveIntent` or `SpellCastIntent` events (only when `AwaitingInput`).
+  Movement keys: WASD. Spell keys: F/Space (emits `SpellCastIntent`).
   Always handles quit (`q`/`Esc`) and pause toggle (`p`).
-  Transitions to `PlayerTurn` when a movement key is accepted.
+  Transitions to `PlayerTurn` when a movement or spell key is accepted.
 
 #### `movement_system`
 - **Reads:** `MessageReader<MoveIntent>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<(), With<BlocksMovement>>`, `Query<(), With<Hostile>>`
@@ -369,9 +386,25 @@ Update
 - Subtracts damage from health, clamping at zero.
 
 #### `death_system`
-- **Reads:** `Query<(Entity, &Health, Option<&Name>)>`
-- **Writes:** `Commands` (despawn), `ResMut<CombatLog>`
+- **Reads:** `Query<(Entity, &Health, Option<&Name>, Option<&Hostile>)>`
+- **Writes:** `Commands` (despawn), `ResMut<CombatLog>`, `ResMut<KillCount>`
 - Despawns entities with `health.current <= 0` and logs death messages.
+- When a despawned entity has the `Hostile` component, increments `KillCount`.
+
+#### `spell_system`
+- **Reads:** `MessageReader<SpellCastIntent>`, `Query<&Position>`, `Query<(Entity, &Position), With<Hostile>>`, `Query<&CombatStats>`
+- **Writes:** `MessageWriter<DamageEvent>`
+- For each `SpellCastIntent`, finds all `Hostile` entities within the specified radius
+  (Chebyshev distance) of the caster and emits a `DamageEvent` for each.
+  Damage equals the caster's attack stat. Runs in the Action set.
+
+#### `wave_spawn_system`
+- **Reads:** `Res<TurnCounter>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<&Position, With<Player>>`
+- **Writes:** `Commands` (spawn entities)
+- Spawns waves of enemies as turns progress. Every 5 turns, spawns a batch of
+  enemies near the player. Batch size grows over time (base 2 + 1 per wave cycle).
+  Enemies spawn 10–30 tiles from the player on passable, unoccupied tiles.
+  Runs during WorldTurn.
 
 #### `energy_accumulate_system`
 - **Reads:** `Query<(&Speed, &mut Energy)>`
@@ -413,9 +446,11 @@ Update
   - **Unseen tiles**: solid black.
 - Overlays `Renderable` entities (only if currently visible).
 - Shows PAUSED overlay, health display, combat log, and status bar.
+- Status bar now shows: Turn count (`TurnCounter`), Kill count (`KillCount`), and spell keybind (F/Space: spell).
 
 #### `end_player_turn` / `end_world_turn`
 - Advance the `TurnState` state machine after each phase completes.
+- `end_world_turn` also increments `TurnCounter` each world turn.
 
 ---
 
@@ -424,8 +459,8 @@ Update
 `RoguelikePlugin` is the single entry point. It:
 
 1. Adds `StatesPlugin` (required for `MinimalPlugins` setups)
-2. Registers all message types (`MoveIntent`, `AttackIntent`, `DamageEvent`)
-3. Inserts resources (`GameMapResource`, `CameraPosition`, `SpatialIndex`, `CombatLog`)
+2. Registers all message types (`MoveIntent`, `AttackIntent`, `DamageEvent`, `SpellCastIntent`)
+3. Inserts resources (`GameMapResource`, `CameraPosition`, `SpatialIndex`, `CombatLog`, `TurnCounter`, `KillCount`)
 4. Initializes `GameState` and `TurnState`
 5. Configures `RoguelikeSet` ordering (`Index → Action → Consequence → Render`)
 6. Registers startup systems (`spawn_player`, `spawn_monsters`)
@@ -448,9 +483,9 @@ roguelike/src/
 ├── lib.rs               Module declarations
 ├── grid_vec.rs          GridVec: algebraic 2D integer vector (Abelian group, distances, tests)
 ├── components.rs        All ECS components (Position, Player, Name, Renderable, Viewshed, Health, CombatStats, Speed, Energy, AiState, Hostile, …)
-├── events.rs            MoveIntent, AttackIntent, DamageEvent
+├── events.rs            MoveIntent, AttackIntent, DamageEvent, SpellCastIntent
 ├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
-├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, CombatLog, GameState, TurnState
+├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, CombatLog, TurnCounter, KillCount, GameState, TurnState
 ├── plugins.rs           RoguelikePlugin + RoguelikeSet + spawn_player + spawn_monsters + monster templates
 ├── systems/
 │   ├── mod.rs           Re-exports
@@ -461,8 +496,10 @@ roguelike/src/
 │   ├── ai.rs            ai_system + energy_accumulate_system
 │   ├── visibility.rs    visibility_system (recursive symmetric shadowcasting)
 │   ├── camera.rs        camera_follow_system
-│   ├── turn.rs          end_player_turn + end_world_turn (state transitions)
-│   └── render.rs        draw_system (three-state fog of war + health + combat log)
+│   ├── spell.rs         spell_system (AoE spell resolution)
+│   ├── wave_spawn.rs    wave_spawn_system (escalating enemy wave spawning)
+│   ├── turn.rs          end_player_turn + end_world_turn (state transitions + TurnCounter)
+│   └── render.rs        draw_system (three-state fog of war + health + combat log + turn/kill counters)
 ├── gamemap.rs           GameMap struct & noise-based procedural generation
 ├── voxel.rs             Voxel struct & rendering helpers
 ├── typeenums.rs         Floor / Furniture enums
@@ -483,10 +520,61 @@ features slot in naturally:
 | ~~Melee combat~~ | ✅ Implemented: bump-to-attack triggers `AttackIntent` → `combat_system` → `DamageEvent` → `death_system` |
 | ~~Turn system (NPC AI)~~ | ✅ Implemented: energy-based scheduling + `AiState` (Idle/Chasing) + greedy best-first movement |
 | ~~Death / despawn~~ | ✅ Implemented: `death_system` despawns at 0 HP with combat log |
+| ~~AoE spell system~~ | ✅ Implemented: `SpellCastIntent` → `spell_system` finds `Hostile` in Chebyshev radius → `DamageEvent` per target |
+| ~~Enemy wave spawning~~ | ✅ Implemented: `wave_spawn_system` spawns escalating waves every 5 turns near the player |
+| ~~Kill tracking / scoring~~ | ✅ Implemented: `KillCount` resource incremented by `death_system`, displayed in status bar |
+| ~~Turn counter~~ | ✅ Implemented: `TurnCounter` resource incremented by `end_world_turn`, displayed in status bar |
 | Ranged combat | `RangedAttackIntent { attacker, target_pos }` + line-of-sight check via `SpatialIndex` |
 | Items & inventory | `Item` marker + `InBackpack(Entity)` component |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
 | Pathfinding AI | Replace greedy best-first with A* using `GridVec::manhattan_distance` as heuristic |
+
+---
+
+## Vampire Survivors Gameplay Design
+
+The roguelike now incorporates Vampire Survivors-style mechanics layered on top of
+the existing turn-based ECS architecture:
+
+### Core Loop
+
+```text
+AwaitingInput
+  ├─ Player moves (WASD)        → MoveIntent  → PlayerTurn
+  └─ Player casts spell (F/Space) → SpellCastIntent → PlayerTurn
+         ↓
+    PlayerTurn resolves actions (movement, combat, spell damage)
+         ↓
+    WorldTurn: enemies act, new waves may spawn, TurnCounter increments
+         ↓
+    AwaitingInput (cycle repeats)
+```
+
+### Escalating Waves
+
+- **`wave_spawn_system`** checks `TurnCounter` every world turn.
+- Every 5 turns, a new wave spawns near the player (10–30 tiles away).
+- Batch size grows over time: **base 2 + 1 per wave cycle**, creating escalating pressure.
+- Enemies are placed on passable, unoccupied tiles using `GameMapResource` and `SpatialIndex`.
+
+### AoE Spell
+
+- Pressing **F** or **Space** during `AwaitingInput` emits a `SpellCastIntent`.
+- `spell_system` finds all `Hostile` entities within the spell's Chebyshev-distance radius.
+- Each target receives a `DamageEvent` equal to the caster's attack stat.
+- This gives the player a way to deal with surrounding hordes without moving.
+
+### Scoring
+
+- `KillCount` tracks every hostile entity killed (incremented by `death_system`).
+- `TurnCounter` tracks elapsed world turns (incremented by `end_world_turn`).
+- Both are displayed in the status bar, providing survival-style scoring feedback.
+
+### Arena Design
+
+- The large procedurally generated forest map serves as the arena.
+- Each action (move or spell) consumes one turn, during which enemies also act.
+- The player must balance movement and spell usage to survive escalating waves.
 
 ---
 

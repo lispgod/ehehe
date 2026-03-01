@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::components::{Position, Viewshed};
+use crate::components::{Player, Position, Viewshed};
 use crate::grid_vec::GridVec;
-use crate::resources::GameMapResource;
+use crate::resources::{CursorPosition, GameMapResource};
 use crate::typedefs::{CoordinateUnit, MyPoint};
 
 /// Recomputes the `visible_tiles` set for every entity whose `Viewshed` is
@@ -19,9 +19,13 @@ use crate::typedefs::{CoordinateUnit, MyPoint};
 ///   3. **Efficiency** — each visible tile is visited at most once per octant.
 pub fn visibility_system(
     game_map: Res<GameMapResource>,
-    mut query: Query<(&Position, &mut Viewshed)>,
+    mut query: Query<(Entity, &Position, &mut Viewshed)>,
+    player_query: Query<Entity, With<Player>>,
+    cursor: Res<CursorPosition>,
 ) {
-    for (pos, mut viewshed) in &mut query {
+    let player_entity = player_query.single().ok();
+
+    for (entity, pos, mut viewshed) in &mut query {
         if !viewshed.dirty {
             continue;
         }
@@ -45,6 +49,28 @@ pub fn visibility_system(
                 Slope { y: 1, x: 1 }, // start slope = 1/1
                 Slope { y: 0, x: 1 }, // end slope   = 0/1
             );
+        }
+
+        // Directional FOV: filter player's visible tiles to a cone toward the cursor.
+        if player_entity == Some(entity) {
+            let cursor_dir = cursor.0 - origin;
+            if cursor_dir != GridVec::ZERO {
+                let (cdx, cdy) = (cursor_dir.x as f64, cursor_dir.y as f64);
+                let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
+                // cos_threshold of 0.0 gives a 180° cone (hemisphere)
+                let cos_threshold = 0.0_f64;
+
+                viewshed.visible_tiles.retain(|&tile| {
+                    let diff = tile - origin;
+                    if diff == GridVec::ZERO {
+                        return true; // always see own tile
+                    }
+                    let (dx, dy) = (diff.x as f64, diff.y as f64);
+                    let len = (dx * dx + dy * dy).sqrt();
+                    let dot = (dx * cdx + dy * cdy) / (len * cursor_len);
+                    dot >= cos_threshold
+                });
+            }
         }
 
         // Merge visible into revealed (fog of war memory).

@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use crate::components::{Ammo, Experience, Health, Inventory, ItemKind, Level, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Ammo, Experience, Health, Hostile, Inventory, ItemKind, Level, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{
     CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
@@ -48,6 +48,7 @@ pub fn draw_system(
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
+    hostile_viewsheds: Query<&Viewshed, With<Hostile>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
     turn_counter: Res<TurnCounter>,
@@ -106,6 +107,31 @@ pub fn draw_system(
         let w_radius = render_width as CoordinateUnit / 2;
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left = camera.0 - GridVec::new(w_radius, h_radius);
+
+        // Brighten tiles visible to hostile entities (enemy FOV visualization).
+        {
+            let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
+            for vs in &hostile_viewsheds {
+                enemy_visible.extend(&vs.visible_tiles);
+            }
+            for (screen_y, row) in render_packet.iter_mut().enumerate() {
+                for (screen_x, cell) in row.iter_mut().enumerate() {
+                    let world = bottom_left + GridVec::new(screen_x as i32, screen_y as i32);
+                    let in_player_view = visible_tiles
+                        .map(|vt| vt.contains(&world))
+                        .unwrap_or(false);
+                    if in_player_view && enemy_visible.contains(&world) {
+                        if let RatColor::Rgb(r, g, b) = cell.2 {
+                            cell.2 = RatColor::Rgb(
+                                r.saturating_add(15),
+                                g.saturating_add(10),
+                                b.saturating_add(5),
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Collect visible entities for the info panel.
         let mut visible_entity_infos: Vec<(String, RatColor, RatColor, String)> = Vec::new();

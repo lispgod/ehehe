@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 
 use crate::components::{
-    CollectibleKind, Health, Inventory, Item, ItemKind, Name, Player, Position, Renderable,
+    Caliber, CollectibleKind, Health, Hostile, Inventory, Item, ItemKind, Name, Player, Position,
+    Renderable, Thrown,
 };
-use crate::events::{PickupItemIntent, UseItemIntent};
-use crate::resources::{Collectibles, CombatLog, InputState, SpatialIndex};
+use crate::events::{DropItemIntent, PickupItemIntent, ThrowItemIntent, UseItemIntent};
+use crate::grid_vec::GridVec;
+use crate::resources::{Collectibles, CombatLog, GameMapResource, InputState, SpellParticles, SpatialIndex};
 use crate::typedefs::RatColor;
 
 /// Processes pickup intents: player picks up an item on the ground at their position.
@@ -64,8 +66,9 @@ pub fn use_item_system(
     mut commands: Commands,
     mut inventory_query: Query<&mut Inventory, With<Player>>,
     mut health_query: Query<&mut Health, With<Player>>,
-    item_kind_query: Query<(&ItemKind, Option<&Name>)>,
+    mut item_kind_query: Query<(&mut ItemKind, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
+    mut collectibles: ResMut<Collectibles>,
 ) {
     for intent in intents.read() {
         let Ok(mut inv) = inventory_query.single_mut() else {
@@ -84,10 +87,11 @@ pub fn use_item_system(
 
         let item_name = name.map_or("item", |n| n.0.as_str()).to_string();
 
-        match kind {
+        match &*kind {
             ItemKind::Whiskey { heal } => {
+                let heal = *heal;
                 if let Ok(mut hp) = health_query.single_mut() {
-                    let healed = (*heal).min(hp.max - hp.current);
+                    let healed = heal.min(hp.max - hp.current);
                     hp.current = (hp.current + heal).min(hp.max);
                     combat_log.push(format!("Used {item_name}, healed {healed} HP"));
                 }
@@ -102,8 +106,41 @@ pub fn use_item_system(
             ItemKind::Hat { defense } => {
                 combat_log.push(format!("Equipped {item_name} (+{defense} def)"));
             }
-            ItemKind::Gun { .. } => {
-                combat_log.push(format!("Equipped {item_name}"));
+            ItemKind::Gun { loaded, capacity, caliber, name: gun_name, .. } => {
+                let gun_name = gun_name.clone();
+                let caliber = *caliber;
+                let loaded = *loaded;
+                let capacity = *capacity;
+
+                if loaded >= capacity {
+                    combat_log.push(format!("{gun_name} is fully loaded ({capacity}/{capacity})"));
+                } else {
+                    let has_bullet = match caliber {
+                        Caliber::Cal36 => collectibles.bullets_36 > 0,
+                        Caliber::Cal44 => collectibles.bullets_44 > 0,
+                    };
+                    if has_bullet && collectibles.caps > 0 && collectibles.powder > 0 {
+                        match caliber {
+                            Caliber::Cal36 => collectibles.bullets_36 -= 1,
+                            Caliber::Cal44 => collectibles.bullets_44 -= 1,
+                        }
+                        collectibles.caps -= 1;
+                        collectibles.powder -= 1;
+                        if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity) {
+                            if let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
+                                *loaded += 1;
+                                combat_log.push(format!(
+                                    "Loaded 1 round into {gun_name} ({}/{capacity})",
+                                    *loaded
+                                ));
+                            }
+                        }
+                    } else {
+                        combat_log.push(format!(
+                            "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
+                        ));
+                    }
+                }
             }
             ItemKind::Knife { .. } => {
                 combat_log.push("Readied knife".into());
@@ -273,5 +310,121 @@ pub fn auto_pickup_system(
                 combat_log.push(format!("Picked up {name_str}"));
             }
         }
+    }
+}
+
+/// Processes drop-item intents: removes an item from inventory and places it on the ground.
+pub fn drop_item_system(
+    mut intents: MessageReader<DropItemIntent>,
+    mut commands: Commands,
+    mut inventory_query: Query<(&mut Inventory, &Position), With<Player>>,
+    name_query: Query<Option<&Name>>,
+    mut combat_log: ResMut<CombatLog>,
+) {
+    for intent in intents.read() {
+        let Ok((mut inv, player_pos)) = inventory_query.single_mut() else {
+            continue;
+        };
+
+        if intent.item_index >= inv.items.len() {
+            combat_log.push("No item in that slot.".into());
+            continue;
+        }
+
+        let item_entity = inv.items.remove(intent.item_index);
+        let item_name = name_query
+            .get(item_entity)
+            .ok()
+            .flatten()
+            .map_or("item".to_string(), |n| n.0.clone());
+
+        commands
+            .entity(item_entity)
+            .insert(Position { x: player_pos.x, y: player_pos.y });
+        combat_log.push(format!("Dropped {item_name}"));
+    }
+}
+
+/// Processes throw-item intents: removes a knife/tomahawk from inventory and
+/// traces a Bresenham line toward the target. Damages the first hostile hit,
+/// then places the item at the landing position with a Thrown marker.
+pub fn throw_system(
+    mut intents: MessageReader<ThrowItemIntent>,
+    mut commands: Commands,
+    mut damage_events: MessageWriter<crate::events::DamageEvent>,
+    mut inventory_query: Query<(&mut Inventory, &Position), With<Player>>,
+    targets: Query<(Entity, &Position, &crate::components::CombatStats, Option<&Name>), With<Hostile>>,
+    mut combat_log: ResMut<CombatLog>,
+    mut spell_particles: ResMut<SpellParticles>,
+    game_map: Res<GameMapResource>,
+    name_query: Query<Option<&Name>>,
+) {
+    for intent in intents.read() {
+        let Ok((mut inv, player_pos)) = inventory_query.single_mut() else {
+            continue;
+        };
+
+        // Remove from inventory
+        if let Some(idx) = inv.items.iter().position(|&e| e == intent.item_entity) {
+            inv.items.remove(idx);
+        } else {
+            continue;
+        }
+
+        let item_name = name_query
+            .get(intent.item_entity)
+            .ok()
+            .flatten()
+            .map_or("item".to_string(), |n| n.0.clone());
+
+        let origin = player_pos.as_grid_vec();
+        let endpoint = origin + GridVec::new(intent.dx * intent.range, intent.dy * intent.range);
+        let path = origin.bresenham_line(endpoint);
+
+        // Build hostile lookup
+        let mut target_by_pos: std::collections::HashMap<GridVec, (Entity, i32, String)> =
+            std::collections::HashMap::new();
+        for (target_entity, target_pos, target_stats, target_name) in &targets {
+            let t_name = target_name.map_or("???".to_string(), |n| n.0.clone());
+            target_by_pos.insert(target_pos.as_grid_vec(), (target_entity, target_stats.defense, t_name));
+        }
+
+        let mut landing = origin;
+        let mut hit = false;
+
+        for (step_idx, &tile) in path.iter().enumerate().skip(1) {
+            spell_particles.particles.push((tile, 3, (step_idx as u32).saturating_sub(1)));
+
+            if !game_map.0.is_passable(&tile) {
+                break;
+            }
+
+            landing = tile;
+
+            if let Some((target_entity, target_def, t_name)) = target_by_pos.get(&tile) {
+                let dmg = (intent.damage - target_def).max(0);
+                if dmg > 0 {
+                    damage_events.write(crate::events::DamageEvent {
+                        target: *target_entity,
+                        amount: dmg,
+                    });
+                    combat_log.push(format!("Threw {item_name} at {t_name} for {dmg} damage!"));
+                } else {
+                    combat_log.push(format!("Threw {item_name} at {t_name} but dealt no damage"));
+                }
+                hit = true;
+                break;
+            }
+        }
+
+        if !hit {
+            combat_log.push(format!("Threw {item_name} but hit nothing"));
+        }
+
+        // Place the item at the landing position with Thrown marker
+        commands.entity(intent.item_entity).insert((
+            Position { x: landing.x, y: landing.y },
+            Thrown,
+        ));
     }
 }

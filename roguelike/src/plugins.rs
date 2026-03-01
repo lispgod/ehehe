@@ -6,7 +6,7 @@ use crate::components::{
     AiState, BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience, ExpReward, Faction, Health, HellGate, Hostile,
     Ammo, Inventory, Item, ItemKind, Level, LootTable, Stamina, Name, Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
 };
-use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, UseItemIntent};
+use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
@@ -69,6 +69,8 @@ impl Plugin for RoguelikePlugin {
             .add_message::<RangedAttackIntent>()
             .add_message::<MeleeWideIntent>()
             .add_message::<AiRangedAttackIntent>()
+            .add_message::<DropItemIntent>()
+            .add_message::<ThrowItemIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
             .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
@@ -114,6 +116,8 @@ impl Plugin for RoguelikePlugin {
                     inventory::pickup_system,
                     inventory::auto_pickup_system,
                     inventory::use_item_system,
+                    inventory::drop_item_system,
+                    inventory::throw_system,
                     inventory::reload_system,
                     spell::spell_system,
                     combat::ranged_attack_system,

@@ -3,7 +3,7 @@ use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position};
-use crate::events::{MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, UseItemIntent};
+use crate::events::{DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::resources::{CombatLog, CursorPosition, GameState, InputMode, InputState, RestartRequested, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
@@ -16,6 +16,8 @@ pub struct IntentWriters<'w> {
     pickup_intents: MessageWriter<'w, PickupItemIntent>,
     ranged_intents: MessageWriter<'w, RangedAttackIntent>,
     melee_wide_intents: MessageWriter<'w, MeleeWideIntent>,
+    drop_item_intents: MessageWriter<'w, DropItemIntent>,
+    throw_item_intents: MessageWriter<'w, ThrowItemIntent>,
 }
 
 /// Default radius for the player's grenade blast.
@@ -185,6 +187,24 @@ pub fn input_system(
                         }
                     } else {
                         combat_log.push("No item selected.".into());
+                    }
+                }
+                KeyCode::Char('d') | KeyCode::Char('D') => {
+                    if item_count > 0 && input_state.inv_selection < item_count {
+                        intents.drop_item_intents.write(DropItemIntent {
+                            user: player_entity,
+                            item_index: input_state.inv_selection,
+                        });
+                        if let Some(next) = &mut next_turn_state {
+                            next.set(TurnState::PlayerTurn);
+                        }
+                        input_state.mode = InputMode::Game;
+                        let new_count = item_count.saturating_sub(1);
+                        if new_count > 0 && input_state.inv_selection >= new_count {
+                            input_state.inv_selection = new_count - 1;
+                        } else if new_count == 0 {
+                            input_state.inv_selection = 0;
+                        }
                     }
                 }
                 _ => {}
@@ -359,11 +379,10 @@ pub fn input_system(
                     next.set(TurnState::PlayerTurn);
                 }
             }
-            // ── Use inventory item by slot (1-9) / Fire gun toward cursor ──
+            // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw ──
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
-                // Check if item at this slot is a gun.
-                let mut fired_gun = false;
+                let mut handled = false;
                 if let Some(inv) = player_inv {
                     if let Some(&item_entity) = inv.items.get(idx) {
                         if let Ok(kind) = item_kind_query.get(item_entity) {
@@ -381,20 +400,45 @@ pub fn input_system(
                                         if let Some(next) = &mut next_turn_state {
                                             next.set(TurnState::PlayerTurn);
                                         }
-                                        fired_gun = true;
+                                        handled = true;
                                     } else {
                                         combat_log.push("Cursor is on your position!".into());
-                                        fired_gun = true;
+                                        handled = true;
                                     }
                                 } else {
                                     combat_log.push("Gun is empty! Reload in inventory mode.".into());
-                                    fired_gun = true;
+                                    handled = true;
+                                }
+                            } else if matches!(kind, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. }) {
+                                let dir = (cursor.0 - player_pos.as_grid_vec()).king_step();
+                                if dir != crate::grid_vec::GridVec::ZERO {
+                                    let (range, damage) = match kind {
+                                        ItemKind::Knife { attack } => (8, *attack),
+                                        ItemKind::Tomahawk { attack } => (6, *attack),
+                                        _ => unreachable!(),
+                                    };
+                                    intents.throw_item_intents.write(ThrowItemIntent {
+                                        thrower: player_entity,
+                                        item_entity,
+                                        item_index: idx,
+                                        dx: dir.x,
+                                        dy: dir.y,
+                                        range,
+                                        damage,
+                                    });
+                                    if let Some(next) = &mut next_turn_state {
+                                        next.set(TurnState::PlayerTurn);
+                                    }
+                                    handled = true;
+                                } else {
+                                    combat_log.push("Cursor is on your position!".into());
+                                    handled = true;
                                 }
                             }
                         }
                     }
                 }
-                if !fired_gun {
+                if !handled {
                     // Non-gun items: use normally.
                     intents.use_item_intents.write(UseItemIntent {
                         user: player_entity,

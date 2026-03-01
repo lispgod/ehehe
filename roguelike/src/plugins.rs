@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiState, BlocksMovement, CameraFollow, CombatStats, Energy, Health, Hostile, Name,
+    AiState, BlocksMovement, CameraFollow, CombatStats, Energy, Health, HellGate, Hostile, Name,
     Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AttackIntent, DamageEvent, MoveIntent, SpellCastIntent};
@@ -14,8 +14,8 @@ use crate::resources::{
     CameraPosition, CombatLog, GameMapResource, GameState, KillCount, MapSeed, SpatialIndex,
     TurnCounter, TurnState,
 };
-use crate::systems::{ai, camera, combat, input, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
-use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y};
+use crate::systems::{ai, camera, combat, corruption, input, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
+use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y, GATE_POINT, GATE_X, GATE_Y};
 
 // ─────────────────────────── System Sets ───────────────────────────
 
@@ -75,7 +75,7 @@ impl Plugin for RoguelikePlugin {
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
             // ── Startup ──
-            .add_systems(Startup, (spawn_player, spawn_monsters).chain())
+            .add_systems(Startup, (spawn_player, spawn_monsters, spawn_hell_gate).chain())
             // ── System-set ordering ──
             .configure_sets(
                 Update,
@@ -126,13 +126,14 @@ impl Plugin for RoguelikePlugin {
                     .after(RoguelikeSet::Consequence)
                     .run_if(in_state(TurnState::PlayerTurn)),
             )
-            // ── World turn: energy accumulation + AI + wave spawning + action resolution ──
+            // ── World turn: energy accumulation + AI + wave spawning + corruption + action resolution ──
             .add_systems(
                 Update,
                 (
                     ai::energy_accumulate_system,
                     ai::ai_system,
                     wave_spawn::wave_spawn_system,
+                    corruption::corruption_system,
                 )
                     .chain()
                     .after(RoguelikeSet::Consequence)
@@ -141,7 +142,7 @@ impl Plugin for RoguelikePlugin {
             .add_systems(
                 Update,
                 turn::end_world_turn
-                    .after(wave_spawn::wave_spawn_system)
+                    .after(corruption::corruption_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             )
             // ── Render (always runs — shows PAUSED overlay when paused) ──
@@ -187,7 +188,7 @@ fn spawn_player(mut commands: Commands) {
     ));
 }
 
-/// Monster archetypes for procedural spawning.
+/// Monster archetypes for procedural spawning (hellish theme).
 struct MonsterTemplate {
     name: &'static str,
     symbol: &'static str,
@@ -201,45 +202,45 @@ struct MonsterTemplate {
 
 const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     MonsterTemplate {
-        name: "Goblin",
-        symbol: "g",
-        fg: RatColor::Rgb(0, 200, 0),
-        health: 8,
+        name: "Imp",
+        symbol: "i",
+        fg: RatColor::Rgb(255, 80, 0),
+        health: 6,
         attack: 3,
         defense: 1,
-        speed: 80,
+        speed: 90,
         sight_range: 8,
     },
     MonsterTemplate {
-        name: "Orc",
-        symbol: "o",
-        fg: RatColor::Rgb(180, 0, 0),
-        health: 16,
-        attack: 4,
+        name: "Demon",
+        symbol: "D",
+        fg: RatColor::Rgb(200, 0, 0),
+        health: 18,
+        attack: 5,
         defense: 2,
         speed: 60,
         sight_range: 6,
     },
     MonsterTemplate {
-        name: "Rat",
-        symbol: "r",
-        fg: RatColor::Rgb(160, 120, 80),
-        health: 4,
-        attack: 2,
-        defense: 0,
+        name: "Hellhound",
+        symbol: "h",
+        fg: RatColor::Rgb(200, 60, 20),
+        health: 10,
+        attack: 4,
+        defense: 1,
         speed: 120,
-        sight_range: 5,
+        sight_range: 10,
     },
 ];
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
-///
-/// Monster locations are derived from the map seed, ensuring deterministic
-/// spawning: same seed → same monsters at same positions.
+/// Monsters are spawned near the Hell Gate area, using the map seed for
+/// deterministic placement.
 fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<MapSeed>) {
     let spawn_seed = seed.0.wrapping_add(54321);
     let template_seed = seed.0.wrapping_add(98765);
     let min_spawn_dist_sq = 12 * 12; // min squared distance from player spawn
+    let gate_exclusion_sq = 3 * 3; // don't spawn on/near gate tile
 
     for y in 1..map.0.height - 1 {
         for x in 1..map.0.width - 1 {
@@ -247,6 +248,11 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
 
             // Skip tiles near the spawn point.
             if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
+                continue;
+            }
+
+            // Skip tiles too close to the gate.
+            if pos.distance_squared(GATE_POINT) < gate_exclusion_sq {
                 continue;
             }
 
@@ -297,4 +303,34 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
             ));
         }
     }
+}
+
+/// Spawns the Hell Gate entity — the main objective the player must destroy to win.
+///
+/// The gate is a destructible, hostile entity with high health that blocks movement.
+/// Monsters emerge from it each wave, and the surrounding land corrupts over time.
+fn spawn_hell_gate(mut commands: Commands) {
+    commands.spawn((
+        Position {
+            x: GATE_X,
+            y: GATE_Y,
+        },
+        HellGate,
+        Hostile,
+        Name("Gate of Hell".into()),
+        Renderable {
+            symbol: "Ω".into(),
+            fg: RatColor::Rgb(255, 0, 0),
+            bg: RatColor::Rgb(80, 0, 0),
+        },
+        BlocksMovement,
+        Health {
+            current: 100,
+            max: 100,
+        },
+        CombatStats {
+            attack: 0,
+            defense: 3,
+        },
+    ));
 }

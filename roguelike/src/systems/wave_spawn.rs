@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiState, BlocksMovement, CombatStats, Energy, Health, Hostile, Name, Position,
+    AiState, BlocksMovement, CombatStats, Energy, Health, HellGate, Hostile, Name, Position,
     Renderable, Speed, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{GameMapResource, MapSeed, TurnCounter};
-use crate::typedefs::RatColor;
+use crate::typedefs::{RatColor, GATE_POINT};
 
 /// Monster archetypes for wave spawning (same templates as initial spawning).
 struct WaveMonsterTemplate {
@@ -25,46 +25,45 @@ struct WaveMonsterTemplate {
 
 const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
     WaveMonsterTemplate {
-        name: "Goblin",
-        symbol: "g",
-        fg: RatColor::Rgb(0, 200, 0),
-        health: 8,
+        name: "Imp",
+        symbol: "i",
+        fg: RatColor::Rgb(255, 80, 0),
+        health: 6,
         attack: 3,
         defense: 1,
-        speed: 80,
+        speed: 90,
         sight_range: 8,
     },
     WaveMonsterTemplate {
-        name: "Orc",
-        symbol: "o",
-        fg: RatColor::Rgb(180, 0, 0),
-        health: 16,
-        attack: 4,
+        name: "Demon",
+        symbol: "D",
+        fg: RatColor::Rgb(200, 0, 0),
+        health: 18,
+        attack: 5,
         defense: 2,
         speed: 60,
         sight_range: 6,
     },
     WaveMonsterTemplate {
-        name: "Rat",
-        symbol: "r",
-        fg: RatColor::Rgb(160, 120, 80),
-        health: 4,
-        attack: 2,
-        defense: 0,
+        name: "Hellhound",
+        symbol: "h",
+        fg: RatColor::Rgb(200, 60, 20),
+        health: 10,
+        attack: 4,
+        defense: 1,
         speed: 120,
-        sight_range: 5,
+        sight_range: 10,
     },
 ];
 
-/// Minimum distance (squared) from the player when spawning new wave enemies.
-const MIN_WAVE_SPAWN_DIST_SQ: i32 = 10 * 10;
+/// Minimum distance (squared) from the gate when spawning new wave enemies.
+const MIN_WAVE_SPAWN_DIST_SQ: i32 = 2 * 2;
 
-/// Maximum distance (squared) from the player for wave spawns — keep them
-/// relatively close so the player encounters them quickly.
-const MAX_WAVE_SPAWN_DIST_SQ: i32 = 30 * 30;
+/// Maximum distance (squared) from the gate for wave spawns.
+const MAX_WAVE_SPAWN_DIST_SQ: i32 = 8 * 8;
 
 /// How often (in turns) a new wave spawns.
-const WAVE_INTERVAL: u32 = 5;
+const WAVE_INTERVAL: u32 = 3;
 
 /// Base number of enemies per wave.
 const WAVE_BASE_COUNT: u32 = 2;
@@ -81,17 +80,17 @@ const Y_AXIS_SEED_OFFSET: u64 = 7777;
 /// Seed offset for monster template selection, decorrelated from position noise.
 const TEMPLATE_SEED_OFFSET: u64 = 98765;
 
-/// Spawns waves of enemies as turns progress.
+/// Spawns waves of enemies emerging from the Hell Gate as turns progress.
 ///
-/// Every `WAVE_INTERVAL` turns, spawns a batch of enemies near the player.
-/// The batch size grows over time, creating the escalating pressure of
-/// Vampire Survivors-style gameplay.
+/// Every `WAVE_INTERVAL` turns, spawns a batch of enemies near the gate.
+/// Monsters get progressively stronger as the wave number increases.
+/// Spawning stops when the gate is destroyed.
 pub fn wave_spawn_system(
     mut commands: Commands,
     turn_counter: Res<TurnCounter>,
     map: Res<GameMapResource>,
     seed: Res<MapSeed>,
-    player_query: Query<&Position, With<crate::components::Player>>,
+    gate_query: Query<(), With<HellGate>>,
     existing_positions: Query<&Position>,
 ) {
     let turn = turn_counter.0;
@@ -101,10 +100,12 @@ pub fn wave_spawn_system(
         return;
     }
 
-    let Ok(player_pos) = player_query.single() else {
+    // No spawning if the gate has been destroyed.
+    if gate_query.is_empty() {
         return;
-    };
-    let player_vec = player_pos.as_grid_vec();
+    }
+
+    let gate_vec = GATE_POINT;
 
     // Collect occupied positions to avoid stacking entities.
     let occupied: HashSet<GridVec> = existing_positions.iter().map(|p| p.as_grid_vec()).collect();
@@ -113,26 +114,35 @@ pub fn wave_spawn_system(
     let wave_number = turn / WAVE_INTERVAL;
     let count = WAVE_BASE_COUNT + wave_number.saturating_sub(1) * WAVE_SCALE_PER_CYCLE;
 
+    // Stat scaling: monsters get stronger as waves progress.
+    // Bonuses start small and ramp up gradually:
+    //   wave 1: +2 HP, +0 atk, +0 def
+    //   wave 3: +6 HP, +1 atk, +1 def
+    //   wave 6: +12 HP, +3 atk, +2 def
+    let health_bonus = (wave_number as i32) * 2;
+    let attack_bonus = (wave_number as i32) / 2;
+    let defense_bonus = (wave_number as i32) / 3;
+
     // Use turn-seeded noise for deterministic but varied spawn positions.
     let wave_seed = seed.0.wrapping_add(turn as u64 * WAVE_SEED_MULTIPLIER);
     let mut spawned = 0u32;
     let mut attempt = 0u32;
 
     while spawned < count && attempt < count * 20 {
-        // Generate candidate position using noise.
+        // Generate candidate position using noise near the gate.
         let nx = value_noise(attempt as i32, turn as i32, wave_seed);
         let ny = value_noise(turn as i32, attempt as i32, wave_seed.wrapping_add(Y_AXIS_SEED_OFFSET));
 
-        // Map noise to an offset within the spawn ring around the player.
-        let range = 30; // half-width of the search area
+        // Map noise to an offset within the spawn ring around the gate.
+        let range = 8; // half-width of the search area
         let dx = (nx * (range * 2) as f64) as i32 - range;
         let dy = (ny * (range * 2) as f64) as i32 - range;
-        let candidate = player_vec + GridVec::new(dx, dy);
+        let candidate = gate_vec + GridVec::new(dx, dy);
 
         attempt += 1;
 
-        // Check distance constraints.
-        let dist_sq = candidate.distance_squared(player_vec);
+        // Check distance constraints from gate.
+        let dist_sq = candidate.distance_squared(gate_vec);
         if dist_sq < MIN_WAVE_SPAWN_DIST_SQ || dist_sq > MAX_WAVE_SPAWN_DIST_SQ {
             continue;
         }
@@ -152,6 +162,10 @@ pub fn wave_spawn_system(
         let idx = (template_noise * WAVE_TEMPLATES.len() as f64) as usize;
         let template = &WAVE_TEMPLATES[idx.min(WAVE_TEMPLATES.len() - 1)];
 
+        let scaled_health = template.health + health_bonus;
+        let scaled_attack = template.attack + attack_bonus;
+        let scaled_defense = template.defense + defense_bonus;
+
         commands.spawn((
             Position {
                 x: candidate.x,
@@ -166,12 +180,12 @@ pub fn wave_spawn_system(
             BlocksMovement,
             Hostile,
             Health {
-                current: template.health,
-                max: template.health,
+                current: scaled_health,
+                max: scaled_health,
             },
             CombatStats {
-                attack: template.attack,
-                defense: template.defense,
+                attack: scaled_attack,
+                defense: scaled_defense,
             },
             Speed(template.speed),
             Energy(0),

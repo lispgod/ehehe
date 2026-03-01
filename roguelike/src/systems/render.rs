@@ -117,6 +117,26 @@ pub fn draw_system(
             }
         }
 
+        // Show "VICTORY" overlay centered on screen when the gate is destroyed
+        if *state.get() == GameState::Victory {
+            let label = " VICTORY! The Gate of Hell has been destroyed! Press Q to quit. ";
+            let label_width = label.len() as u16;
+            if render_width >= label_width && render_height >= 1 {
+                let cx = area.x + (render_width - label_width) / 2;
+                let cy = area.y + render_height / 2;
+                let victory_area = ratatui::layout::Rect {
+                    x: cx,
+                    y: cy,
+                    width: label_width,
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(label).bold()).on_yellow(),
+                    victory_area,
+                );
+            }
+        }
+
         // Status bar — show player position, health, and last combat message
         let player_info = player_query
             .single()
@@ -136,7 +156,7 @@ pub fn draw_system(
             height: 1,
         };
         let status = Line::from(format!(
-            " Survivor | {player_info} | Turn:{} Kills:{} | {last_msg} | WASD: move | F/Space: spell | P: pause | Q: quit",
+            " Gate of Hell | {player_info} | Turn:{} Kills:{} | {last_msg} | WASD: move | F/Space: spell | P: pause | Q: quit",
             turn_counter.0, kill_count.0,
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);

@@ -41,6 +41,7 @@ pub fn input_system(
                 let new = match game_state.get() {
                     GameState::Playing => GameState::Paused,
                     GameState::Paused => GameState::Playing,
+                    GameState::Victory => GameState::Victory,
                 };
                 next_game_state.set(new);
             }

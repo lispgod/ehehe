@@ -20,12 +20,14 @@ use roguelike::systems::{combat, movement, spatial_index, spell};
 fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_plugins(bevy::state::app::StatesPlugin);
     app.add_message::<MoveIntent>();
     app.add_message::<AttackIntent>();
     app.add_message::<DamageEvent>();
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.add_systems(
         Update,
@@ -545,6 +547,7 @@ fn bidirectional_combat_both_take_damage() {
 fn test_app_with_spells() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_plugins(bevy::state::app::StatesPlugin);
     app.add_message::<MoveIntent>();
     app.add_message::<AttackIntent>();
     app.add_message::<DamageEvent>();
@@ -552,6 +555,7 @@ fn test_app_with_spells() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.add_systems(
         Update,
@@ -779,4 +783,114 @@ fn spell_no_hit_logs_message() {
         log.messages.iter().any(|m| m.contains("hits nothing")),
         "Combat log should note spell hit nothing"
     );
+}
+
+// ─── Hell Gate tests ─────────────────────────────────────────────
+
+#[test]
+fn player_can_bump_attack_hell_gate() {
+    let mut app = test_app();
+    let player = spawn_test_player(&mut app, 60, 40);
+
+    // Spawn a hell gate adjacent to the player
+    let gate = app.world_mut().spawn((
+        Position { x: 61, y: 40 },
+        HellGate,
+        Hostile,
+        BlocksMovement,
+        Name("Gate of Hell".into()),
+        Health { current: 100, max: 100 },
+        CombatStats { attack: 0, defense: 3 },
+    )).id();
+
+    app.update();
+
+    // Player bumps into gate → should trigger attack
+    app.world_mut().write_message(MoveIntent {
+        entity: player,
+        dx: 1,
+        dy: 0,
+    });
+    app.update();
+
+    // Player attack=5, Gate defense=3 → damage=2
+    let gate_health = app.world().get::<Health>(gate).unwrap();
+    assert_eq!(gate_health.current, 98, "Gate should have taken 2 damage (5 atk - 3 def)");
+}
+
+#[test]
+fn gate_destruction_triggers_victory() {
+    let mut app = test_app();
+    let player = spawn_test_player(&mut app, 60, 40);
+
+    // Spawn a gate with just 1 HP so it dies in one hit
+    let gate = app.world_mut().spawn((
+        Position { x: 61, y: 40 },
+        HellGate,
+        Hostile,
+        BlocksMovement,
+        Name("Gate of Hell".into()),
+        Health { current: 1, max: 100 },
+        CombatStats { attack: 0, defense: 0 },
+    )).id();
+
+    app.update();
+
+    // Player attacks the gate
+    app.world_mut().write_message(MoveIntent {
+        entity: player,
+        dx: 1,
+        dy: 0,
+    });
+    app.update();
+
+    // Gate should be despawned
+    assert!(
+        app.world().get::<Health>(gate).is_none(),
+        "Gate should be despawned after reaching 0 HP"
+    );
+
+    // Victory message should be in the combat log
+    let log = app.world().resource::<CombatLog>();
+    assert!(
+        log.messages.iter().any(|m| m.contains("Gate of Hell crumbles")),
+        "Combat log should contain victory message"
+    );
+}
+
+#[test]
+fn spell_damages_hell_gate() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // Gate within spell radius
+    let gate = app.world_mut().spawn((
+        Position { x: 62, y: 40 },
+        HellGate,
+        Hostile,
+        BlocksMovement,
+        Name("Gate of Hell".into()),
+        Health { current: 100, max: 100 },
+        CombatStats { attack: 0, defense: 3 },
+    )).id();
+
+    app.update();
+
+    // Cast spell with radius 3
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    // Spell damage = caster attack (5), ignores defense
+    let gate_health = app.world().get::<Health>(gate).unwrap();
+    assert_eq!(gate_health.current, 95, "Gate should take spell damage equal to caster attack");
 }

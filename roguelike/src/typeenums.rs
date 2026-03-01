@@ -8,6 +8,8 @@ pub enum Floor {
     TallGrass,
     Flowers,
     Moss,
+    Lava,
+    ScorchedEarth,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.

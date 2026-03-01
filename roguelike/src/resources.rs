@@ -30,6 +30,7 @@ pub enum GameState {
     #[default]
     Playing,
     Paused,
+    Victory,
 }
 
 /// Turn-phase sub-state that controls the flow within `GameState::Playing`.

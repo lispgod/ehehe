@@ -1,7 +1,7 @@
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
 use crate::typeenums::{Floor, Furniture};
-use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT};
+use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT, GATE_POINT};
 use crate::voxel::Voxel;
 
 /// The game map: a simple 2D grid of voxels.
@@ -72,11 +72,28 @@ impl GameMap {
             voxels.push(row);
         }
 
-        GameMap {
+        let mut map = GameMap {
             width,
             height,
             voxels,
+        };
+
+        // Place initial scorched earth around the Hell Gate position.
+        for dy in -2..=2_i32 {
+            for dx in -2..=2_i32 {
+                let pos = GATE_POINT + GridVec::new(dx, dy);
+                let dist_sq = (dx * dx + dy * dy) as f64;
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    if dist_sq <= 1.0 {
+                        voxel.floor = Some(Floor::Lava);
+                    } else {
+                        voxel.floor = Some(Floor::ScorchedEarth);
+                    }
+                }
+            }
         }
+
+        map
     }
 
     /// Get a reference to the voxel at the given map coordinate.
@@ -84,6 +101,16 @@ impl GameMap {
         let GridVec { x, y } = *point;
         if x >= 0 && x < self.width && y >= 0 && y < self.height {
             Some(&self.voxels[y as usize][x as usize])
+        } else {
+            None
+        }
+    }
+
+    /// Get a mutable reference to the voxel at the given map coordinate.
+    pub fn get_voxel_at_mut(&mut self, point: &MyPoint) -> Option<&mut Voxel> {
+        let GridVec { x, y } = *point;
+        if x >= 0 && x < self.width && y >= 0 && y < self.height {
+            Some(&mut self.voxels[y as usize][x as usize])
         } else {
             None
         }
@@ -225,6 +252,14 @@ fn select_furniture(
     let dist_sq = pos.distance_squared(SPAWN_POINT) as f64;
     let clearing_radius_sq = 6.0 * 6.0;
     if dist_sq < clearing_radius_sq {
+        return None;
+    }
+
+    // ── Gate clearing ───────────────────────────────────────────
+    // Keep the area around the Hell Gate clear so the player can approach.
+    let gate_dist_sq = pos.distance_squared(GATE_POINT) as f64;
+    let gate_clearing_sq = 4.0 * 4.0;
+    if gate_dist_sq < gate_clearing_sq {
         return None;
     }
 

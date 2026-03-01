@@ -23,6 +23,8 @@ impl GraphicElement for Floor {
             Floor::TallGrass => ";".into(),
             Floor::Flowers => "*".into(),
             Floor::Moss => "~".into(),
+            Floor::Lava => "~".into(),
+            Floor::ScorchedEarth => ".".into(),
         }
     }
 
@@ -35,6 +37,8 @@ impl GraphicElement for Floor {
             Floor::TallGrass => RatColor::Rgb(34, 139, 34),
             Floor::Flowers => RatColor::Rgb(218, 165, 32),
             Floor::Moss => RatColor::Rgb(50, 120, 50),
+            Floor::Lava => RatColor::Rgb(255, 80, 0),
+            Floor::ScorchedEarth => RatColor::Rgb(120, 40, 20),
         }
     }
 

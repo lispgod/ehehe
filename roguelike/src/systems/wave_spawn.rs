@@ -72,6 +72,15 @@ const WAVE_BASE_COUNT: u32 = 2;
 /// Additional enemies per wave cycle (scales with turn count).
 const WAVE_SCALE_PER_CYCLE: u32 = 1;
 
+/// Multiplier mixed with turn number to produce per-wave seed variation.
+const WAVE_SEED_MULTIPLIER: u64 = 13337;
+
+/// Seed offset for the Y-axis noise, ensuring independent x/y coordinates.
+const Y_AXIS_SEED_OFFSET: u64 = 7777;
+
+/// Seed offset for monster template selection, decorrelated from position noise.
+const TEMPLATE_SEED_OFFSET: u64 = 98765;
+
 /// Spawns waves of enemies as turns progress.
 ///
 /// Every `WAVE_INTERVAL` turns, spawns a batch of enemies near the player.
@@ -105,14 +114,14 @@ pub fn wave_spawn_system(
     let count = WAVE_BASE_COUNT + wave_number.saturating_sub(1) * WAVE_SCALE_PER_CYCLE;
 
     // Use turn-seeded noise for deterministic but varied spawn positions.
-    let wave_seed = seed.0.wrapping_add(turn as u64 * 13337);
+    let wave_seed = seed.0.wrapping_add(turn as u64 * WAVE_SEED_MULTIPLIER);
     let mut spawned = 0u32;
     let mut attempt = 0u32;
 
     while spawned < count && attempt < count * 20 {
         // Generate candidate position using noise.
         let nx = value_noise(attempt as i32, turn as i32, wave_seed);
-        let ny = value_noise(turn as i32, attempt as i32, wave_seed.wrapping_add(7777));
+        let ny = value_noise(turn as i32, attempt as i32, wave_seed.wrapping_add(Y_AXIS_SEED_OFFSET));
 
         // Map noise to an offset within the spawn ring around the player.
         let range = 30; // half-width of the search area
@@ -139,7 +148,7 @@ pub fn wave_spawn_system(
         }
 
         // Select monster template deterministically.
-        let template_noise = value_noise(candidate.x, candidate.y, wave_seed.wrapping_add(98765));
+        let template_noise = value_noise(candidate.x, candidate.y, wave_seed.wrapping_add(TEMPLATE_SEED_OFFSET));
         let idx = (template_noise * WAVE_TEMPLATES.len() as f64) as usize;
         let template = &WAVE_TEMPLATES[idx.min(WAVE_TEMPLATES.len() - 1)];
 

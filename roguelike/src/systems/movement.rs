@@ -14,11 +14,18 @@ use crate::resources::{GameMapResource, SpatialIndex};
 /// walking into the `Player`. This is the standard roguelike mechanic where
 /// walking into an enemy initiates melee combat.
 ///
+/// **Spatial index atomicity**: after each successful move, the spatial index
+/// is updated inline (entity removed from old tile, added to new tile). This
+/// ensures that when processing multiple `MoveIntent`s in a single frame
+/// (e.g., from AI during WorldTurn), subsequent intents see accurate
+/// occupancy data. Without this, two entities could move to the same tile
+/// simultaneously because the index would still show their original positions.
+///
 /// Also marks the entity's `Viewshed` as dirty so FOV is recalculated.
 pub fn movement_system(
     mut intents: MessageReader<MoveIntent>,
     game_map: Res<GameMapResource>,
-    spatial: Res<SpatialIndex>,
+    mut spatial: ResMut<SpatialIndex>,
     blockers: Query<(), With<BlocksMovement>>,
     hostiles: Query<(), With<Hostile>>,
     players: Query<(), With<Player>>,
@@ -68,8 +75,18 @@ pub fn movement_system(
         });
 
         if tile_passable && !entity_blocked {
+            let old_pos = pos.as_grid_vec();
             pos.x = target.x;
             pos.y = target.y;
+
+            // ── Maintain spatial index invariant ─────────────────
+            // Update inline so subsequent intents in this frame see
+            // accurate occupancy (prevents simultaneous overlap).
+            if let Some(entities) = spatial.map.get_mut(&old_pos) {
+                entities.retain(|&e| e != intent.entity);
+            }
+            spatial.map.entry(target).or_default().push(intent.entity);
+
             // Mark viewshed dirty so visibility is recalculated.
             if let Some(mut vs) = viewshed {
                 vs.dirty = true;

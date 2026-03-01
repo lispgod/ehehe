@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 
@@ -78,28 +78,32 @@ pub struct TurnCounter(pub u32);
 pub struct KillCount(pub u32);
 
 /// Accumulator for combat log messages displayed in the status bar.
-/// Maintains a rolling history of recent messages.
+/// Maintains a rolling history of recent messages using a bounded
+/// ring buffer (`VecDeque`) for O(1) enqueue/dequeue — the correct
+/// data structure for a bounded FIFO queue.
 #[derive(Resource, Debug, Default)]
 pub struct CombatLog {
-    pub messages: Vec<String>,
+    pub messages: VecDeque<String>,
 }
 
 /// Maximum number of messages retained in the combat log.
 const MAX_COMBAT_LOG_MESSAGES: usize = 50;
 
 impl CombatLog {
-    /// Adds a message and trims old entries to keep the log bounded.
+    /// Adds a message and trims the oldest entry to keep the log bounded.
+    /// O(1) amortised via `VecDeque::pop_front` (no element shifting).
     pub fn push(&mut self, message: String) {
-        self.messages.push(message);
+        self.messages.push_back(message);
         if self.messages.len() > MAX_COMBAT_LOG_MESSAGES {
-            self.messages.remove(0);
+            self.messages.pop_front();
         }
     }
 
-    /// Returns the most recent `n` messages.
-    pub fn recent(&self, n: usize) -> &[String] {
-        let start = self.messages.len().saturating_sub(n);
-        &self.messages[start..]
+    /// Returns the most recent `n` messages as owned references.
+    pub fn recent(&self, n: usize) -> Vec<&str> {
+        let len = self.messages.len();
+        let start = len.saturating_sub(n);
+        self.messages.iter().skip(start).map(|s| s.as_str()).collect()
     }
 }
 
@@ -130,7 +134,8 @@ mod tests {
         log.push("First".into());
         log.push("Second".into());
         log.push("Third".into());
-        assert_eq!(log.messages, vec!["First", "Second", "Third"]);
+        let msgs: Vec<&str> = log.messages.iter().map(|s| s.as_str()).collect();
+        assert_eq!(msgs, vec!["First", "Second", "Third"]);
     }
 
     #[test]
@@ -156,7 +161,7 @@ mod tests {
         log.push("C".into());
         log.push("D".into());
         let recent = log.recent(2);
-        assert_eq!(recent, &["C", "D"]);
+        assert_eq!(recent, vec!["C", "D"]);
     }
 
     #[test]
@@ -164,7 +169,7 @@ mod tests {
         let mut log = CombatLog::default();
         log.push("Only".into());
         let recent = log.recent(10);
-        assert_eq!(recent, &["Only"]);
+        assert_eq!(recent, vec!["Only"]);
     }
 
     #[test]

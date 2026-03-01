@@ -101,6 +101,55 @@ impl GridVec {
     pub fn as_f64(self) -> (f64, f64) {
         (self.x as f64, self.y as f64)
     }
+
+    /// Dot product (inner product): a · b = aₓbₓ + aᵧbᵧ.
+    ///
+    /// The dot product captures the projection of one vector onto another.
+    /// Useful for determining alignment:
+    /// - Positive → vectors point in the same half-plane.
+    /// - Zero → vectors are perpendicular (orthogonal).
+    /// - Negative → vectors point in opposite half-planes.
+    ///
+    /// Also equals ‖a‖‖b‖cos θ, making it a key building block for
+    /// angle calculations, line-of-sight checks, and lighting.
+    #[inline]
+    pub fn dot(self, other: Self) -> CoordinateUnit {
+        self.x * other.x + self.y * other.y
+    }
+
+    /// 2D cross product (wedge product / perp-dot product):
+    ///   a × b = aₓbᵧ − aᵧbₓ
+    ///
+    /// Geometrically, this is the **signed area** of the parallelogram
+    /// spanned by `self` and `other`, and equals the determinant of the
+    /// 2×2 matrix [self | other]:
+    ///
+    ///   det | aₓ  bₓ |
+    ///       | aᵧ  bᵧ |  = aₓbᵧ − aᵧbₓ
+    ///
+    /// The sign determines orientation:
+    /// - **Positive** → `other` is counter-clockwise from `self`.
+    /// - **Zero** → vectors are collinear (parallel or anti-parallel).
+    /// - **Negative** → `other` is clockwise from `self`.
+    ///
+    /// Essential for line-of-sight, convex hull, and turn-direction tests.
+    #[inline]
+    pub fn cross(self, other: Self) -> CoordinateUnit {
+        self.x * other.y - self.y * other.x
+    }
+
+    /// Normalizes to a unit king-move step: each component clamped to {−1, 0, 1}.
+    ///
+    /// Projects any vector onto the Chebyshev unit ball, yielding the
+    /// single-step 8-directional movement that best approximates the
+    /// vector's direction. Equivalent to component-wise `signum`.
+    #[inline]
+    pub fn king_step(self) -> Self {
+        Self {
+            x: self.x.signum(),
+            y: self.y.signum(),
+        }
+    }
 }
 
 // ─── Abelian group operations ───────────────────────────────────────────────
@@ -274,6 +323,81 @@ mod tests {
     fn directions_are_unit_length() {
         for dir in &GridVec::DIRECTIONS_4 {
             assert_eq!(dir.manhattan_distance(GridVec::ZERO), 1);
+        }
+    }
+
+    // ─── Dot product tests ──────────────────────────────────────
+    #[test]
+    fn dot_product_orthogonal_is_zero() {
+        let a = GridVec::EAST;
+        let b = GridVec::NORTH;
+        assert_eq!(a.dot(b), 0);
+    }
+
+    #[test]
+    fn dot_product_parallel_positive() {
+        let a = GridVec::new(3, 4);
+        assert_eq!(a.dot(a), 25); // 3² + 4² = 25
+    }
+
+    #[test]
+    fn dot_product_antiparallel_negative() {
+        let a = GridVec::new(1, 0);
+        let b = GridVec::new(-1, 0);
+        assert!(a.dot(b) < 0);
+    }
+
+    #[test]
+    fn dot_product_commutative() {
+        let a = GridVec::new(2, 5);
+        let b = GridVec::new(-3, 7);
+        assert_eq!(a.dot(b), b.dot(a));
+    }
+
+    // ─── Cross product tests ────────────────────────────────────
+    #[test]
+    fn cross_product_collinear_is_zero() {
+        let a = GridVec::new(2, 4);
+        let b = GridVec::new(1, 2);
+        assert_eq!(a.cross(b), 0);
+    }
+
+    #[test]
+    fn cross_product_perpendicular() {
+        let a = GridVec::EAST;
+        let b = GridVec::NORTH;
+        assert_eq!(a.cross(b), 1); // counter-clockwise
+    }
+
+    #[test]
+    fn cross_product_anticommutative() {
+        let a = GridVec::new(3, 1);
+        let b = GridVec::new(-2, 5);
+        assert_eq!(a.cross(b), -b.cross(a));
+    }
+
+    #[test]
+    fn cross_product_self_is_zero() {
+        let v = GridVec::new(7, -3);
+        assert_eq!(v.cross(v), 0);
+    }
+
+    // ─── King step tests ────────────────────────────────────────
+    #[test]
+    fn king_step_normalizes_large_vector() {
+        let v = GridVec::new(10, -5);
+        assert_eq!(v.king_step(), GridVec::new(1, -1));
+    }
+
+    #[test]
+    fn king_step_zero_stays_zero() {
+        assert_eq!(GridVec::ZERO.king_step(), GridVec::ZERO);
+    }
+
+    #[test]
+    fn king_step_unit_stays_same() {
+        for dir in &GridVec::DIRECTIONS_8 {
+            assert_eq!(dir.king_step(), *dir);
         }
     }
 }

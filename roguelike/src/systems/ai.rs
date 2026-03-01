@@ -1,16 +1,123 @@
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+
 use bevy::prelude::*;
 
-use crate::components::{AiState, Energy, Player, Position, Speed, Viewshed, ACTION_COST};
+use crate::components::{AiState, BlocksMovement, Energy, Player, Position, Speed, Viewshed, ACTION_COST};
 use crate::events::MoveIntent;
 use crate::grid_vec::GridVec;
+use crate::resources::{GameMapResource, SpatialIndex};
+
+// ───────────────────────── A* Pathfinding ──────────────────────────
+
+/// Maximum number of nodes A* may explore before giving up.
+/// Prevents lag when the target is unreachable or far away.
+/// 256 nodes covers a ~16-tile radius search area, sufficient
+/// for navigating around most local obstacles.
+const MAX_A_STAR_NODES: usize = 256;
+
+/// Finds the first step direction from `start` toward `goal` using A*
+/// with the **Chebyshev heuristic** (L∞ norm).
+///
+/// **Mathematical properties:**
+/// - **Optimal**: Chebyshev distance is admissible (`h(n) ≤ h*(n)`)
+///   and consistent (`h(n) ≤ c(n,n') + h(n')`) for 8-connected grids
+///   with uniform cost. A* therefore finds the shortest path.
+/// - **Complete**: if a path exists within the exploration budget,
+///   it will be found.
+/// - **Time**: O(k log k) where k = nodes explored (≤ `MAX_A_STAR_NODES`).
+/// - **Space**: O(k) for the open/closed sets and came-from map.
+///
+/// The `is_walkable` closure abstracts over game map + entity collision
+/// checks, making the algorithm reusable and testable in isolation.
+///
+/// Returns the direction `GridVec` of the first step, or `None` if no
+/// path is found within the exploration budget.
+fn a_star_first_step(
+    start: GridVec,
+    goal: GridVec,
+    is_walkable: impl Fn(GridVec) -> bool,
+) -> Option<GridVec> {
+    // Already at the goal — no step needed.
+    if start == goal {
+        return None;
+    }
+
+    // Adjacent and walkable — return the direct step without full search.
+    if start.chebyshev_distance(goal) == 1 {
+        return Some(goal - start);
+    }
+
+    // Min-heap: (f_score, position). Reverse gives min-first ordering.
+    let mut open: BinaryHeap<Reverse<(i32, GridVec)>> = BinaryHeap::new();
+    let mut came_from: HashMap<GridVec, GridVec> = HashMap::new();
+    let mut g_score: HashMap<GridVec, i32> = HashMap::new();
+    let mut closed: HashSet<GridVec> = HashSet::new();
+
+    g_score.insert(start, 0);
+    open.push(Reverse((start.chebyshev_distance(goal), start)));
+
+    let mut explored = 0usize;
+
+    while let Some(Reverse((_, current))) = open.pop() {
+        if current == goal {
+            // Reconstruct path to extract the first step.
+            let mut step = current;
+            while let Some(&prev) = came_from.get(&step) {
+                if prev == start {
+                    return Some(step - start);
+                }
+                step = prev;
+            }
+            return None;
+        }
+
+        if !closed.insert(current) {
+            continue; // Already expanded.
+        }
+
+        explored += 1;
+        if explored >= MAX_A_STAR_NODES {
+            break; // Budget exhausted.
+        }
+
+        let current_g = g_score[&current];
+
+        for dir in GridVec::DIRECTIONS_8 {
+            let neighbor = current + dir;
+
+            if closed.contains(&neighbor) {
+                continue;
+            }
+
+            // The goal tile is always "walkable" (we want to reach it).
+            if neighbor != goal && !is_walkable(neighbor) {
+                continue;
+            }
+
+            let new_g = current_g + 1; // Uniform edge cost.
+            if new_g < *g_score.get(&neighbor).unwrap_or(&i32::MAX) {
+                came_from.insert(neighbor, current);
+                g_score.insert(neighbor, new_g);
+                let f = new_g + neighbor.chebyshev_distance(goal);
+                open.push(Reverse((f, neighbor)));
+            }
+        }
+    }
+
+    None // No path found within budget.
+}
+
+// ───────────────────────── AI System ───────────────────────────────
 
 /// AI system: runs during `WorldTurn` for every entity with an `AiState`.
 ///
 /// **Behaviour**:
 /// - **Idle**: if the player is within the entity's Viewshed, switch to `Chasing`.
-/// - **Chasing**: move one step toward the player using greedy best-first
-///   (minimise Chebyshev distance). This is O(1) per entity per turn —
-///   no pathfinding overhead for simple melee enemies.
+/// - **Chasing**: use **A\* pathfinding** (Chebyshev heuristic) to find the
+///   optimal route to the player, navigating around walls and other blocking
+///   entities. Falls back to greedy best-first (king-step toward player) when
+///   A* cannot find a path within its exploration budget.
 ///
 /// Emits `MoveIntent` just like the player's input system, so the same
 /// movement/collision/bump-to-attack pipeline resolves NPC actions. This is
@@ -22,6 +129,9 @@ pub fn ai_system(
         Without<Player>,
     >,
     player_query: Query<&Position, With<Player>>,
+    game_map: Res<GameMapResource>,
+    spatial: Res<SpatialIndex>,
+    blockers: Query<(), With<BlocksMovement>>,
     mut move_intents: MessageWriter<MoveIntent>,
 ) {
     let Ok(player_pos) = player_query.single() else {
@@ -47,10 +157,16 @@ pub fn ai_system(
                 }
             }
             AiState::Chasing => {
-                // Greedy best-first: pick the cardinal/diagonal neighbour
-                // that minimises Chebyshev distance to the player.
-                let delta = player_vec - my_pos;
-                let step = GridVec::new(delta.x.signum(), delta.y.signum());
+                // A* pathfinding: find optimal route around obstacles.
+                // Falls back to greedy king-step if no path is found.
+                let step = a_star_first_step(my_pos, player_vec, |pos| {
+                    game_map.0.is_passable(&pos)
+                        && !spatial
+                            .entities_at(&pos)
+                            .iter()
+                            .any(|&e| e != entity && blockers.contains(e))
+                })
+                .unwrap_or_else(|| (player_vec - my_pos).king_step());
 
                 if step != GridVec::ZERO {
                     move_intents.write(MoveIntent {
@@ -80,5 +196,91 @@ pub fn ai_system(
 pub fn energy_accumulate_system(mut query: Query<(&Speed, &mut Energy)>) {
     for (speed, mut energy) in &mut query {
         energy.0 += speed.0;
+    }
+}
+
+// ───────────────────────── A* Tests ────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_star_adjacent_returns_direct_step() {
+        let start = GridVec::new(5, 5);
+        let goal = GridVec::new(6, 5);
+        let step = a_star_first_step(start, goal, |_| true);
+        assert_eq!(step, Some(GridVec::new(1, 0)));
+    }
+
+    #[test]
+    fn a_star_straight_line_path() {
+        let start = GridVec::new(0, 0);
+        let goal = GridVec::new(5, 0);
+        let step = a_star_first_step(start, goal, |_| true);
+        assert!(step.is_some(), "A* should find a step toward the goal");
+        let s = step.unwrap();
+        // The step should move closer to the goal in Chebyshev distance.
+        let new_pos = start + s;
+        assert!(
+            new_pos.chebyshev_distance(goal) < start.chebyshev_distance(goal),
+            "First step should reduce Chebyshev distance to goal"
+        );
+    }
+
+    #[test]
+    fn a_star_diagonal_path() {
+        let start = GridVec::new(0, 0);
+        let goal = GridVec::new(3, 3);
+        let step = a_star_first_step(start, goal, |_| true);
+        assert_eq!(step, Some(GridVec::new(1, 1)));
+    }
+
+    #[test]
+    fn a_star_navigates_around_wall() {
+        // Wall blocks direct east path: tiles (3,2), (3,3), (3,4)
+        let start = GridVec::new(2, 3);
+        let goal = GridVec::new(5, 3);
+        let wall: HashSet<GridVec> = [
+            GridVec::new(3, 2),
+            GridVec::new(3, 3),
+            GridVec::new(3, 4),
+        ]
+        .into_iter()
+        .collect();
+
+        let step = a_star_first_step(start, goal, |pos| !wall.contains(&pos));
+        // A* should find a path around the wall (step should not be directly east)
+        assert!(step.is_some(), "A* should find a path around the wall");
+        let s = step.unwrap();
+        // Should not step into the wall
+        let next = start + s;
+        assert!(!wall.contains(&next), "First step should not be into a wall");
+    }
+
+    #[test]
+    fn a_star_returns_none_when_unreachable() {
+        // Completely surround the goal
+        let start = GridVec::new(0, 0);
+        let goal = GridVec::new(10, 10);
+        let step = a_star_first_step(start, goal, |pos| {
+            // Block a complete ring around the goal
+            let d = pos.chebyshev_distance(goal);
+            d == 0 || d > 1 // Block exactly the ring at distance 1
+        });
+        // Might return None (blocked) or find a path to adjacent tile
+        // that's reachable. The goal itself is walkable but ring at d=1 isn't.
+        // With our implementation, the goal is always walkable, so we need
+        // the ring to truly block. Since the neighbor check skips non-walkable
+        // tiles (except goal), and all d=1 tiles from goal are blocked,
+        // no path should be found from (0,0).
+        assert!(step.is_none(), "Should return None when goal is surrounded");
+    }
+
+    #[test]
+    fn a_star_zero_distance_returns_none() {
+        let pos = GridVec::new(5, 5);
+        let step = a_star_first_step(pos, pos, |_| true);
+        assert_eq!(step, None, "No step needed when already at goal");
     }
 }

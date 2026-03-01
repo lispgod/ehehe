@@ -32,14 +32,20 @@ All grid coordinates use the `GridVec` type, which forms an **Abelian group** (�
 | **Inverse** | `-v` for every `v` | Every vector has a negation |
 | **Commutativity** | `a + b = b + a` | Order doesn't matter |
 
-Additionally, `GridVec` supports scalar multiplication (ℤ-module structure) and three
-distance metrics:
+Additionally, `GridVec` supports scalar multiplication (ℤ-module structure), three
+distance metrics, and bilinear operations:
 
 | Metric | Formula | Use case |
 |---|---|---|
 | Manhattan (L₁) | `\|Δx\| + \|Δy\|` | 4-connected grid distance |
 | Chebyshev (L∞) | `max(\|Δx\|, \|Δy\|)` | 8-connected (king move) distance |
 | Squared Euclidean | `Δx² + Δy²` | Comparison without sqrt (monotonic) |
+
+| Operation | Formula | Use case |
+|---|---|---|
+| **Dot product** | `aₓbₓ + aᵧbᵧ` | Projection, alignment test (positive → same half-plane, zero → orthogonal) |
+| **2D cross product** | `aₓbᵧ − aᵧbₓ` | Signed area / orientation test (det of 2×2 matrix [a\|b]) |
+| **King step** | `(signum(x), signum(y))` | Normalize to Chebyshev unit ball — single-step 8-directional movement |
 
 All group axioms are verified by unit tests.
 
@@ -72,6 +78,39 @@ rational slopes (integer y/x) to avoid floating-point:
 - **Symmetry**: A sees B ⟺ B sees A.
 - **Completeness**: no visible tile is missed.
 - **Efficiency**: O(visible tiles) — each tile visited at most once per octant.
+
+### A* Pathfinding (AI Navigation)
+
+AI entities use **A\* search** with the **Chebyshev heuristic** (L∞ norm) to find
+optimal paths to the player, navigating around walls, furniture, and other
+blocking entities. This replaces greedy best-first chase, which could get stuck
+behind obstacles.
+
+**Mathematical guarantees:**
+
+| Property | Explanation |
+|---|---|
+| **Optimality** | Chebyshev distance is *admissible* (`h(n) ≤ h*(n)` — never overestimates) and *consistent* (`h(n) ≤ c(n,n') + h(n')` — satisfies triangle inequality). Therefore A* finds the shortest path. |
+| **Completeness** | If a path exists within the 256-node exploration budget, it will be found. |
+| **Time** | O(k log k) where k = nodes explored (≤ 256). Each node visits ≤ 8 neighbours. |
+| **Space** | O(k) for the open set (binary heap), closed set, g-score map, and came-from map. |
+| **Fallback** | If A* exhausts its budget (target unreachable or too far), the AI falls back to greedy king-step (component-wise `signum` toward the player). |
+
+The heuristic is the Chebyshev distance because the grid is 8-connected with
+uniform edge cost — diagonal and cardinal moves cost the same. This makes
+Chebyshev the tightest admissible heuristic, minimising node expansions.
+
+### Spatial Index Atomicity
+
+The `movement_system` maintains the **spatial index invariant** inline: after
+each successful move, the entity is removed from its old tile and added to
+the new tile in the `SpatialIndex` resource. This ensures that when multiple
+`MoveIntent`s are processed in a single frame (e.g., AI moves during WorldTurn),
+each subsequent intent sees the up-to-date occupancy map.
+
+**Without this invariant**, two entities could move to the same tile
+simultaneously because the index would still show their original positions
+(stale read). The inline update prevents this race condition entirely.
 
 ---
 
@@ -366,13 +405,14 @@ Update
   Transitions to `PlayerTurn` when a movement or spell key is accepted.
 
 #### `movement_system`
-- **Reads:** `MessageReader<MoveIntent>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<(), With<BlocksMovement>>`, `Query<(), With<Hostile>>`
-- **Writes:** `MessageWriter<AttackIntent>`, `Query<(&mut Position, Option<&mut Viewshed>)>`
+- **Reads:** `MessageReader<MoveIntent>`, `Res<GameMapResource>`, `Query<(), With<BlocksMovement>>`, `Query<(), With<Hostile>>`
+- **Writes:** `ResMut<SpatialIndex>`, `MessageWriter<AttackIntent>`, `Query<(&mut Position, Option<&mut Viewshed>)>`
 - For each `MoveIntent`:
   1. **Bump-to-attack**: if a `Hostile` entity occupies the target, emit `AttackIntent`.
   2. Check map tile walkability (no blocking furniture).
   3. Check spatial index for entities with `BlocksMovement` at the target.
 - Updates `Position` only if both checks pass. Marks `Viewshed` dirty.
+- **Spatial index atomicity**: after each successful move, updates the `SpatialIndex` inline (remove from old tile, add to new tile) so subsequent intents in the same frame see accurate occupancy data.
 
 #### `combat_system`
 - **Reads:** `MessageReader<AttackIntent>`, `Query<(&CombatStats, Option<&Name>)>`
@@ -411,11 +451,11 @@ Update
 - Adds `speed` to `energy` for every actor. Runs during `WorldTurn`.
 
 #### `ai_system`
-- **Reads:** `Query<(Entity, &Position, &mut AiState, Option<&Viewshed>, &mut Energy)>`
+- **Reads:** `Query<(Entity, &Position, &mut AiState, Option<&Viewshed>, &mut Energy)>`, `Res<GameMapResource>`, `Res<SpatialIndex>`, `Query<(), With<BlocksMovement>>`
 - **Writes:** `MessageWriter<MoveIntent>`
 - For entities with enough energy (≥ ACTION_COST):
   - **Idle**: check if player is visible → transition to `Chasing`.
-  - **Chasing**: emit `MoveIntent` toward player (greedy best-first, minimise Chebyshev distance).
+  - **Chasing**: use **A\* pathfinding** (Chebyshev heuristic, 256-node budget) to find optimal route around walls and blocking entities. Falls back to greedy king-step if no path found.
 - Deducts ACTION_COST from energy after acting.
 
 #### `visibility_system`  (Symmetric Shadowcasting)
@@ -527,7 +567,7 @@ features slot in naturally:
 | Ranged combat | `RangedAttackIntent { attacker, target_pos }` + line-of-sight check via `SpatialIndex` |
 | Items & inventory | `Item` marker + `InBackpack(Entity)` component |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
-| Pathfinding AI | Replace greedy best-first with A* using `GridVec::manhattan_distance` as heuristic |
+| ~~Pathfinding AI~~ | ✅ Implemented: A* with Chebyshev heuristic (admissible + consistent for 8-connected grids). 256-node exploration budget with greedy fallback. |
 
 ---
 

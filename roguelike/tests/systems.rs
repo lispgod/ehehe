@@ -894,3 +894,57 @@ fn spell_damages_hell_gate() {
     let gate_health = app.world().get::<Health>(gate).unwrap();
     assert_eq!(gate_health.current, 95, "Gate should take spell damage equal to caster attack");
 }
+
+// ─── Spatial index atomicity tests ───────────────────────────────
+
+#[test]
+fn two_blockers_cannot_overlap_on_simultaneous_move() {
+    let mut app = test_app();
+    // We don't need a player for this test, but test_app expects one for
+    // the GameState to function. Just spawn one far away.
+    let _player = spawn_test_player(&mut app, 60, 40);
+
+    // Two blocking (non-hostile, non-player) entities on opposite sides
+    // of an empty tile in the spawn clearing area.
+    let e1 = app.world_mut().spawn((
+        Position { x: 59, y: 42 },
+        BlocksMovement,
+        Name("E1".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 1, defense: 0 },
+    )).id();
+
+    let e2 = app.world_mut().spawn((
+        Position { x: 61, y: 42 },
+        BlocksMovement,
+        Name("E2".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 1, defense: 0 },
+    )).id();
+
+    app.update(); // Build spatial index
+
+    // Both try to move to the same tile (60, 42) simultaneously.
+    app.world_mut().write_message(MoveIntent {
+        entity: e1,
+        dx: 1,
+        dy: 0,
+    });
+    app.world_mut().write_message(MoveIntent {
+        entity: e2,
+        dx: -1,
+        dy: 0,
+    });
+    app.update();
+
+    let pos1 = app.world().get::<Position>(e1).unwrap();
+    let pos2 = app.world().get::<Position>(e2).unwrap();
+
+    // With inline spatial index updates, the first mover succeeds and
+    // the second sees the tile as occupied — they must not overlap.
+    assert_ne!(
+        pos1.as_grid_vec(),
+        pos2.as_grid_vec(),
+        "Two blocking entities should not occupy the same tile after simultaneous moves"
+    );
+}

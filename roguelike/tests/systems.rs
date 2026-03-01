@@ -860,7 +860,7 @@ fn gate_destruction_triggers_victory() {
     // Victory message should be in the combat log
     let log = app.world().resource::<CombatLog>();
     assert!(
-        log.messages.iter().any(|m| m.contains("Gate of Hell crumbles")),
+        log.messages.iter().any(|m| m.contains("Enemy Stronghold crumbles")),
         "Combat log should contain victory message"
     );
 }

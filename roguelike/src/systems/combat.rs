@@ -74,7 +74,7 @@ pub fn death_system(
 
             // If the player died, transition to Dead state (don't despawn so UI can read stats).
             if is_player.is_some() {
-                combat_log.push("You have fallen... Press Q to quit.".into());
+                combat_log.push("You have fallen... Press Q to quit or R to restart.".into());
                 next_game_state.set(GameState::Dead);
                 continue; // don't despawn the player
             }
@@ -87,7 +87,7 @@ pub fn death_system(
                 }
             }
             if hell_gate.is_some() {
-                combat_log.push("The Gate of Hell crumbles! You are victorious!".into());
+                combat_log.push("The Enemy Stronghold crumbles! You are victorious!".into());
                 next_game_state.set(GameState::Victory);
             }
 

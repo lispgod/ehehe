@@ -12,7 +12,7 @@ use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
     CameraPosition, CombatLog, GameMapResource, GameState, InputState,
-    KillCount, MapSeed, PendingExp, SpatialIndex, SpellParticles, TurnCounter,
+    KillCount, MapSeed, PendingExp, RestartRequested, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
 use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
@@ -79,6 +79,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<PendingExp>()
             .init_resource::<SpellParticles>()
             .init_resource::<InputState>()
+            .init_resource::<RestartRequested>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -96,7 +97,7 @@ impl Plugin for RoguelikePlugin {
                     .chain(),
             )
             // ── Input (PreUpdate — emits intents before Update processes them) ──
-            .add_systems(PreUpdate, input::input_system)
+            .add_systems(PreUpdate, (input::input_system, restart_system).chain())
             // ── Index (always runs) ──
             .add_systems(
                 Update,
@@ -170,6 +171,52 @@ impl Plugin for RoguelikePlugin {
 
 /// Spawns the player entity with all required ECS components.
 fn spawn_player(mut commands: Commands) {
+    do_spawn_player(&mut commands);
+}
+
+/// Monster archetypes for procedural spawning (modern setting).
+struct MonsterTemplate {
+    name: &'static str,
+    symbol: &'static str,
+    fg: RatColor,
+    health: i32,
+    attack: i32,
+    defense: i32,
+    speed: i32,
+    sight_range: i32,
+    exp_reward: i32,
+}
+
+const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
+    // Tier 1: Wild Animals
+    MonsterTemplate { name: "Rat", symbol: "r", fg: RatColor::Rgb(139, 119, 101), health: 4, attack: 2, defense: 0, speed: 110, sight_range: 6, exp_reward: 3 },
+    MonsterTemplate { name: "Feral Dog", symbol: "d", fg: RatColor::Rgb(160, 82, 45), health: 8, attack: 3, defense: 1, speed: 120, sight_range: 8, exp_reward: 5 },
+    // Tier 2: Bandits
+    MonsterTemplate { name: "Bandit", symbol: "b", fg: RatColor::Rgb(180, 160, 100), health: 12, attack: 4, defense: 1, speed: 90, sight_range: 8, exp_reward: 8 },
+    // Tier 3: Scavengers
+    MonsterTemplate { name: "Scavenger", symbol: "s", fg: RatColor::Rgb(100, 140, 100), health: 15, attack: 5, defense: 2, speed: 85, sight_range: 10, exp_reward: 12 },
+    // Tier 4: Military
+    MonsterTemplate { name: "Soldier", symbol: "S", fg: RatColor::Rgb(60, 120, 60), health: 20, attack: 6, defense: 3, speed: 80, sight_range: 12, exp_reward: 18 },
+    MonsterTemplate { name: "Spec Ops", symbol: "X", fg: RatColor::Rgb(40, 40, 40), health: 28, attack: 8, defense: 4, speed: 100, sight_range: 14, exp_reward: 30 },
+];
+
+/// Spawns monsters on passable tiles using deterministic noise placement.
+/// Monsters are spawned near the Enemy Stronghold area, using the map seed for
+/// deterministic placement.
+fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<MapSeed>) {
+    do_spawn_monsters(&mut commands, &map, seed.0);
+}
+
+/// Spawns the Enemy Stronghold entity — the main objective the player must destroy to win.
+///
+/// The stronghold is a destructible, hostile entity with high health that blocks movement.
+/// Enemies emerge from it each wave, and the surrounding land corrupts over time.
+fn spawn_hell_gate(mut commands: Commands) {
+    do_spawn_hell_gate(&mut commands);
+}
+
+/// Helper: spawns the player entity.
+fn do_spawn_player(commands: &mut Commands) {
     commands.spawn((
         Position {
             x: SPAWN_X,
@@ -196,7 +243,7 @@ fn spawn_player(mut commands: Commands) {
             attack: 5,
             defense: 2,
         },
-        Speed(ACTION_COST), // normal speed: one action per tick
+        Speed(ACTION_COST),
         Energy(0),
         Inventory::default(),
         Level(1),
@@ -208,96 +255,37 @@ fn spawn_player(mut commands: Commands) {
             range: 15,
             visible_tiles: HashSet::new(),
             revealed_tiles: HashSet::new(),
-            dirty: true, // compute on first frame
+            dirty: true,
         },
     ));
 }
 
-/// Monster archetypes for procedural spawning (hellish theme).
-struct MonsterTemplate {
-    name: &'static str,
-    symbol: &'static str,
-    fg: RatColor,
-    health: i32,
-    attack: i32,
-    defense: i32,
-    speed: i32,
-    sight_range: i32,
-    exp_reward: i32,
-}
-
-const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
-    MonsterTemplate {
-        name: "Imp",
-        symbol: "i",
-        fg: RatColor::Rgb(255, 80, 0),
-        health: 6,
-        attack: 3,
-        defense: 1,
-        speed: 90,
-        sight_range: 8,
-        exp_reward: 5,
-    },
-    MonsterTemplate {
-        name: "Demon",
-        symbol: "D",
-        fg: RatColor::Rgb(200, 0, 0),
-        health: 18,
-        attack: 5,
-        defense: 2,
-        speed: 60,
-        sight_range: 6,
-        exp_reward: 15,
-    },
-    MonsterTemplate {
-        name: "Hellhound",
-        symbol: "h",
-        fg: RatColor::Rgb(200, 60, 20),
-        health: 10,
-        attack: 4,
-        defense: 1,
-        speed: 120,
-        sight_range: 10,
-        exp_reward: 10,
-    },
-];
-
-/// Spawns monsters on passable tiles using deterministic noise placement.
-/// Monsters are spawned near the Hell Gate area, using the map seed for
-/// deterministic placement.
-fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<MapSeed>) {
-    let spawn_seed = seed.0.wrapping_add(54321);
-    let template_seed = seed.0.wrapping_add(98765);
-    let min_spawn_dist_sq = 12 * 12; // min squared distance from player spawn
-    let gate_exclusion_sq = 3 * 3; // don't spawn on/near gate tile
+/// Helper: spawns monsters on passable tiles using deterministic noise placement.
+fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) {
+    let spawn_seed = seed.wrapping_add(54321);
+    let template_seed = seed.wrapping_add(98765);
+    let min_spawn_dist_sq = 12 * 12;
+    let gate_exclusion_sq = 3 * 3;
 
     for y in 1..map.0.height - 1 {
         for x in 1..map.0.width - 1 {
             let pos = GridVec::new(x, y);
 
-            // Skip tiles near the spawn point.
             if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
                 continue;
             }
-
-            // Skip tiles too close to the gate.
             if pos.distance_squared(GATE_POINT) < gate_exclusion_sq {
                 continue;
             }
-
-            // Skip impassable tiles.
             if !map.0.is_passable(&pos) {
                 continue;
             }
 
-            // Noise-based spawn chance (~2% of passable tiles).
             let noise = value_noise(x, y, spawn_seed);
             if noise > 0.02 {
                 continue;
             }
 
-            // Select monster type deterministically.
-            // value_noise returns [0, 1); the .min() is defensive against float edge cases.
             let template_noise = value_noise(x, y, template_seed);
             let idx = (template_noise * MONSTER_TEMPLATES.len() as f64) as usize;
             let template = &MONSTER_TEMPLATES[idx.min(MONSTER_TEMPLATES.len() - 1)];
@@ -336,11 +324,8 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
     }
 }
 
-/// Spawns the Hell Gate entity — the main objective the player must destroy to win.
-///
-/// The gate is a destructible, hostile entity with high health that blocks movement.
-/// Monsters emerge from it each wave, and the surrounding land corrupts over time.
-fn spawn_hell_gate(mut commands: Commands) {
+/// Helper: spawns the Enemy Stronghold entity.
+fn do_spawn_hell_gate(commands: &mut Commands) {
     commands.spawn((
         Position {
             x: GATE_X,
@@ -348,7 +333,7 @@ fn spawn_hell_gate(mut commands: Commands) {
         },
         HellGate,
         Hostile,
-        Name("Gate of Hell".into()),
+        Name("Enemy Stronghold".into()),
         Renderable {
             symbol: "Ω".into(),
             fg: RatColor::Rgb(255, 0, 0),
@@ -364,4 +349,45 @@ fn spawn_hell_gate(mut commands: Commands) {
             defense: 3,
         },
     ));
+}
+
+/// System that handles game restart by despawning all entities and re-spawning.
+fn restart_system(
+    mut commands: Commands,
+    mut restart: ResMut<RestartRequested>,
+    all_entities: Query<Entity>,
+    mut combat_log: ResMut<CombatLog>,
+    mut kill_count: ResMut<KillCount>,
+    mut turn_counter: ResMut<TurnCounter>,
+    mut pending_exp: ResMut<PendingExp>,
+    mut spell_particles: ResMut<SpellParticles>,
+    mut input_state: ResMut<InputState>,
+    mut next_game_state: ResMut<NextState<GameState>>,
+    seed: Res<MapSeed>,
+    mut game_map: ResMut<GameMapResource>,
+    mut camera: ResMut<CameraPosition>,
+) {
+    if !restart.0 {
+        return;
+    }
+    restart.0 = false;
+
+    for entity in &all_entities {
+        commands.entity(entity).despawn();
+    }
+
+    combat_log.messages.clear();
+    kill_count.0 = 0;
+    turn_counter.0 = 0;
+    pending_exp.0 = 0;
+    spell_particles.particles.clear();
+    *input_state = InputState::default();
+    camera.0 = SPAWN_POINT;
+    *game_map = GameMapResource(GameMap::new(120, 80, seed.0));
+
+    next_game_state.set(GameState::Playing);
+
+    do_spawn_player(&mut commands);
+    do_spawn_monsters(&mut commands, &game_map, seed.0);
+    do_spawn_hell_gate(&mut commands);
 }

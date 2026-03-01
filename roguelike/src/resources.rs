@@ -45,6 +45,7 @@ pub struct InputState {
     pub inv_selection: usize,
     pub help_visible: bool,
     pub welcome_visible: bool,
+    pub quit_confirm: bool,
 }
 
 impl Default for InputState {
@@ -54,6 +55,7 @@ impl Default for InputState {
             inv_selection: 0,
             help_visible: false,
             welcome_visible: true, // shown on first launch
+            quit_confirm: false,
         }
     }
 }
@@ -208,6 +210,10 @@ impl CombatLog {
         self.messages.iter().skip(start).map(|s| s.as_str()).collect()
     }
 }
+
+/// Marker resource indicating a restart has been requested.
+#[derive(Resource, Debug, Default)]
+pub struct RestartRequested(pub bool);
 
 #[cfg(test)]
 mod tests {

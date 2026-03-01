@@ -262,7 +262,7 @@ pub fn draw_system(
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! The Gate of Hell has been destroyed! Press Q to quit. ";
+            let label = " VICTORY! The Enemy Stronghold has been destroyed! Press Q to quit, R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -282,7 +282,7 @@ pub fn draw_system(
 
         // Show "YOU DIED" overlay when the player has fallen
         if *state.get() == GameState::Dead {
-            let label = " YOU DIED — Press Q to quit ";
+            let label = " YOU DIED — Press Q to quit, R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -296,6 +296,26 @@ pub fn draw_system(
                 frame.render_widget(
                     Paragraph::new(Line::from(label).bold()).on_red(),
                     death_area,
+                );
+            }
+        }
+
+        // Show quit confirmation overlay
+        if input_state.quit_confirm {
+            let label = " Quit? Press Enter to confirm, any other key to cancel ";
+            let label_width = label.len() as u16;
+            if render_width >= label_width && render_height >= 1 {
+                let cx = game_area.x + (render_width - label_width) / 2;
+                let cy = game_area.y + render_height / 2;
+                let quit_area = Rect {
+                    x: cx,
+                    y: cy,
+                    width: label_width,
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(label).bold()).on_dark_gray(),
+                    quit_area,
                 );
             }
         }
@@ -327,7 +347,7 @@ pub fn draw_system(
         let last_msg = recent_msgs.join(" | ");
 
         let status = Line::from(format!(
-            " Gate of Hell | {player_info}{level_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
+            " Dead Zone | {player_info}{level_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
             turn_counter.0, kill_count.0,
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);
@@ -398,7 +418,7 @@ fn render_side_panel(
             0.0
         };
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Mana"))
+            .block(Block::default().borders(Borders::ALL).title("Stamina"))
             .gauge_style(
                 ratatui::style::Style::default()
                     .fg(ratatui::style::Color::Blue)
@@ -409,7 +429,7 @@ fn render_side_panel(
         frame.render_widget(gauge, chunks[1]);
     } else {
         frame.render_widget(
-            Block::default().borders(Borders::ALL).title("Mana"),
+            Block::default().borders(Borders::ALL).title("Stamina"),
             chunks[1],
         );
     }
@@ -528,10 +548,10 @@ fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
-    for (key, desc) in KEYBINDINGS {
+    for binding in KEYBINDINGS {
         lines.push(Line::from(vec![
-            Span::from(format!(" {key:<14}")).bold().yellow(),
-            Span::from(format!("{desc}")).white(),
+            Span::from(format!(" {:<14}", binding.key)).bold().yellow(),
+            Span::from(binding.name.to_string()).white(),
         ]));
     }
     lines.push(Line::from(""));
@@ -553,8 +573,10 @@ fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
 
 /// Renders the welcome screen shown at game start.
 fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
+    let binding_count = KEYBINDINGS.len() as u16;
     let w = 56u16.min(game_area.width.saturating_sub(4));
-    let h = 16u16.min(game_area.height.saturating_sub(4));
+    // title(1) + blank(1) + objective(2) + blank(1) + bindings + blank(1) + press-any(1) + border(2)
+    let h = (binding_count + 9).min(game_area.height.saturating_sub(4));
 
     if w < 20 || h < 10 {
         return;
@@ -571,36 +593,22 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
 
     frame.render_widget(Clear, welcome_area);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(""),
-        Line::from("  ⚔  GATE OF HELL  ⚔").bold().yellow(),
+        Line::from("  ☠  DEAD ZONE  ☠").bold().yellow(),
         Line::from(""),
-        Line::from("  Destroy the Gate of Hell (Ω) to win!").white(),
-        Line::from("  Monsters will keep spawning from it.").white(),
+        Line::from("  Destroy the Enemy Stronghold (Ω) to win!").white(),
+        Line::from("  Enemies will keep spawning from it.").white(),
         Line::from(""),
-        Line::from(vec![
-            Span::from("  WASD / Arrows").bold().yellow(),
-            Span::from("  Move").white(),
-        ]),
-        Line::from(vec![
-            Span::from("  F / Space    ").bold().yellow(),
-            Span::from("  Cast AoE spell").white(),
-        ]),
-        Line::from(vec![
-            Span::from("  G            ").bold().yellow(),
-            Span::from("  Pick up items").white(),
-        ]),
-        Line::from(vec![
-            Span::from("  1-9          ").bold().yellow(),
-            Span::from("  Use inventory item").white(),
-        ]),
-        Line::from(vec![
-            Span::from("  ? or /       ").bold().yellow(),
-            Span::from("  Help screen").white(),
-        ]),
-        Line::from(""),
-        Line::from("  Press any key to begin...").dark_gray(),
     ];
+    for binding in KEYBINDINGS {
+        lines.push(Line::from(vec![
+            Span::from(format!("  {:<14}", binding.key)).bold().yellow(),
+            Span::from(format!("  {}", binding.name)).white(),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("  Press any key to begin...").dark_gray());
 
     frame.render_widget(
         Paragraph::new(lines)

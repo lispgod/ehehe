@@ -4,33 +4,44 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Inventory, Mana, Player};
 use crate::events::{MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, UseItemIntent};
-use crate::resources::{CombatLog, GameState, InputMode, InputState, TurnState};
+use crate::resources::{CombatLog, GameState, InputMode, InputState, RestartRequested, TurnState};
 
 /// Default radius for the player's area-of-effect spell.
 const SPELL_RADIUS: i32 = 3;
 
-/// Mana cost for casting the AoE spell.
+/// Stamina cost for throwing a grenade.
 const SPELL_MANA_COST: i32 = 10;
 
 /// Range for the targeted ranged attack.
 const RANGED_ATTACK_RANGE: i32 = 8;
 
+/// A single command binding entry: the key(s) that trigger it, a short name, and documentation.
+pub struct CommandBinding {
+    /// Key combination string shown in the help/welcome screen.
+    pub key: &'static str,
+    /// Short action name.
+    pub name: &'static str,
+    /// Longer description / documentation for the command.
+    pub docs: &'static str,
+}
+
 /// All keybindings, generated from the exhaustive match arms below.
 /// Used by the `?` help overlay to display available commands.
-pub const KEYBINDINGS: &[(&str, &str)] = &[
-    ("W / ↑", "Move north"),
-    ("S / ↓", "Move south"),
-    ("A / ←", "Move west"),
-    ("D / →", "Move east"),
-    ("F / Space", "Cast AoE spell (costs 10 mana)"),
-    ("R (ranged)", "Targeted ranged attack (8 range)"),
-    ("E (cleave)", "Melee wide attack (all adjacent)"),
-    (". / 5", "Wait / skip turn"),
-    ("G", "Pick up item on ground"),
-    ("I", "Open inventory"),
-    ("P", "Pause / Resume"),
-    ("? / /", "Toggle this help screen"),
-    ("Q / Esc", "Quit game"),
+pub const KEYBINDINGS: &[CommandBinding] = &[
+    CommandBinding { key: "W / ↑", name: "Move north", docs: "Move the player one tile north (up on the map)." },
+    CommandBinding { key: "S / ↓", name: "Move south", docs: "Move the player one tile south (down on the map)." },
+    CommandBinding { key: "A / ←", name: "Move west", docs: "Move the player one tile west (left on the map)." },
+    CommandBinding { key: "D / →", name: "Move east", docs: "Move the player one tile east (right on the map)." },
+    CommandBinding { key: "F / Space", name: "Throw grenade", docs: "Throw a frag grenade dealing area damage around the player (costs 10 stamina)." },
+    CommandBinding { key: "R", name: "Shoot (ranged)", docs: "Fire your weapon at the nearest visible enemy within 8 tiles." },
+    CommandBinding { key: "E", name: "Melee sweep", docs: "Swing your melee weapon hitting all adjacent enemies." },
+    CommandBinding { key: ". / 5", name: "Wait", docs: "Skip the current turn without acting." },
+    CommandBinding { key: "G", name: "Pick up item", docs: "Pick up an item on the ground at your position." },
+    CommandBinding { key: "I", name: "Open inventory", docs: "Open the inventory screen to view and use items." },
+    CommandBinding { key: "1-9", name: "Use item", docs: "Quickly use an inventory item by slot number." },
+    CommandBinding { key: "P", name: "Pause / Resume", docs: "Toggle pause state." },
+    CommandBinding { key: "? / /", name: "Help", docs: "Toggle this help screen." },
+    CommandBinding { key: "Q / Esc", name: "Quit", docs: "Open the quit confirmation prompt." },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -56,6 +67,7 @@ pub fn input_system(
     mut next_turn_state: Option<ResMut<NextState<TurnState>>>,
     mut combat_log: ResMut<CombatLog>,
     mut input_state: ResMut<InputState>,
+    mut restart_requested: ResMut<RestartRequested>,
 ) {
     // Handle Dead and Victory states: only Q/Esc to quit, R to restart.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
@@ -65,9 +77,7 @@ pub fn input_system(
                     exit.write_default();
                 }
                 KeyCode::Char('r') => {
-                    // Restart is not trivially supported in Bevy without app rebuild.
-                    // Log a message; the player should quit and relaunch.
-                    combat_log.push("Restart not available — please quit (Q) and relaunch.".into());
+                    restart_requested.0 = true;
                 }
                 _ => {}
             }
@@ -142,11 +152,24 @@ pub fn input_system(
             continue; // consume the key that dismissed the welcome
         }
 
+        // Handle quit confirmation mode.
+        if input_state.quit_confirm {
+            match message.code {
+                KeyCode::Enter => {
+                    exit.write_default();
+                }
+                _ => {
+                    input_state.quit_confirm = false;
+                }
+            }
+            continue;
+        }
+
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
             // ── Global keys (always active) ─────────────────────
             KeyCode::Char('q') | KeyCode::Esc => {
-                exit.write_default();
+                input_state.quit_confirm = true;
             }
             KeyCode::Char('p') => {
                 let new = match game_state.get() {
@@ -199,7 +222,7 @@ pub fn input_system(
                         next.set(TurnState::PlayerTurn);
                     }
                 } else {
-                    combat_log.push("Not enough mana to cast spell!".into());
+                    combat_log.push("Not enough stamina!".into());
                 }
             }
             // ── Targeted ranged attack ──────────────────────────

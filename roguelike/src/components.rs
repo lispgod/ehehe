@@ -139,6 +139,15 @@ pub struct Hostile;
 #[derive(Component, Debug)]
 pub struct HellGate;
 
+/// Faction affiliation for group-based spawning.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub enum Faction {
+    Wildlife,
+    Bandits,
+    Scavengers,
+    Military,
+}
+
 /// Mana pool for entities that can cast spells.
 /// Spells consume mana; mana regenerates slowly each turn.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]

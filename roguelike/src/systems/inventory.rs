@@ -122,30 +122,30 @@ struct LootEntry {
 
 const LOOT_TABLE: &[LootEntry] = &[
     LootEntry {
-        name: "Health Potion",
-        symbol: "!",
+        name: "Medkit",
+        symbol: "+",
         fg: RatColor::Rgb(255, 50, 50),
         kind: ItemKind::HealingPotion { amount: 10 },
         weight: 0.45,
     },
     LootEntry {
-        name: "Fire Scroll",
-        symbol: "?",
+        name: "Frag Grenade",
+        symbol: "*",
         fg: RatColor::Rgb(255, 165, 0),
         kind: ItemKind::Scroll { damage: 8, radius: 2 },
         weight: 0.20,
     },
     LootEntry {
-        name: "Iron Shield",
+        name: "Body Armor",
         symbol: "[",
-        fg: RatColor::Rgb(160, 160, 160),
+        fg: RatColor::Rgb(100, 130, 100),
         kind: ItemKind::Armor { defense: 1 },
         weight: 0.15,
     },
     LootEntry {
-        name: "Short Sword",
+        name: "Combat Rifle",
         symbol: "/",
-        fg: RatColor::Rgb(200, 200, 220),
+        fg: RatColor::Rgb(180, 180, 200),
         kind: ItemKind::Weapon { attack: 2 },
         weight: 0.20,
     },
@@ -173,13 +173,13 @@ pub fn spawn_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
             return;
         }
     }
-    // Fallback: spawn a health potion.
+    // Fallback: spawn a medkit.
     commands.spawn((
         Position { x, y },
         Item,
-        Name("Health Potion".into()),
+        Name("Medkit".into()),
         Renderable {
-            symbol: "!".into(),
+            symbol: "+".into(),
             fg: RatColor::Rgb(255, 50, 50),
             bg: RatColor::Black,
         },

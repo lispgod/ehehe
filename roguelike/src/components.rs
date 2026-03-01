@@ -196,6 +196,23 @@ pub struct LootTable {
     pub drop_chance: f64,
 }
 
+/// Experience points component for the player.
+/// Killing hostile entities awards EXP. Accumulating enough EXP triggers a level-up.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Experience {
+    pub current: i32,
+    pub next_level: i32,
+}
+
+/// Player level. Increases when enough EXP is accumulated.
+/// Each level grants stat bonuses (attack, defense, max HP, max mana).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Level(pub i32);
+
+/// How much EXP a hostile entity is worth when killed.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ExpReward(pub i32);
+
 #[cfg(test)]
 mod tests {
     use super::*;

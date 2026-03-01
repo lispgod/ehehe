@@ -44,3 +44,16 @@ pub struct UseItemIntent {
 pub struct PickupItemIntent {
     pub picker: Entity,
 }
+
+/// Fired when the player uses a targeted ranged attack on the nearest visible enemy.
+#[derive(Message, Debug, Clone)]
+pub struct RangedAttackIntent {
+    pub attacker: Entity,
+    pub range: CoordinateUnit,
+}
+
+/// Fired when the player performs a melee wide (cleave) attack hitting all adjacent enemies.
+#[derive(Message, Debug, Clone)]
+pub struct MeleeWideIntent {
+    pub attacker: Entity,
+}

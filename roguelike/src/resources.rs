@@ -31,6 +31,38 @@ pub enum GameState {
     Playing,
     Paused,
     Victory,
+    Dead,
+}
+
+/// Tracks which input mode the game is in and inventory selection state.
+/// In `Game` mode, normal movement/action keys are processed.
+/// In `Inventory` mode, the inventory overlay is shown and
+/// arrow/enter keys navigate and use items.
+/// Also tracks help and welcome overlay visibility.
+#[derive(Resource, Debug)]
+pub struct InputState {
+    pub mode: InputMode,
+    pub inv_selection: usize,
+    pub help_visible: bool,
+    pub welcome_visible: bool,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            mode: InputMode::Game,
+            inv_selection: 0,
+            help_visible: false,
+            welcome_visible: true, // shown on first launch
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputMode {
+    #[default]
+    Game,
+    Inventory,
 }
 
 /// Turn-phase sub-state that controls the flow within `GameState::Playing`.
@@ -76,6 +108,10 @@ pub struct TurnCounter(pub u32);
 /// Displayed in the status bar as the player's score.
 #[derive(Resource, Debug, Default)]
 pub struct KillCount(pub u32);
+
+/// Accumulates EXP from kills to be applied to the player by the level-up system.
+#[derive(Resource, Debug, Default)]
+pub struct PendingExp(pub i32);
 
 /// Accumulator for combat log messages displayed in the status bar.
 /// Maintains a rolling history of recent messages using a bounded

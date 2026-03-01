@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiState, BlocksMovement, CombatStats, Energy, Health, HellGate, Hostile, LootTable, Name,
+    AiState, BlocksMovement, CombatStats, Energy, ExpReward, Health, HellGate, Hostile, LootTable, Name,
     Position, Renderable, Speed, Viewshed,
 };
 use crate::grid_vec::GridVec;
@@ -21,6 +21,7 @@ struct WaveMonsterTemplate {
     defense: i32,
     speed: i32,
     sight_range: i32,
+    exp_reward: i32,
 }
 
 const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
@@ -33,6 +34,7 @@ const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
         defense: 1,
         speed: 90,
         sight_range: 8,
+        exp_reward: 5,
     },
     WaveMonsterTemplate {
         name: "Demon",
@@ -43,6 +45,7 @@ const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
         defense: 2,
         speed: 60,
         sight_range: 6,
+        exp_reward: 15,
     },
     WaveMonsterTemplate {
         name: "Hellhound",
@@ -53,6 +56,7 @@ const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
         defense: 1,
         speed: 120,
         sight_range: 10,
+        exp_reward: 10,
     },
 ];
 
@@ -191,6 +195,7 @@ pub fn wave_spawn_system(
             Energy(0),
             AiState::Idle,
             LootTable { drop_chance: 0.30 },
+            ExpReward(template.exp_reward + (wave_number as i32)),
             Viewshed {
                 range: template.sight_range,
                 visible_tiles: HashSet::new(),

@@ -3,16 +3,17 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiState, BlocksMovement, CameraFollow, CombatStats, Energy, Health, HellGate, Hostile,
-    Inventory, LootTable, Mana, Name, Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
+    AiState, BlocksMovement, CameraFollow, CombatStats, Energy, Experience, ExpReward, Health, HellGate, Hostile,
+    Inventory, Level, LootTable, Mana, Name, Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
 };
-use crate::events::{AttackIntent, DamageEvent, MoveIntent, PickupItemIntent, SpellCastIntent, UseItemIntent};
+use crate::events::{AttackIntent, DamageEvent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, UseItemIntent};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
-    CameraPosition, CombatLog, GameMapResource, GameState, HelpVisible, KillCount, MapSeed,
-    SpatialIndex, SpellParticles, TurnCounter, TurnState, WelcomeVisible,
+    CameraPosition, CombatLog, GameMapResource, GameState, InputState,
+    KillCount, MapSeed, PendingExp, SpatialIndex, SpellParticles, TurnCounter,
+    TurnState,
 };
 use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
 use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y, GATE_POINT, GATE_X, GATE_Y};
@@ -65,6 +66,8 @@ impl Plugin for RoguelikePlugin {
             .add_message::<SpellCastIntent>()
             .add_message::<UseItemIntent>()
             .add_message::<PickupItemIntent>()
+            .add_message::<RangedAttackIntent>()
+            .add_message::<MeleeWideIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
             .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
@@ -73,9 +76,9 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<CombatLog>()
             .init_resource::<TurnCounter>()
             .init_resource::<KillCount>()
-            .init_resource::<HelpVisible>()
+            .init_resource::<PendingExp>()
             .init_resource::<SpellParticles>()
-            .init_resource::<WelcomeVisible>()
+            .init_resource::<InputState>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -107,9 +110,12 @@ impl Plugin for RoguelikePlugin {
                     inventory::pickup_system,
                     inventory::use_item_system,
                     spell::spell_system,
+                    combat::ranged_attack_system,
+                    combat::melee_wide_system,
                     combat::combat_system,
                     combat::apply_damage_system,
                     combat::death_system,
+                    combat::level_up_system,
                 )
                     .chain()
                     .in_set(RoguelikeSet::Action)
@@ -193,6 +199,11 @@ fn spawn_player(mut commands: Commands) {
         Speed(ACTION_COST), // normal speed: one action per tick
         Energy(0),
         Inventory::default(),
+        Level(1),
+        Experience {
+            current: 0,
+            next_level: 20,
+        },
         Viewshed {
             range: 15,
             visible_tiles: HashSet::new(),
@@ -212,6 +223,7 @@ struct MonsterTemplate {
     defense: i32,
     speed: i32,
     sight_range: i32,
+    exp_reward: i32,
 }
 
 const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
@@ -224,6 +236,7 @@ const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
         defense: 1,
         speed: 90,
         sight_range: 8,
+        exp_reward: 5,
     },
     MonsterTemplate {
         name: "Demon",
@@ -234,6 +247,7 @@ const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
         defense: 2,
         speed: 60,
         sight_range: 6,
+        exp_reward: 15,
     },
     MonsterTemplate {
         name: "Hellhound",
@@ -244,6 +258,7 @@ const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
         defense: 1,
         speed: 120,
         sight_range: 10,
+        exp_reward: 10,
     },
 ];
 
@@ -309,6 +324,7 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
                 Energy(0),
                 AiState::Idle,
                 LootTable { drop_chance: 0.25 },
+                ExpReward(template.exp_reward),
                 Viewshed {
                     range: template.sight_range,
                     visible_tiles: HashSet::new(),

@@ -2,7 +2,8 @@ use bevy::prelude::*;
 
 use crate::components::{CombatStats, Hostile, Mana, Name, Player, Position};
 use crate::events::{DamageEvent, SpellCastIntent};
-use crate::resources::{CombatLog, SpellParticles};
+use crate::resources::{CombatLog, GameMapResource, SpellParticles};
+use crate::typeenums::Furniture;
 
 /// Mana cost for casting the AoE spell.
 const SPELL_MANA_COST: i32 = 10;
@@ -23,6 +24,7 @@ pub fn spell_system(
     targets: Query<(Entity, &Position, Option<&Name>), With<Hostile>>,
     mut combat_log: ResMut<CombatLog>,
     mut spell_particles: ResMut<SpellParticles>,
+    mut game_map: ResMut<GameMapResource>,
 ) {
     for intent in intents.read() {
         let Ok((caster_pos, caster_stats, caster_name, mana)) = caster_query.get_mut(intent.caster) else {
@@ -65,6 +67,31 @@ pub fn spell_system(
 
         // Generate particle animation for the AoE effect.
         spell_particles.add_aoe(origin, PARTICLE_LIFETIME);
+
+        // Environmental destruction: destroy trees, bushes, rocks within radius.
+        let mut destroyed_count = 0;
+        for dx in -intent.radius..=intent.radius {
+            for dy in -intent.radius..=intent.radius {
+                let dist = dx.abs().max(dy.abs());
+                if dist > 0 && dist <= intent.radius {
+                    let target_pos = origin + crate::grid_vec::GridVec::new(dx, dy);
+                    if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos) {
+                        if let Some(ref furn) = voxel.furniture {
+                            match furn {
+                                Furniture::Tree | Furniture::DeadTree | Furniture::Bush | Furniture::Rock => {
+                                    voxel.furniture = None;
+                                    destroyed_count += 1;
+                                }
+                                Furniture::Wall => {} // Walls are indestructible.
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if destroyed_count > 0 {
+            combat_log.push(format!("The spell destroys {destroyed_count} obstacle(s)!"));
+        }
 
         if hit_count == 0 {
             combat_log.push(format!("{c_name} casts a spell but hits nothing"));

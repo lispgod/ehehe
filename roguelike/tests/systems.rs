@@ -27,6 +27,7 @@ fn test_app() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_resource::<PendingExp>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -38,6 +39,7 @@ fn test_app() -> App {
             combat::combat_system,
             combat::apply_damage_system,
             combat::death_system,
+            combat::level_up_system,
         )
             .chain(),
     );
@@ -556,6 +558,7 @@ fn test_app_with_spells() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_resource::<PendingExp>();
     app.init_resource::<SpellParticles>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
@@ -569,6 +572,7 @@ fn test_app_with_spells() -> App {
             combat::combat_system,
             combat::apply_damage_system,
             combat::death_system,
+            combat::level_up_system,
         )
             .chain(),
     );

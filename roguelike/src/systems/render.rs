@@ -5,13 +5,13 @@ use bevy_ratatui::RatatuiContext;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use crate::components::{Health, Inventory, Mana, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Experience, Health, Inventory, ItemKind, Level, Mana, Name, Player, Position, Renderable, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{
-    CameraPosition, CombatLog, GameMapResource, GameState, HelpVisible, KillCount,
-    SpellParticles, TurnCounter, WelcomeVisible,
+    CameraPosition, CombatLog, GameMapResource, GameState, InputMode,
+    InputState, KillCount, SpellParticles, TurnCounter,
 };
 use crate::systems::input::KEYBINDINGS;
 use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
@@ -47,17 +47,16 @@ pub fn draw_system(
     camera: Res<CameraPosition>,
     renderables: Query<(&Position, &Renderable, Option<&Name>)>,
     player_query: Query<
-        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Mana>, Option<&Inventory>),
+        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Mana>, Option<&Inventory>, Option<&Level>, Option<&Experience>),
         With<Player>,
     >,
-    item_names: Query<Option<&Name>, With<crate::components::Item>>,
+    item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
     turn_counter: Res<TurnCounter>,
     kill_count: Res<KillCount>,
-    help_visible: Res<HelpVisible>,
     spell_particles: Res<SpellParticles>,
-    welcome_visible: Res<WelcomeVisible>,
+    input_state: Res<InputState>,
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -88,22 +87,24 @@ pub fn draw_system(
         let render_height = game_area.height;
 
         // Collect the player's visible and revealed tiles.
-        let (visible_tiles, revealed_tiles, player_hp, player_mana, player_inv): (
+        let (visible_tiles, revealed_tiles, player_hp, player_mana, player_inv, player_level, player_exp): (
             Option<&HashSet<MyPoint>>,
             Option<&HashSet<MyPoint>>,
             Option<&Health>,
             Option<&Mana>,
             Option<&Inventory>,
+            Option<&Level>,
+            Option<&Experience>,
         ) = player_query
             .single()
             .ok()
-            .map(|(_, vs, hp, mp, inv)| {
+            .map(|(_, vs, hp, mp, inv, lvl, exp)| {
                 let (vis, rev) = vs
                     .map(|vs| (Some(&vs.visible_tiles), Some(&vs.revealed_tiles)))
                     .unwrap_or((None, None));
-                (vis, rev, hp, mp, inv)
+                (vis, rev, hp, mp, inv, lvl, exp)
             })
-            .unwrap_or((None, None, None, None, None));
+            .unwrap_or((None, None, None, None, None, None, None));
 
         let mut render_packet = game_map.0.create_render_packet_with_fog(
             &camera.0,
@@ -195,21 +196,33 @@ pub fn draw_system(
 
         frame.render_widget(Paragraph::new(Text::from(render_lines)).on_black(), game_area);
 
-        // Collect inventory item names for the side panel.
-        let inv_item_names: Vec<String> = player_inv
+        // Collect inventory item names and kinds for the side panel and inventory overlay.
+        let inv_item_info: Vec<(String, String)> = player_inv
             .map(|inv| {
                 inv.items
                     .iter()
                     .map(|&ent| {
-                        item_names
+                        let name = item_query
                             .get(ent)
                             .ok()
-                            .flatten()
-                            .map_or("item".to_string(), |n| n.0.clone())
+                            .and_then(|(n, _)| n)
+                            .map_or("item".to_string(), |n| n.0.clone());
+                        let desc = item_query
+                            .get(ent)
+                            .ok()
+                            .and_then(|(_, k)| k)
+                            .map_or("".to_string(), |k| match k {
+                                ItemKind::HealingPotion { amount } => format!("Heal {amount} HP"),
+                                ItemKind::Scroll { damage, radius } => format!("{damage} dmg r{radius}"),
+                                ItemKind::Armor { defense } => format!("+{defense} def"),
+                                ItemKind::Weapon { attack } => format!("+{attack} atk"),
+                            });
+                        (name, desc)
                     })
                     .collect()
             })
             .unwrap_or_default();
+        let inv_item_names: Vec<String> = inv_item_info.iter().map(|(n, _)| n.clone()).collect();
 
         // ── Side Panel ──────────────────────────────────────────
         render_side_panel(
@@ -221,6 +234,8 @@ pub fn draw_system(
             &inv_item_names,
             &visible_entity_infos,
             &combat_log,
+            player_level,
+            player_exp,
         );
 
         // ── Overlays ────────────────────────────────────────────
@@ -265,27 +280,54 @@ pub fn draw_system(
             }
         }
 
+        // Show "YOU DIED" overlay when the player has fallen
+        if *state.get() == GameState::Dead {
+            let label = " YOU DIED — Press Q to quit ";
+            let label_width = label.len() as u16;
+            if render_width >= label_width && render_height >= 1 {
+                let cx = game_area.x + (render_width - label_width) / 2;
+                let cy = game_area.y + render_height / 2;
+                let death_area = Rect {
+                    x: cx,
+                    y: cy,
+                    width: label_width,
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(label).bold()).on_red(),
+                    death_area,
+                );
+            }
+        }
+
         // Show help overlay when toggled
-        if help_visible.0 {
+        if input_state.help_visible {
             render_help_overlay(frame, game_area);
         }
 
         // Show welcome screen at game start
-        if welcome_visible.0 {
+        if input_state.welcome_visible {
             render_welcome_overlay(frame, game_area);
+        }
+
+        // Show inventory overlay when in Inventory input mode
+        if input_state.mode == InputMode::Inventory {
+            render_inventory_overlay(frame, game_area, &inv_item_info, input_state.inv_selection);
         }
 
         // ── Status bar ──────────────────────────────────────────
         let player_info = player_query
             .single()
-            .map(|(p, _, _, _, _)| format!("({}, {})", p.x, p.y))
+            .map(|(p, _, _, _, _, _, _)| format!("({}, {})", p.x, p.y))
             .unwrap_or_default();
+
+        let level_info = player_level.map_or(String::new(), |l| format!(" Lv:{}", l.0));
 
         let recent_msgs = combat_log.recent(STATUS_BAR_MESSAGE_COUNT);
         let last_msg = recent_msgs.join(" | ");
 
         let status = Line::from(format!(
-            " Gate of Hell | {player_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
+            " Gate of Hell | {player_info}{level_info} | Turn:{} Kills:{} | {last_msg} | ?/: help",
             turn_counter.0, kill_count.0,
         ));
         frame.render_widget(Paragraph::new(status).on_dark_gray(), status_area);
@@ -294,7 +336,7 @@ pub fn draw_system(
     Ok(())
 }
 
-/// Renders the side panel with HP gauge, Mana gauge, inventory, visible entities, and combat log.
+/// Renders the side panel with HP gauge, Mana gauge, Level/EXP, inventory, visible entities, and combat log.
 fn render_side_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
@@ -304,6 +346,8 @@ fn render_side_panel(
     inv_item_names: &[String],
     visible_entities: &[(String, RatColor, RatColor, String)],
     _combat_log: &CombatLog,
+    player_level: Option<&Level>,
+    player_exp: Option<&Experience>,
 ) {
     // Dynamic inventory height: 2 (border) + max(1, item_count)
     let item_count = player_inv.map_or(1, |inv| inv.items.len().max(1));
@@ -315,6 +359,7 @@ fn render_side_panel(
         .constraints([
             Constraint::Length(3),          // HP gauge
             Constraint::Length(3),          // Mana gauge
+            Constraint::Length(3),          // EXP gauge
             Constraint::Length(inv_height), // Inventory (dynamic)
             Constraint::Length(5),          // Combat log
             Constraint::Min(1),            // Visible entities
@@ -369,6 +414,30 @@ fn render_side_panel(
         );
     }
 
+    // ── EXP Gauge ───────────────────────────────────────────────
+    if let (Some(exp), Some(level)) = (player_exp, player_level) {
+        let ratio = if exp.next_level > 0 {
+            (exp.current as f64 / exp.next_level as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let gauge = Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title(format!("Lv.{}", level.0)))
+            .gauge_style(
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Green)
+                    .bg(ratatui::style::Color::DarkGray),
+            )
+            .ratio(ratio)
+            .label(Span::from(format!("{}/{}", exp.current, exp.next_level)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
+        frame.render_widget(gauge, chunks[2]);
+    } else {
+        frame.render_widget(
+            Block::default().borders(Borders::ALL).title("EXP"),
+            chunks[2],
+        );
+    }
+
     // ── Inventory ───────────────────────────────────────────────
     let mut inv_lines: Vec<Line> = Vec::new();
     if let Some(inv) = player_inv {
@@ -384,8 +453,8 @@ fn render_side_panel(
     }
     frame.render_widget(
         Paragraph::new(inv_lines)
-            .block(Block::default().borders(Borders::ALL).title("Bag [1-9]")),
-        chunks[2],
+            .block(Block::default().borders(Borders::ALL).title("Bag [I]")),
+        chunks[3],
     );
 
     // ── Combat Log ──────────────────────────────────────────────
@@ -402,11 +471,11 @@ fn render_side_panel(
         })
         .block(Block::default().borders(Borders::ALL).title("Log"))
         .wrap(Wrap { trim: true }),
-        chunks[3],
+        chunks[4],
     );
 
     // ── Visible Entities ────────────────────────────────────────
-    let max_visible = (chunks[4].height.saturating_sub(2)) as usize;
+    let max_visible = (chunks[5].height.saturating_sub(2)) as usize;
     let mut vis_lines: Vec<Line> = Vec::new();
     // Deduplicate: show each unique name only once.
     let mut seen_names: HashSet<String> = HashSet::new();
@@ -428,7 +497,7 @@ fn render_side_panel(
     frame.render_widget(
         Paragraph::new(vis_lines)
             .block(Block::default().borders(Borders::ALL).title("Visible")),
-        chunks[4],
+        chunks[5],
     );
 }
 
@@ -545,4 +614,87 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
             .on_black(),
         welcome_area,
     );
+}
+
+/// Renders the inventory overlay as a scrollable ratatui Table widget.
+fn render_inventory_overlay(
+    frame: &mut ratatui::Frame,
+    game_area: Rect,
+    items: &[(String, String)],
+    selected: usize,
+) {
+    let w = 44u16.min(game_area.width.saturating_sub(4));
+    let h = (items.len() as u16 + 6).min(game_area.height.saturating_sub(4)).max(8);
+
+    if w < 20 || h < 5 {
+        return;
+    }
+
+    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
+    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
+    let inv_area = Rect {
+        x: cx,
+        y: cy,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, inv_area);
+
+    if items.is_empty() {
+        let lines = vec![
+            Line::from(""),
+            Line::from("  Inventory is empty.").dark_gray(),
+            Line::from(""),
+            Line::from("  Press I or Esc to close").dark_gray(),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Inventory [I] ")
+                        .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
+                )
+                .on_black(),
+            inv_area,
+        );
+        return;
+    }
+
+    let rows: Vec<Row> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (name, desc))| {
+            let style = if i == selected {
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Black)
+                    .bg(ratatui::style::Color::Cyan)
+                    .bold()
+            } else {
+                ratatui::style::Style::default().fg(ratatui::style::Color::White)
+            };
+            Row::new(vec![format!("{}", i + 1), name.clone(), desc.clone()]).style(style)
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(3),
+        Constraint::Min(16),
+        Constraint::Length(14),
+    ];
+
+    let table = Table::new(rows, widths)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Inventory [I] — ↑↓ Navigate, Enter Use, Esc Close ")
+                .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
+        )
+        .header(
+            Row::new(vec!["#", "Item", "Effect"])
+                .style(ratatui::style::Style::default().bold().fg(ratatui::style::Color::Yellow)),
+        );
+
+    frame.render_widget(table, inv_area);
 }

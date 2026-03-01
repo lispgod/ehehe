@@ -23,3 +23,11 @@ pub struct DamageEvent {
     pub target: Entity,
     pub amount: CoordinateUnit,
 }
+
+/// Fired when the player casts an area-of-effect spell.
+/// Damages all hostile entities within `radius` tiles of the caster.
+#[derive(Message, Debug, Clone)]
+pub struct SpellCastIntent {
+    pub caster: Entity,
+    pub radius: CoordinateUnit,
+}

@@ -11,7 +11,7 @@ use roguelike::events::*;
 use roguelike::gamemap::GameMap;
 use roguelike::grid_vec::GridVec;
 use roguelike::resources::*;
-use roguelike::systems::{combat, movement, spatial_index};
+use roguelike::systems::{combat, movement, spatial_index, spell};
 
 // ─── Helper ──────────────────────────────────────────────────────
 
@@ -25,6 +25,7 @@ fn test_app() -> App {
     app.add_message::<DamageEvent>();
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
+    app.init_resource::<KillCount>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.add_systems(
         Update,
@@ -536,4 +537,246 @@ fn bidirectional_combat_both_take_damage() {
 
     let player_hp = app.world().get::<Health>(player).unwrap().current;
     assert!(player_hp < 30, "Player should have taken damage from monster");
+}
+
+// ─── Spell system tests ──────────────────────────────────────────
+
+/// Creates a minimal App wired for spell testing (includes spell system).
+fn test_app_with_spells() -> App {
+    let mut app = App::new();
+    app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_message::<MoveIntent>();
+    app.add_message::<AttackIntent>();
+    app.add_message::<DamageEvent>();
+    app.add_message::<SpellCastIntent>();
+    app.init_resource::<SpatialIndex>();
+    app.init_resource::<CombatLog>();
+    app.init_resource::<KillCount>();
+    app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
+    app.add_systems(
+        Update,
+        (
+            spatial_index::spatial_index_system,
+            movement::movement_system,
+            spell::spell_system,
+            combat::combat_system,
+            combat::apply_damage_system,
+            combat::death_system,
+        )
+            .chain(),
+    );
+    app
+}
+
+#[test]
+fn spell_damages_nearby_enemies() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // Monster within spell radius (2 tiles away, radius=3)
+    let monster = app.world_mut().spawn((
+        Position { x: 62, y: 40 },
+        Hostile,
+        BlocksMovement,
+        Name("Goblin".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 3, defense: 1 },
+    )).id();
+
+    app.update();
+
+    // Cast spell with radius 3
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    // Damage equals caster attack (5)
+    let monster_health = app.world().get::<Health>(monster).unwrap();
+    assert_eq!(monster_health.current, 5, "Monster should take spell damage equal to caster attack");
+}
+
+#[test]
+fn spell_does_not_damage_distant_enemies() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // Monster far outside spell radius
+    let monster = app.world_mut().spawn((
+        Position { x: 70, y: 40 },
+        Hostile,
+        BlocksMovement,
+        Name("FarGoblin".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 3, defense: 1 },
+    )).id();
+
+    app.update();
+
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    let monster_health = app.world().get::<Health>(monster).unwrap();
+    assert_eq!(monster_health.current, 10, "Distant monster should not be hit by spell");
+}
+
+#[test]
+fn spell_hits_multiple_enemies() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // Two monsters within radius
+    let m1 = app.world_mut().spawn((
+        Position { x: 61, y: 40 },
+        Hostile,
+        BlocksMovement,
+        Name("Goblin1".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 3, defense: 1 },
+    )).id();
+
+    let m2 = app.world_mut().spawn((
+        Position { x: 60, y: 41 },
+        Hostile,
+        BlocksMovement,
+        Name("Goblin2".into()),
+        Health { current: 10, max: 10 },
+        CombatStats { attack: 3, defense: 1 },
+    )).id();
+
+    app.update();
+
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    let m1_health = app.world().get::<Health>(m1).unwrap();
+    let m2_health = app.world().get::<Health>(m2).unwrap();
+    assert_eq!(m1_health.current, 5, "First monster should be damaged by spell");
+    assert_eq!(m2_health.current, 5, "Second monster should be damaged by spell");
+}
+
+#[test]
+fn spell_kills_weak_enemy_and_increments_kill_count() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // Weak monster that will die from spell damage
+    let monster = app.world_mut().spawn((
+        Position { x: 61, y: 40 },
+        Hostile,
+        BlocksMovement,
+        Name("Weakling".into()),
+        Health { current: 3, max: 3 },
+        CombatStats { attack: 1, defense: 0 },
+    )).id();
+
+    app.update();
+
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    // Monster should be despawned
+    assert!(
+        app.world().get::<Health>(monster).is_none(),
+        "Weak monster should be killed by spell"
+    );
+
+    // Kill count should be incremented
+    let kills = app.world().resource::<KillCount>();
+    assert_eq!(kills.0, 1, "Kill count should be 1 after killing a hostile");
+}
+
+// ─── Kill count tests ────────────────────────────────────────────
+
+#[test]
+fn kill_count_increments_on_hostile_death() {
+    let mut app = test_app();
+    let player = spawn_test_player(&mut app, 60, 40);
+    let _monster = app.world_mut().spawn((
+        Position { x: 61, y: 40 },
+        Hostile,
+        BlocksMovement,
+        Name("Weakling".into()),
+        Health { current: 1, max: 1 },
+        CombatStats { attack: 1, defense: 0 },
+    )).id();
+
+    app.update();
+
+    // Player kills the monster
+    app.world_mut().write_message(MoveIntent {
+        entity: player,
+        dx: 1,
+        dy: 0,
+    });
+    app.update();
+
+    let kills = app.world().resource::<KillCount>();
+    assert_eq!(kills.0, 1, "Kill count should increment when hostile entity dies");
+}
+
+#[test]
+fn spell_no_hit_logs_message() {
+    let mut app = test_app_with_spells();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5, defense: 2 },
+    )).id();
+
+    // No enemies nearby
+    app.update();
+
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+    });
+    app.update();
+
+    let log = app.world().resource::<CombatLog>();
+    assert!(
+        log.messages.iter().any(|m| m.contains("hits nothing")),
+        "Combat log should note spell hit nothing"
+    );
 }

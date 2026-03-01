@@ -3,8 +3,11 @@ use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::components::Player;
-use crate::events::MoveIntent;
+use crate::events::{MoveIntent, SpellCastIntent};
 use crate::resources::{GameState, TurnState};
+
+/// Default radius for the player's area-of-effect spell.
+const SPELL_RADIUS: i32 = 3;
 
 /// Reads keyboard input. Global keys (quit, pause) are always handled.
 /// Movement keys are only processed while `TurnState::AwaitingInput`,
@@ -14,6 +17,7 @@ pub fn input_system(
     mut messages: MessageReader<KeyMessage>,
     mut exit: MessageWriter<AppExit>,
     mut move_intents: MessageWriter<MoveIntent>,
+    mut spell_intents: MessageWriter<SpellCastIntent>,
     player_query: Query<Entity, With<Player>>,
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
@@ -52,6 +56,16 @@ pub fn input_system(
             }
             KeyCode::Char('d') | KeyCode::Right if awaiting_input => {
                 emit_move(&mut move_intents, &mut next_turn_state, player_entity, 1, 0);
+            }
+            // Spell cast: area-of-effect attack around the player
+            KeyCode::Char('f') | KeyCode::Char(' ') if awaiting_input => {
+                spell_intents.write(SpellCastIntent {
+                    caster: player_entity,
+                    radius: SPELL_RADIUS,
+                });
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
             }
             _ => {}
         }

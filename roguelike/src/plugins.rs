@@ -6,14 +6,15 @@ use crate::components::{
     AiState, BlocksMovement, CameraFollow, CombatStats, Energy, Health, Hostile, Name,
     Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
 };
-use crate::events::{AttackIntent, DamageEvent, MoveIntent};
+use crate::events::{AttackIntent, DamageEvent, MoveIntent, SpellCastIntent};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
-    CameraPosition, CombatLog, GameMapResource, GameState, MapSeed, SpatialIndex, TurnState,
+    CameraPosition, CombatLog, GameMapResource, GameState, KillCount, MapSeed, SpatialIndex,
+    TurnCounter, TurnState,
 };
-use crate::systems::{ai, camera, combat, input, movement, render, spatial_index, turn, visibility};
+use crate::systems::{ai, camera, combat, input, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
 use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y};
 
 // ─────────────────────────── System Sets ───────────────────────────
@@ -61,12 +62,15 @@ impl Plugin for RoguelikePlugin {
             .add_message::<MoveIntent>()
             .add_message::<AttackIntent>()
             .add_message::<DamageEvent>()
+            .add_message::<SpellCastIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
             .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
             .insert_resource(CameraPosition(SPAWN_POINT))
             .init_resource::<SpatialIndex>()
             .init_resource::<CombatLog>()
+            .init_resource::<TurnCounter>()
+            .init_resource::<KillCount>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -95,6 +99,7 @@ impl Plugin for RoguelikePlugin {
                 Update,
                 (
                     movement::movement_system,
+                    spell::spell_system,
                     combat::combat_system,
                     combat::apply_damage_system,
                     combat::death_system,
@@ -121,12 +126,13 @@ impl Plugin for RoguelikePlugin {
                     .after(RoguelikeSet::Consequence)
                     .run_if(in_state(TurnState::PlayerTurn)),
             )
-            // ── World turn: energy accumulation + AI + action resolution ──
+            // ── World turn: energy accumulation + AI + wave spawning + action resolution ──
             .add_systems(
                 Update,
                 (
                     ai::energy_accumulate_system,
                     ai::ai_system,
+                    wave_spawn::wave_spawn_system,
                 )
                     .chain()
                     .after(RoguelikeSet::Consequence)
@@ -135,7 +141,7 @@ impl Plugin for RoguelikePlugin {
             .add_systems(
                 Update,
                 turn::end_world_turn
-                    .after(ai::ai_system)
+                    .after(wave_spawn::wave_spawn_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             )
             // ── Render (always runs — shows PAUSED overlay when paused) ──

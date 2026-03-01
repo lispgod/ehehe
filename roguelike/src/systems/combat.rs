@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Health, Name};
+use crate::components::{CombatStats, Health, Hostile, Name};
 use crate::events::{AttackIntent, DamageEvent};
-use crate::resources::CombatLog;
+use crate::resources::{CombatLog, KillCount};
 
 /// Resolves attack intents into damage events.
 ///
@@ -51,16 +51,21 @@ pub fn apply_damage_system(
 }
 
 /// Despawns entities whose health has reached zero.
-/// Logs a death message and removes the entity from the world.
+/// Logs a death message, increments the kill counter for hostile entities,
+/// and removes the entity from the world.
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>)>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>)>,
     mut combat_log: ResMut<CombatLog>,
+    mut kill_count: ResMut<KillCount>,
 ) {
-    for (entity, health, name) in &query {
+    for (entity, health, name, hostile) in &query {
         if health.current <= 0 {
             let label = name.map_or("Something", |n| &n.0);
             combat_log.push(format!("{label} has been slain!"));
+            if hostile.is_some() {
+                kill_count.0 += 1;
+            }
             commands.entity(entity).despawn();
         }
     }

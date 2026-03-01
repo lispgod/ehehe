@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod camera;
 pub mod combat;
+pub mod corruption;
 pub mod input;
 pub mod movement;
 pub mod render;

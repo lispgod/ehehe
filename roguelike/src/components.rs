@@ -134,6 +134,11 @@ pub enum AiState {
 #[derive(Component, Debug)]
 pub struct Hostile;
 
+/// Marker component: tags the Hell Gate entity.
+/// When destroyed, the player wins the game.
+#[derive(Component, Debug)]
+pub struct HellGate;
+
 #[cfg(test)]
 mod tests {
     use super::*;

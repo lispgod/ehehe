@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Health, Hostile, Name};
+use crate::components::{CombatStats, Health, HellGate, Hostile, Name};
 use crate::events::{AttackIntent, DamageEvent};
-use crate::resources::{CombatLog, KillCount};
+use crate::resources::{CombatLog, GameState, KillCount};
 
 /// Resolves attack intents into damage events.
 ///
@@ -52,19 +52,25 @@ pub fn apply_damage_system(
 
 /// Despawns entities whose health has reached zero.
 /// Logs a death message, increments the kill counter for hostile entities,
-/// and removes the entity from the world.
+/// and removes the entity from the world. If the Hell Gate is destroyed,
+/// transitions to the Victory state.
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>)>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&HellGate>)>,
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
+    mut next_game_state: ResMut<NextState<GameState>>,
 ) {
-    for (entity, health, name, hostile) in &query {
+    for (entity, health, name, hostile, hell_gate) in &query {
         if health.current <= 0 {
             let label = name.map_or("Something", |n| &n.0);
             combat_log.push(format!("{label} has been slain!"));
             if hostile.is_some() {
                 kill_count.0 += 1;
+            }
+            if hell_gate.is_some() {
+                combat_log.push("The Gate of Hell crumbles! You are victorious!".into());
+                next_game_state.set(GameState::Victory);
             }
             commands.entity(entity).despawn();
         }

@@ -20,12 +20,14 @@ use roguelike::systems::{combat, movement, spatial_index, spell};
 fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_plugins(bevy::state::app::StatesPlugin);
     app.add_message::<MoveIntent>();
     app.add_message::<AttackIntent>();
     app.add_message::<DamageEvent>();
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.add_systems(
         Update,
@@ -545,6 +547,7 @@ fn bidirectional_combat_both_take_damage() {
 fn test_app_with_spells() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_plugins(bevy::state::app::StatesPlugin);
     app.add_message::<MoveIntent>();
     app.add_message::<AttackIntent>();
     app.add_message::<DamageEvent>();
@@ -552,6 +555,7 @@ fn test_app_with_spells() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
+    app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.add_systems(
         Update,

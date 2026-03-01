@@ -115,6 +115,10 @@ pub fn wave_spawn_system(
     let count = WAVE_BASE_COUNT + wave_number.saturating_sub(1) * WAVE_SCALE_PER_CYCLE;
 
     // Stat scaling: monsters get stronger as waves progress.
+    // Bonuses start small and ramp up gradually:
+    //   wave 1: +2 HP, +0 atk, +0 def
+    //   wave 3: +6 HP, +1 atk, +1 def
+    //   wave 6: +12 HP, +3 atk, +2 def
     let health_bonus = (wave_number as i32) * 2;
     let attack_bonus = (wave_number as i32) / 2;
     let defense_bonus = (wave_number as i32) / 3;

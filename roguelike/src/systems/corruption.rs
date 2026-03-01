@@ -9,7 +9,7 @@ use crate::typedefs::GATE_POINT;
 /// Base corruption radius at turn 0.
 const BASE_CORRUPTION_RADIUS: i32 = 2;
 
-/// Additional corruption radius per wave (every 3 turns).
+/// Corruption radius growth per turn (0.4 tiles per turn, ~1.2 per wave).
 const CORRUPTION_GROWTH_RATE: f64 = 0.4;
 
 /// Spreads corruption around the Hell Gate as turns progress.
@@ -49,13 +49,15 @@ pub fn corruption_system(
                     continue;
                 }
 
-                // Remove furniture consumed by corruption.
-                if voxel.furniture.is_some() && dist_sq < radius_sq / 2 {
+                // Inner ring vs outer ring threshold.
+                let inner_sq = (corruption_radius / 2) * (corruption_radius / 2);
+
+                // Remove furniture consumed by corruption (inner zone only).
+                if voxel.furniture.is_some() && dist_sq < inner_sq {
                     voxel.furniture = None;
                 }
 
                 // Inner ring: lava. Outer ring: scorched earth.
-                let inner_sq = (corruption_radius / 2) * (corruption_radius / 2);
                 if let Some(ref floor) = voxel.floor {
                     if !matches!(floor, Floor::Lava | Floor::ScorchedEarth) {
                         if dist_sq <= inner_sq {

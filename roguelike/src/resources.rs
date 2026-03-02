@@ -238,6 +238,13 @@ impl CombatLog {
 #[derive(Resource, Debug, Default)]
 pub struct RestartRequested(pub bool);
 
+/// Extra world ticks remaining after a player action. Physical movement sets
+/// this to 1 so that the world turn cycles twice (2 total ticks), making
+/// physical movement slower than cursor movement (1 tick). The `end_world_turn`
+/// system decrements this and stays in `WorldTurn` while it is positive.
+#[derive(Resource, Debug, Default)]
+pub struct ExtraWorldTicks(pub i32);
+
 /// Collectible supplies stored separately from inventory slots.
 /// These don't occupy inventory slots and are tracked by quantity.
 #[derive(Resource, Debug, Clone)]

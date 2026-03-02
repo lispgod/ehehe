@@ -12,7 +12,7 @@ use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
-    CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputState,
+    CameraPosition, Collectibles, CombatLog, CursorPosition, ExtraWorldTicks, GameMapResource, GameState, InputState,
     KillCount, MapSeed, PendingExp, RestartRequested, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
@@ -87,6 +87,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<RestartRequested>()
             .init_resource::<CursorPosition>()
             .init_resource::<Collectibles>()
+            .init_resource::<ExtraWorldTicks>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -355,6 +356,7 @@ fn restart_system(
     mut camera: ResMut<CameraPosition>,
     mut cursor: ResMut<CursorPosition>,
     mut collectibles: ResMut<Collectibles>,
+    mut extra_ticks: ResMut<ExtraWorldTicks>,
 ) {
     if !restart.0 {
         return;
@@ -374,6 +376,7 @@ fn restart_system(
     camera.0 = SPAWN_POINT;
     *cursor = CursorPosition::default();
     *collectibles = Collectibles::default();
+    extra_ticks.0 = 0;
     *game_map = GameMapResource(GameMap::new(120, 80, seed.0));
 
     next_game_state.set(GameState::Playing);

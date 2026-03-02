@@ -241,6 +241,13 @@ pub enum AiState {
     Chasing,
 }
 
+/// Directional cursor for enemy entities. Defines which direction the enemy is
+/// currently looking. Used by the visibility system to restrict the enemy's
+/// viewshed to a cone (mirroring the player's cursor-based FOV). Enemies must
+/// spend ticks to rotate their look direction, making awareness directional.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AiLookDir(pub GridVec);
+
 /// Marker component: tags entities hostile to the player.
 /// Used by bump-to-attack: moving into a hostile entity's tile triggers combat.
 #[derive(Component, Debug)]

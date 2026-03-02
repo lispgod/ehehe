@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::components::{Player, Position, Viewshed};
+use crate::components::{AiLookDir, Player, Position, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{CursorPosition, GameMapResource};
 use crate::typedefs::{CoordinateUnit, MyPoint};
@@ -19,13 +19,13 @@ use crate::typedefs::{CoordinateUnit, MyPoint};
 ///   3. **Efficiency** — each visible tile is visited at most once per octant.
 pub fn visibility_system(
     game_map: Res<GameMapResource>,
-    mut query: Query<(Entity, &Position, &mut Viewshed)>,
+    mut query: Query<(Entity, &Position, &mut Viewshed, Option<&AiLookDir>)>,
     player_query: Query<Entity, With<Player>>,
     cursor: Res<CursorPosition>,
 ) {
     let player_entity = player_query.single().ok();
 
-    for (entity, pos, mut viewshed) in &mut query {
+    for (entity, pos, mut viewshed, ai_look_dir) in &mut query {
         if !viewshed.dirty {
             continue;
         }
@@ -51,26 +51,32 @@ pub fn visibility_system(
             );
         }
 
-        // Directional FOV: filter player's visible tiles to a cone toward the cursor.
-        if player_entity == Some(entity) {
-            let cursor_dir = cursor.pos - origin;
-            if !cursor_dir.is_zero() {
-                let (cdx, cdy) = (cursor_dir.x as f64, cursor_dir.y as f64);
-                let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
-                // cos(60°) ≈ 0.5 gives a 120° cone (half-angle 60°)
-                let cos_threshold = 0.5_f64;
+        // Directional FOV: filter visible tiles to a cone.
+        // For the player: cone toward the cursor position.
+        // For enemies with AiLookDir: cone toward their look direction.
+        let cone_dir = if player_entity == Some(entity) {
+            let d = cursor.pos - origin;
+            if d.is_zero() { None } else { Some(d) }
+        } else {
+            ai_look_dir.map(|look| look.0).filter(|d| !d.is_zero())
+        };
 
-                viewshed.visible_tiles.retain(|&tile| {
-                    let diff = tile - origin;
-                    if diff == GridVec::ZERO {
-                        return true; // always see own tile
-                    }
-                    let (dx, dy) = (diff.x as f64, diff.y as f64);
-                    let len = (dx * dx + dy * dy).sqrt();
-                    let dot = (dx * cdx + dy * cdy) / (len * cursor_len);
-                    dot >= cos_threshold
-                });
-            }
+        if let Some(dir) = cone_dir {
+            let (cdx, cdy) = (dir.x as f64, dir.y as f64);
+            let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
+            // cos(60°) ≈ 0.5 gives a 120° cone (half-angle 60°)
+            let cos_threshold = 0.5_f64;
+
+            viewshed.visible_tiles.retain(|&tile| {
+                let diff = tile - origin;
+                if diff == GridVec::ZERO {
+                    return true; // always see own tile
+                }
+                let (dx, dy) = (diff.x as f64, diff.y as f64);
+                let len = (dx * dx + dy * dy).sqrt();
+                let dot = (dx * cdx + dy * cdy) / (len * cursor_len);
+                dot >= cos_threshold
+            });
         }
 
         // Merge visible into revealed (fog of war memory).

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::{Health, Stamina, Player};
-use crate::resources::{TurnCounter, TurnState};
+use crate::resources::{ExtraWorldTicks, TurnCounter, TurnState};
 
 /// Stamina regenerated per world turn.
 const STAMINA_REGEN_PER_TURN: i32 = 2;
@@ -18,14 +18,14 @@ pub fn end_player_turn(mut next_state: ResMut<NextState<TurnState>>) {
     next_state.set(TurnState::WorldTurn);
 }
 
-/// Advances the turn state from `WorldTurn` → `AwaitingInput`.
-/// Increments the turn counter each world turn, which drives wave spawning.
-/// Also regenerates player stamina and health each turn.
-/// Runs only during `TurnState::WorldTurn` after all world-phase systems.
+/// Advances the turn state from `WorldTurn` → `AwaitingInput`, or stays in
+/// `WorldTurn` if `ExtraWorldTicks` has remaining ticks (physical movement
+/// costs 2 ticks). Increments the turn counter and regenerates player stats.
 pub fn end_world_turn(
     mut next_state: ResMut<NextState<TurnState>>,
     mut turn_counter: ResMut<TurnCounter>,
     mut player_query: Query<(&mut Stamina, &mut Health), With<Player>>,
+    mut extra_ticks: ResMut<ExtraWorldTicks>,
 ) {
     turn_counter.0 += 1;
 
@@ -39,5 +39,10 @@ pub fn end_world_turn(
         }
     }
 
-    next_state.set(TurnState::AwaitingInput);
+    if extra_ticks.0 > 0 {
+        extra_ticks.0 -= 1;
+        // Stay in WorldTurn for the extra tick — don't transition yet.
+    } else {
+        next_state.set(TurnState::AwaitingInput);
+    }
 }

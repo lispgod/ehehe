@@ -598,7 +598,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     lines.push(Line::from(""));
     for binding in KEYBINDINGS {
         lines.push(Line::from(vec![
-            Span::from(format!(" {:<14}", binding.key)).bold().yellow(),
+            Span::from(format!(" {:<16}", binding.key)).bold().yellow(),
             Span::from(binding.name.to_string()).white(),
         ]));
     }
@@ -623,7 +623,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
 fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     let binding_count = KEYBINDINGS.len() as u16;
     let w = 62u16.min(game_area.width.saturating_sub(4));
-    // title(1) + blank(1) + objective(4) + blank(1) + bindings + blank(1) + press-any(1) + border(2)
+    // narrative(3) + blank(1) + objective(2) + blank(1) + bindings + blank(1) + press-any(1) + border(2)
     let h = (binding_count + 13).min(game_area.height.saturating_sub(4));
 
     if w < 20 || h < 10 {
@@ -645,17 +645,17 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
         Line::from(""),
         Line::from("  -*-  DEAD MAN'S HAND  -*-").bold().yellow(),
         Line::from(""),
-        Line::from("  Destroy the Outlaw Hideout (Ω) to win!").white(),
-        Line::from("  Enemies will keep spawning from it.").white(),
-        Line::from("  Enemies drop items that are").white(),
-        Line::from("  auto-picked up on contact.").white(),
-        Line::from("  Cowboys can shoot at you from range!").white(),
+        Line::from("  You're a cowboy drinking in a saloon").white(),
+        Line::from("  when bandits raid your town!").white(),
+        Line::from(""),
+        Line::from("  Destroy the Outlaw Hideout (Ω) to win.").dark_gray(),
+        Line::from("  Enemies spawn from it endlessly.").dark_gray(),
         Line::from(""),
     ];
     for binding in KEYBINDINGS {
         lines.push(Line::from(vec![
-            Span::from(format!("  {:<14}", binding.key)).bold().yellow(),
-            Span::from(format!("  {}", binding.name)).white(),
+            Span::from(format!("  {:<16}", binding.key)).bold().yellow(),
+            Span::from(binding.name.to_string()).white(),
         ]));
     }
     lines.push(Line::from(""));

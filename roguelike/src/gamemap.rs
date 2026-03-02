@@ -233,6 +233,9 @@ fn select_desert_floor(biome: f64, detail: f64) -> Floor {
     }
 }
 
+/// Number of distinct building types used during town generation.
+const BUILDING_TYPE_COUNT: u32 = 6;
+
 /// Generates deterministic building footprints for the western town.
 ///
 /// Buildings are placed in rows above and below the main street.
@@ -266,13 +269,13 @@ fn generate_buildings(
 
             // Don't exceed row bounds or map bounds
             if by + bh <= row_max_y && by > 0 && by + bh < height - 1 && cx + bw < width - 1 {
-                let kind = (kind_noise * 6.0) as u32;
+                let kind = (kind_noise * BUILDING_TYPE_COUNT as f64) as u32;
                 buildings.push(Building {
                     x: cx,
                     y: by,
                     w: bw,
                     h: bh,
-                    kind: kind.min(5),
+                    kind: kind.min(BUILDING_TYPE_COUNT - 1),
                 });
             }
 

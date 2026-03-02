@@ -297,7 +297,7 @@ pub fn draw_system(
                 for tile in vt {
                     if let Some(voxel) = game_map.0.get_voxel_at(tile) {
                         if let Some(ref furn) = voxel.furniture {
-                            let name = format!("{furn:?}");
+                            let name = format!("{furn}");
                             if seen.insert(name.clone()) {
                                 items.push((furn.symbol(), furn.fg_color(), name));
                             }

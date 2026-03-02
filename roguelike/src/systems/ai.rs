@@ -3,8 +3,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Viewshed};
-use crate::events::{AiRangedAttackIntent, AttackIntent, MolotovCastIntent, MoveIntent, SpellCastIntent};
+use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
+use crate::events::{AiRangedAttackIntent, AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, SpellCastIntent, ThrowItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
 use crate::typeenums::Furniture;
@@ -241,13 +241,14 @@ const PATROL_RADIUS: i32 = 8;
 ///   - Outlaws: skulk (move slowly, stay near buildings).
 /// - **Chasing**: use **A\* pathfinding** to pursue the player or nearest
 ///   hostile faction entity. NPCs with guns fire them; NPCs with throwables
-///   (dynamite, molotovs) use them at range.
+///   (dynamite, molotovs, knives, tomahawks) use them at range. NPCs heal
+///   with whiskey when wounded, and use melee wide attacks when surrounded.
 ///
 /// NPCs also fight entities of hostile factions (outlaws vs lawmen vs wildlife).
 pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position), With<Player>>,
@@ -255,16 +256,16 @@ pub fn ai_system(
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     // Query all items on the floor (have Position + Item, no inventory ownership)
     floor_items: Query<(Entity, &Position), With<Item>>,
+    // Query hostiles to check for adjacent enemies (melee wide)
+    hostile_positions: Query<(Entity, &Position), With<Hostile>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
     turn_counter: Res<TurnCounter>,
     blockers: Query<(), With<BlocksMovement>>,
     mut item_kinds: Query<&mut ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
-    mut ranged_intents: MessageWriter<AiRangedAttackIntent>,
-    mut attack_intents: MessageWriter<AttackIntent>,
-    mut spell_intents: MessageWriter<SpellCastIntent>,
-    mut molotov_intents: MessageWriter<MolotovCastIntent>,
+    (mut ranged_intents, mut attack_intents, mut spell_intents): (MessageWriter<AiRangedAttackIntent>, MessageWriter<AttackIntent>, MessageWriter<SpellCastIntent>),
+    (mut molotov_intents, mut melee_wide_intents, mut throw_intents): (MessageWriter<MolotovCastIntent>, MessageWriter<MeleeWideIntent>, MessageWriter<ThrowItemIntent>),
     (dynamic_rng, seed, spell_particles): (Res<crate::resources::DynamicRng>, Res<crate::resources::MapSeed>, Res<crate::resources::SpellParticles>),
 ) {
     let player_info = player_query.single().ok();
@@ -276,7 +277,7 @@ pub fn ai_system(
         .map(|(pos, _, _, _)| *pos)
         .collect();
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin, mut inventory) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin, mut inventory, mut health, mut stamina, combat_stats) in &mut ai_query {
         // Only act if enough energy has accumulated.
         if !energy.can_act() {
             continue;
@@ -348,6 +349,89 @@ pub fn ai_system(
                         commands.entity(item_ent).remove::<Position>();
                         inv.items.push(item_ent);
                     }
+
+        // ── NPC Healing: use whiskey when HP < 50% ──────────────────
+        // Humanoid NPCs (with inventory) will consume a whiskey item to
+        // heal themselves, just like the player can.
+        let mut healed_this_turn = false;
+        if let Some(ref hp) = health
+            && !hp.is_full()
+            && hp.fraction() < 0.5
+            && let Some(ref mut inv) = inventory
+        {
+            let whiskey_idx = inv.items.iter().position(|&ent| {
+                item_kinds.get(ent).ok().is_some_and(|k|
+                    matches!(*k, ItemKind::Whiskey { .. })
+                )
+            });
+            if let Some(idx) = whiskey_idx {
+                let whiskey_ent = inv.items[idx];
+                if let Ok(kind) = item_kinds.get(whiskey_ent) {
+                    if let ItemKind::Whiskey { heal } = *kind {
+                        if let Some(ref mut hp_mut) = health {
+                            hp_mut.heal(heal);
+                        }
+                        inv.items.remove(idx);
+                        commands.entity(whiskey_ent).despawn();
+                        healed_this_turn = true;
+                    }
+                }
+            }
+        }
+        if healed_this_turn {
+            energy.spend_action();
+            continue;
+        }
+
+        // ── Count adjacent hostile entities (for melee wide decision) ────
+        let adjacent_enemy_count = {
+            let mut count = 0;
+            for dir in GridVec::DIRECTIONS_8 {
+                let neighbor = my_pos + dir;
+                let has_enemy = spatial.entities_at(&neighbor).iter().any(|&e| {
+                    e != entity && hostile_positions.contains(e)
+                });
+                // Also check if player is adjacent (for hostile NPCs)
+                let has_player = player_vec.is_some_and(|pv| pv == neighbor);
+                if has_enemy || has_player {
+                    count += 1;
+                }
+            }
+            count
+        };
+
+        // ── NPC Dodge: sidestep when projectile is nearby ────────────
+        // If there are spell particles (explosion shrapnel) near the NPC,
+        // attempt to dodge away. 20% chance to dodge each turn.
+        let dodge_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0xD0D6);
+        let nearby_danger = spell_particles.particles.iter().any(|(p, life, delay, _)| {
+            *delay == 0 && *life > 0 && my_pos.chebyshev_distance(*p) <= 2
+        });
+        if nearby_danger && dodge_roll < 0.20 {
+            // Find a safe direction to dodge
+            let mut best_dir = None;
+            let mut best_dist = 0;
+            for dir in GridVec::DIRECTIONS_8 {
+                let target = my_pos + dir;
+                if is_walkable_for_ai(target, entity, &game_map, &spatial, &blockers) {
+                    let min_particle_dist = spell_particles.particles.iter()
+                        .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
+                        .map(|(p, _, _, _)| target.chebyshev_distance(*p))
+                        .min()
+                        .unwrap_or(i32::MAX);
+                    if min_particle_dist > best_dist {
+                        best_dist = min_particle_dist;
+                        best_dir = Some(dir);
+                    }
+                }
+            }
+            if let Some(dir) = best_dir {
+                move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
+                update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
+                energy.spend_action();
+                continue;
+            }
+        }
 
         match *ai {
             AiState::Idle => {
@@ -545,6 +629,63 @@ pub fn ai_system(
                         }
                     }
                 if used_throwable {
+                    energy.spend_action();
+                    continue;
+                }
+
+                // ── Throw knives/tomahawks at medium range ──────────────
+                // NPCs use thrown weapons like the player does.
+                let mut used_thrown_weapon = false;
+                if (2..=8).contains(&dist)
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && let Some(ref mut inv) = inventory {
+                        let knife_idx = inv.items.iter().position(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(*k, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. })
+                            )
+                        });
+                        if let Some(idx) = knife_idx {
+                            let item_ent = inv.items[idx];
+                            if let Ok(kind) = item_kinds.get(item_ent) {
+                                let (dmg, range) = match *kind {
+                                    ItemKind::Knife { attack } => (attack, 12),
+                                    ItemKind::Tomahawk { attack } => (attack, 10),
+                                    _ => (0, 0),
+                                };
+                                if dmg > 0 {
+                                    let toward = (target_vec - my_pos).king_step();
+                                    throw_intents.write(ThrowItemIntent {
+                                        thrower: entity,
+                                        item_entity: item_ent,
+                                        item_index: idx,
+                                        dx: toward.x,
+                                        dy: toward.y,
+                                        range,
+                                        damage: dmg,
+                                    });
+                                    used_thrown_weapon = true;
+                                }
+                            }
+                        }
+                    }
+                if used_thrown_weapon {
+                    energy.spend_action();
+                    continue;
+                }
+
+                // ── Melee wide (roundhouse kick) when surrounded ─────────
+                // If 2+ enemies are adjacent, use melee wide attack
+                // (same ability as the player's roundhouse kick).
+                if adjacent_enemy_count >= 2
+                    && stamina.as_ref().is_some_and(|s| s.current >= 15)
+                    && combat_stats.is_some()
+                {
+                    if let Some(ref mut sta) = stamina {
+                        sta.spend(15);
+                    }
+                    melee_wide_intents.write(MeleeWideIntent {
+                        attacker: entity,
+                    });
                     energy.spend_action();
                     continue;
                 }

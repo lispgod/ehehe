@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     Ammo, BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience,
-    Health, Inventory, Item, ItemKind, Level, Stamina, Name, Player, Position,
+    Health, Inventory, Item, ItemKind, Level, Outfit, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
@@ -53,12 +53,18 @@ pub struct RoguelikePlugin;
 
 impl Plugin for RoguelikePlugin {
     fn build(&self, app: &mut App) {
-        // Use an existing MapSeed if the user inserted one, otherwise default.
+        // Use an existing MapSeed if the user inserted one, otherwise use a
+        // time-based seed for a unique experience each playthrough.
         let seed = app
             .world()
             .get_resource::<MapSeed>()
             .map(|s| s.0)
-            .unwrap_or(42);
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(42)
+            });
 
         app.add_plugins(bevy::state::app::StatesPlugin)
             // ── Messages ──
@@ -76,7 +82,7 @@ impl Plugin for RoguelikePlugin {
             .add_message::<MolotovCastIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
-            .insert_resource(GameMapResource(GameMap::new(200, 140, seed)))
+            .insert_resource(GameMapResource(GameMap::new(400, 280, seed)))
             .insert_resource(CameraPosition(SPAWN_POINT))
             .init_resource::<SpatialIndex>()
             .init_resource::<CombatLog>()
@@ -120,6 +126,7 @@ impl Plugin for RoguelikePlugin {
                 Update,
                 (
                     movement::movement_system,
+                    movement::cactus_damage_system,
                     inventory::pickup_system,
                     inventory::auto_pickup_system,
                     inventory::use_item_system,
@@ -195,8 +202,8 @@ impl Plugin for RoguelikePlugin {
 }
 
 /// Spawns the player entity with all required ECS components.
-fn spawn_player(mut commands: Commands) {
-    do_spawn_player(&mut commands);
+fn spawn_player(mut commands: Commands, seed: Res<MapSeed>) {
+    do_spawn_player(&mut commands, seed.0);
 }
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
@@ -206,24 +213,86 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
     do_spawn_monsters(&mut commands, &map, seed.0);
 }
 
+/// Generates a procedural outfit description for the player character.
+/// Uses the map seed to produce a different look each playthrough.
+fn generate_outfit(seed: u64) -> String {
+    const HATS: &[&str] = &[
+        "a dusty Stetson", "a wide-brimmed gambler hat", "a worn felt hat",
+        "a battered cavalry hat", "a low-crown Boss of the Plains",
+        "a sun-bleached plantation hat", "a creased cattleman hat",
+        "no hat — just wind-swept hair",
+    ];
+    const SHIRTS: &[&str] = &[
+        "a faded red flannel shirt", "a collarless muslin pullover",
+        "a stained white cotton shirt", "a dark wool vest over a henley",
+        "a patched buckskin shirt", "a dusty denim work shirt",
+        "a striped calico shirt", "a sweat-soaked chambray shirt",
+    ];
+    const BOTTOMS: &[&str] = &[
+        "canvas trousers held up by suspenders", "worn leather chaps over dungarees",
+        "dark wool trousers tucked into boots", "faded denim jeans with frayed cuffs",
+        "buckskin leggings", "dust-caked cavalry trousers",
+        "patched corduroy pants", "brown cotton work pants",
+    ];
+    const EXTRAS: &[&str] = &[
+        "a sun-faded bandana around the neck", "a leather gun belt slung low",
+        "spurs that jingle with every step", "a rawhide lariat coiled at the hip",
+        "a tattered serape draped over one shoulder", "a tobacco pouch in the breast pocket",
+        "a pocket watch chain glinting at the waist", "dust on every inch of cloth",
+    ];
+
+    // Prime multipliers and bit-shifts decorrelate selections across categories.
+    let h = (seed.wrapping_mul(7919) >> 3) as usize % HATS.len();
+    let s = (seed.wrapping_mul(104729) >> 5) as usize % SHIRTS.len();
+    let b = (seed.wrapping_mul(3571) >> 7) as usize % BOTTOMS.len();
+    let e = (seed.wrapping_mul(9103) >> 2) as usize % EXTRAS.len();
+
+    format!("Wearing {}, {}, {}, and {}.",
+        HATS[h], SHIRTS[s], BOTTOMS[b], EXTRAS[e])
+}
+
 /// Helper: spawns the player entity.
-fn do_spawn_player(commands: &mut Commands) {
-    // Spawn starting weapon: Colt Navy
-    let colt_navy = commands.spawn((
+fn do_spawn_player(commands: &mut Commands, seed: u64) {
+    // Spawn starting weapon: Colt Pocket
+    let colt_pocket = commands.spawn((
         Item,
-        Name("Colt Navy".into()),
+        Name("Colt Pocket".into()),
         Renderable {
             symbol: "P".into(),
-            fg: RatColor::Rgb(140, 140, 160),
+            fg: RatColor::Rgb(160, 150, 140),
             bg: RatColor::Black,
         },
         ItemKind::Gun {
-            loaded: 6,
-            capacity: 6,
-            caliber: Caliber::Cal36,
-            attack: 5,
-            name: "Colt Navy".into(),
+            loaded: 5,
+            capacity: 5,
+            caliber: Caliber::Cal31,
+            attack: 3,
+            name: "Colt Pocket".into(),
         },
+    )).id();
+
+    // Spawn starting knife
+    let knife = commands.spawn((
+        Item,
+        Name("Bowie Knife".into()),
+        Renderable {
+            symbol: "/".into(),
+            fg: RatColor::Rgb(192, 192, 210),
+            bg: RatColor::Black,
+        },
+        ItemKind::Knife { attack: 4 },
+    )).id();
+
+    // Spawn starting whiskey
+    let whiskey = commands.spawn((
+        Item,
+        Name("Whiskey Bottle".into()),
+        Renderable {
+            symbol: "w".into(),
+            fg: RatColor::Rgb(180, 120, 60),
+            bg: RatColor::Black,
+        },
+        ItemKind::Whiskey { heal: 10 },
     )).id();
 
     // Spawn starting molotov cocktail
@@ -271,7 +340,8 @@ fn do_spawn_player(commands: &mut Commands) {
         Speed(ACTION_COST),
         Energy(0),
     )).insert((
-        Inventory { items: vec![colt_navy, molotov] },
+        Inventory { items: vec![colt_pocket, knife, whiskey, molotov] },
+        Outfit(generate_outfit(seed)),
         Level(1),
         Experience {
             current: 0,
@@ -355,10 +425,10 @@ fn restart_system(
     *cursor = CursorPosition::default();
     *collectibles = Collectibles::default();
     extra_ticks.0 = 0;
-    *game_map = GameMapResource(GameMap::new(200, 140, seed.0));
+    *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
 
     next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands);
+    do_spawn_player(&mut commands, seed.0);
     do_spawn_monsters(&mut commands, &game_map, seed.0);
 }

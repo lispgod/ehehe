@@ -462,6 +462,11 @@ pub struct ExpReward(pub i32);
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastDamageSource(pub Entity);
 
+/// Procedurally generated outfit description for an entity.
+/// Used for flavour text in the UI instead of discrete equipment items.
+#[derive(Component, Clone, Debug)]
+pub struct Outfit(pub String);
+
 #[cfg(test)]
 mod tests {
     use super::*;

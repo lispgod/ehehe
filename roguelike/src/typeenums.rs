@@ -13,6 +13,8 @@ pub enum Floor {
     WoodPlanks,
     /// Ground that is actively burning.
     Fire,
+    /// Spilled water from a destroyed water trough.
+    Water,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.

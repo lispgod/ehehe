@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 
-use crate::components::{BlocksMovement, Hostile, Player, Position, Viewshed};
+use crate::components::{BlocksMovement, Health, Hostile, Player, Position, Viewshed};
 use crate::events::{AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{CursorPosition, GameMapResource, SpatialIndex};
+use crate::resources::{CombatLog, CursorPosition, GameMapResource, SpatialIndex};
+use crate::typeenums::Furniture;
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability *and* the `SpatialIndex` for entities that block movement.
@@ -97,6 +98,36 @@ pub fn movement_system(
             // Mark viewshed dirty so visibility is recalculated.
             if let Some(mut vs) = viewshed {
                 vs.dirty = true;
+            }
+        }
+    }
+}
+
+/// Damage dealt by walking into a cactus (adjacent tile).
+const CACTUS_DAMAGE: i32 = 1;
+
+/// Applies cactus contact damage: any entity standing on a tile adjacent to a
+/// cactus takes `CACTUS_DAMAGE` each turn. Runs after movement.
+pub fn cactus_damage_system(
+    game_map: Res<GameMapResource>,
+    mut health_query: Query<(Entity, &Position, &mut Health)>,
+    mut combat_log: ResMut<CombatLog>,
+) {
+    for (_entity, pos, mut hp) in &mut health_query {
+        let p = pos.as_grid_vec();
+        // Check if standing adjacent to (or on) a cactus
+        for neighbor in p.cardinal_neighbors() {
+            if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
+                if matches!(voxel.furniture, Some(Furniture::Cactus)) {
+                    let actual = hp.apply_damage(CACTUS_DAMAGE);
+                    if actual > 0 {
+                        combat_log.push_at(
+                            format!("Ouch! Cactus prick for {} damage!", actual),
+                            p,
+                        );
+                    }
+                    break; // Only one cactus damage per turn even if multiple adjacent
+                }
             }
         }
     }

@@ -84,11 +84,10 @@ pub fn movement_system(
             let old_pos = pos.as_grid_vec();
 
             // ── Blood trail: wounded entities leave blood behind ─
-            if let Ok(hp) = healths.get(intent.entity) {
-                if hp.current < hp.max {
+            if let Ok(hp) = healths.get(intent.entity)
+                && hp.current < hp.max {
                     blood_map.stains.insert(old_pos, turn_counter.0);
                 }
-            }
 
             let delta = GridVec::new(intent.dx, intent.dy);
             pos.x = target.x;
@@ -131,8 +130,8 @@ pub fn cactus_damage_system(
         let p = pos.as_grid_vec();
         // Check if standing adjacent to (or on) a cactus
         for neighbor in p.cardinal_neighbors() {
-            if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
-                if matches!(voxel.furniture, Some(Furniture::Cactus)) {
+            if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
+                && matches!(voxel.furniture, Some(Furniture::Cactus)) {
                     let actual = hp.apply_damage(CACTUS_DAMAGE);
                     if actual > 0 {
                         combat_log.push_at(
@@ -142,7 +141,6 @@ pub fn cactus_damage_system(
                     }
                     break; // Only one cactus damage per turn even if multiple adjacent
                 }
-            }
         }
     }
 }

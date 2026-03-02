@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 
+use crate::components::Caliber;
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::NoiseSeed;
@@ -238,25 +239,31 @@ impl SpellParticles {
 }
 
 impl CombatLog {
-    /// Adds a message (always visible) and trims the oldest entry.
-    /// O(1) amortised via `VecDeque::pop_front` (no element shifting).
-    pub fn push(&mut self, message: String) {
+    /// Internal: appends a message with an optional position and trims oldest entry.
+    fn push_inner(&mut self, message: String, pos: Option<GridVec>) {
         self.messages.push_back(message);
-        self.positions.push_back(None);
+        self.positions.push_back(pos);
         if self.messages.len() > MAX_COMBAT_LOG_MESSAGES {
             self.messages.pop_front();
             self.positions.pop_front();
         }
     }
 
+    /// Adds a message (always visible) and trims the oldest entry.
+    /// O(1) amortised via `VecDeque::pop_front` (no element shifting).
+    pub fn push(&mut self, message: String) {
+        self.push_inner(message, None);
+    }
+
     /// Adds a message tagged with a world position for visibility filtering.
     pub fn push_at(&mut self, message: String, pos: GridVec) {
-        self.messages.push_back(message);
-        self.positions.push_back(Some(pos));
-        if self.messages.len() > MAX_COMBAT_LOG_MESSAGES {
-            self.messages.pop_front();
-            self.positions.pop_front();
-        }
+        self.push_inner(message, Some(pos));
+    }
+
+    /// Adds a message with an optional position. Shorthand for the common
+    /// pattern of `if pos { push_at } else { push }`.
+    pub fn push_opt(&mut self, message: String, pos: Option<GridVec>) {
+        self.push_inner(message, pos);
     }
 
     /// Clears all entries (messages and positions).
@@ -278,7 +285,7 @@ impl CombatLog {
         let visible_msgs: Vec<&str> = self.messages
             .iter()
             .zip(self.positions.iter())
-            .filter(|(_, pos)| pos.map_or(true, |p| visible.contains(&p)))
+            .filter(|(_, pos)| pos.is_none_or(|p| visible.contains(&p)))
             .map(|(msg, _)| msg.as_str())
             .collect();
         let start = visible_msgs.len().saturating_sub(n);
@@ -368,6 +375,45 @@ impl Default for Collectibles {
             bandages: 0,
             dollars: 0,
         }
+    }
+}
+
+impl Collectibles {
+    /// Returns a mutable reference to the bullet count for the given caliber.
+    pub fn bullets_mut(&mut self, caliber: Caliber) -> &mut i32 {
+        match caliber {
+            Caliber::Cal31 => &mut self.bullets_31,
+            Caliber::Cal36 => &mut self.bullets_36,
+            Caliber::Cal44 => &mut self.bullets_44,
+            Caliber::Cal50 => &mut self.bullets_50,
+            Caliber::Cal58 => &mut self.bullets_58,
+            Caliber::Cal577 => &mut self.bullets_577,
+            Caliber::Cal69 => &mut self.bullets_69,
+        }
+    }
+
+    /// Returns `true` if the pool has enough supplies to reload one round
+    /// of the given caliber (1 matching bullet + 1 cap + 1 powder).
+    pub fn can_reload(&self, caliber: Caliber) -> bool {
+        let has_bullet = match caliber {
+            Caliber::Cal31 => self.bullets_31 > 0,
+            Caliber::Cal36 => self.bullets_36 > 0,
+            Caliber::Cal44 => self.bullets_44 > 0,
+            Caliber::Cal50 => self.bullets_50 > 0,
+            Caliber::Cal58 => self.bullets_58 > 0,
+            Caliber::Cal577 => self.bullets_577 > 0,
+            Caliber::Cal69 => self.bullets_69 > 0,
+        };
+        has_bullet && self.caps > 0 && self.powder > 0
+    }
+
+    /// Consumes one round of reload supplies (1 matching bullet + 1 cap + 1 powder).
+    ///
+    /// **Pre-condition**: `self.can_reload(caliber)` is `true`.
+    pub fn consume_reload(&mut self, caliber: Caliber) {
+        *self.bullets_mut(caliber) -= 1;
+        self.caps -= 1;
+        self.powder -= 1;
     }
 }
 

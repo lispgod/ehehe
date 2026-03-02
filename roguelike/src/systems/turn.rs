@@ -91,27 +91,24 @@ pub fn fire_system(
     // Damage entities standing on fire tiles.
     for (entity, pos) in &position_query {
         let p = pos.as_grid_vec();
-        if let Some(voxel) = game_map.0.get_voxel_at(&p) {
-            if matches!(voxel.floor, Some(Floor::Fire)) {
-                if let Ok(mut hp) = health_query.get_mut(entity) {
+        if let Some(voxel) = game_map.0.get_voxel_at(&p)
+            && matches!(voxel.floor, Some(Floor::Fire))
+                && let Ok(mut hp) = health_query.get_mut(entity) {
                     let actual = hp.apply_damage(FIRE_DAMAGE);
                     if actual > 0 {
                         combat_log.push(format!("Fire burns for {actual} damage!"));
                     }
                 }
-            }
-        }
     }
 
     // Register any new fire tiles that the tracker doesn't know about yet.
     for y in 1..map_height - 1 {
         for x in 1..map_width - 1 {
             let pos = GridVec::new(x, y);
-            if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-                if matches!(voxel.floor, Some(Floor::Fire)) {
+            if let Some(voxel) = game_map.0.get_voxel_at(&pos)
+                && matches!(voxel.floor, Some(Floor::Fire)) {
                     game_map.0.fire_turns.entry(pos).or_insert(turn_counter.0);
                 }
-            }
         }
     }
 
@@ -133,21 +130,18 @@ pub fn fire_system(
                 }
 
                 // Deterministic burnout: fire burns out after FIRE_BURNOUT_TURNS world turns.
-                if let Some(&ignited_at) = game_map.0.fire_turns.get(&pos) {
-                    if turn_counter.0.saturating_sub(ignited_at) >= FIRE_BURNOUT_TURNS {
+                if let Some(&ignited_at) = game_map.0.fire_turns.get(&pos)
+                    && turn_counter.0.saturating_sub(ignited_at) >= FIRE_BURNOUT_TURNS {
                         burnout_tiles.push(pos);
                     }
-                }
 
                 // Spread fire to adjacent flammable furniture.
                 for neighbor in pos.cardinal_neighbors() {
-                    if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor) {
-                        if let Some(ref furn) = n_voxel.furniture {
-                            if furn.is_flammable() {
+                    if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor)
+                        && let Some(ref furn) = n_voxel.furniture
+                            && furn.is_flammable() {
                                 new_fire_tiles.push(neighbor);
                             }
-                        }
-                    }
                 }
             }
         }

@@ -1,44 +1,12 @@
 use bevy::prelude::*;
 
 use crate::components::{
-    Caliber, CollectibleKind, Health, Hostile, Inventory, Item, ItemKind, Name, Player, Position,
-    Renderable, Thrown,
+    CollectibleKind, Health, Hostile, Inventory, Item, ItemKind, Name, Player, Position,
+    Thrown,
 };
 use crate::events::{DropItemIntent, PickupItemIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{Collectibles, CombatLog, GameMapResource, InputState, SpellParticles, SpatialIndex};
-use crate::typedefs::RatColor;
-
-/// Checks whether the collectible pool has the required supplies to reload one round.
-fn can_reload(collectibles: &Collectibles, caliber: Caliber) -> bool {
-    let has_bullet = match caliber {
-        Caliber::Cal31 => collectibles.bullets_31 > 0,
-        Caliber::Cal36 => collectibles.bullets_36 > 0,
-        Caliber::Cal44 => collectibles.bullets_44 > 0,
-        Caliber::Cal50 => collectibles.bullets_50 > 0,
-        Caliber::Cal58 => collectibles.bullets_58 > 0,
-        Caliber::Cal577 => collectibles.bullets_577 > 0,
-        Caliber::Cal69 => collectibles.bullets_69 > 0,
-    };
-    has_bullet && collectibles.caps > 0 && collectibles.powder > 0
-}
-
-/// Consumes one round of reload supplies (1 matching bullet + 1 cap + 1 powder).
-///
-/// **Pre-condition**: `can_reload(collectibles, caliber)` is `true`.
-fn consume_reload_supplies(collectibles: &mut Collectibles, caliber: Caliber) {
-    match caliber {
-        Caliber::Cal31 => collectibles.bullets_31 -= 1,
-        Caliber::Cal36 => collectibles.bullets_36 -= 1,
-        Caliber::Cal44 => collectibles.bullets_44 -= 1,
-        Caliber::Cal50 => collectibles.bullets_50 -= 1,
-        Caliber::Cal58 => collectibles.bullets_58 -= 1,
-        Caliber::Cal577 => collectibles.bullets_577 -= 1,
-        Caliber::Cal69 => collectibles.bullets_69 -= 1,
-    }
-    collectibles.caps -= 1;
-    collectibles.powder -= 1;
-}
 
 /// Processes pickup intents: player picks up an item on the ground at their position.
 pub fn pickup_system(
@@ -147,8 +115,8 @@ pub fn use_item_system(
 
                 if loaded >= capacity {
                     combat_log.push(format!("{gun_name} is fully loaded ({capacity}/{capacity})"));
-                } else if can_reload(&collectibles, caliber) {
-                    consume_reload_supplies(&mut collectibles, caliber);
+                } else if collectibles.can_reload(caliber) {
+                    collectibles.consume_reload(caliber);
                     if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity)
                         && let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
                             *loaded += 1;
@@ -174,142 +142,6 @@ pub fn use_item_system(
             }
         }
     }
-}
-
-/// Loot table entries for item drops.
-struct LootEntry {
-    name: &'static str,
-    symbol: &'static str,
-    fg: RatColor,
-    kind: ItemKind,
-    weight: f64,
-}
-
-const LOOT_TABLE: &[LootEntry] = &[
-    LootEntry {
-        name: "Whiskey Bottle",
-        symbol: "w",
-        fg: RatColor::Rgb(180, 120, 60),
-        kind: ItemKind::Whiskey { heal: 10 },
-        weight: 0.18,
-    },
-    LootEntry {
-        name: "Dynamite Stick",
-        symbol: "*",
-        fg: RatColor::Rgb(255, 165, 0),
-        kind: ItemKind::Grenade { damage: 8, radius: 2 },
-        weight: 0.12,
-    },
-    LootEntry {
-        name: "Molotov Cocktail",
-        symbol: "m",
-        fg: RatColor::Rgb(255, 100, 0),
-        kind: ItemKind::Molotov { damage: 6, radius: 4 },
-        weight: 0.12,
-    },
-    LootEntry {
-        name: "Bowie Knife",
-        symbol: "/",
-        fg: RatColor::Rgb(192, 192, 210),
-        kind: ItemKind::Knife { attack: 4 },
-        weight: 0.12,
-    },
-    LootEntry {
-        name: "Tomahawk",
-        symbol: "t",
-        fg: RatColor::Rgb(160, 120, 80),
-        kind: ItemKind::Tomahawk { attack: 5 },
-        weight: 0.11,
-    },
-];
-
-/// Spawns a random loot item at the given position using deterministic noise.
-/// Called by the death system when a monster with a LootTable dies.
-pub fn spawn_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
-    // Select item based on weighted roll.
-    let mut cumulative = 0.0;
-    for entry in LOOT_TABLE {
-        cumulative += entry.weight;
-        if roll < cumulative {
-            commands.spawn((
-                Position { x, y },
-                Item,
-                Name(entry.name.into()),
-                Renderable {
-                    symbol: entry.symbol.into(),
-                    fg: entry.fg,
-                    bg: RatColor::Black,
-                },
-                entry.kind.clone(),
-            ));
-            return;
-        }
-    }
-
-    // Gun drops (remaining ~35% probability, requires String allocation)
-    struct GunTemplate {
-        name: &'static str,
-        fg: RatColor,
-        loaded: i32,
-        capacity: i32,
-        caliber: Caliber,
-        attack: i32,
-        weight: f64,
-    }
-    let gun_templates = [
-        // Existing revolvers
-        GunTemplate { name: "Colt Army", fg: RatColor::Rgb(140, 140, 160), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 6, weight: 0.07 },
-        GunTemplate { name: "Colt Pocket", fg: RatColor::Rgb(160, 150, 140), loaded: 5, capacity: 5, caliber: Caliber::Cal31, attack: 3, weight: 0.07 },
-        GunTemplate { name: "Remington New Model Army", fg: RatColor::Rgb(120, 120, 130), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 7, weight: 0.05 },
-        GunTemplate { name: "Colt Sheriff", fg: RatColor::Rgb(170, 160, 150), loaded: 5, capacity: 5, caliber: Caliber::Cal36, attack: 4, weight: 0.04 },
-        // New revolvers
-        GunTemplate { name: "Starr 1858 DA", fg: RatColor::Rgb(130, 130, 145), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 5, weight: 0.03 },
-        GunTemplate { name: "Savage 1856", fg: RatColor::Rgb(145, 140, 135), loaded: 6, capacity: 6, caliber: Caliber::Cal36, attack: 4, weight: 0.03 },
-        GunTemplate { name: "Adams Revolver", fg: RatColor::Rgb(135, 135, 150), loaded: 5, capacity: 5, caliber: Caliber::Cal44, attack: 5, weight: 0.03 },
-        // Rifles
-        GunTemplate { name: "Hawken Rifle", fg: RatColor::Rgb(160, 130, 90), loaded: 1, capacity: 1, caliber: Caliber::Cal50, attack: 10, weight: 0.02 },
-        GunTemplate { name: "Springfield 1842", fg: RatColor::Rgb(140, 120, 80), loaded: 1, capacity: 1, caliber: Caliber::Cal69, attack: 12, weight: 0.02 },
-        GunTemplate { name: "Springfield 1855", fg: RatColor::Rgb(150, 125, 85), loaded: 1, capacity: 1, caliber: Caliber::Cal58, attack: 10, weight: 0.02 },
-        GunTemplate { name: "Enfield 1853", fg: RatColor::Rgb(145, 128, 88), loaded: 1, capacity: 1, caliber: Caliber::Cal577, attack: 10, weight: 0.02 },
-    ];
-
-    for gt in &gun_templates {
-        cumulative += gt.weight;
-        if roll < cumulative {
-            let symbol = if gt.capacity == 1 { "r" } else { "p" };
-            commands.spawn((
-                Position { x, y },
-                Item,
-                Name(gt.name.into()),
-                Renderable {
-                    symbol: symbol.into(),
-                    fg: gt.fg,
-                    bg: RatColor::Black,
-                },
-                ItemKind::Gun {
-                    loaded: gt.loaded,
-                    capacity: gt.capacity,
-                    caliber: gt.caliber,
-                    attack: gt.attack,
-                    name: gt.name.into(),
-                },
-            ));
-            return;
-        }
-    }
-
-    // Fallback: spawn a whiskey bottle.
-    commands.spawn((
-        Position { x, y },
-        Item,
-        Name("Whiskey Bottle".into()),
-        Renderable {
-            symbol: "w".into(),
-            fg: RatColor::Rgb(180, 120, 60),
-            bg: RatColor::Black,
-        },
-        ItemKind::Whiskey { heal: 10 },
-    ));
 }
 
 /// Reload system: finds the first gun in inventory that is not fully loaded
@@ -359,7 +191,7 @@ pub fn reload_system(
     };
 
     // Check if collectibles are available for reloading.
-    if !can_reload(&collectibles, caliber) {
+    if !collectibles.can_reload(caliber) {
         combat_log.push(format!(
             "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
         ));
@@ -367,7 +199,7 @@ pub fn reload_system(
     }
 
     // Consume collectibles and increment loaded count.
-    consume_reload_supplies(&mut collectibles, caliber);
+    collectibles.consume_reload(caliber);
     if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(gun_ent)
         && let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind_mut {
             *loaded += 1;

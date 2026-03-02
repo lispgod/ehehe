@@ -46,10 +46,7 @@ impl Furniture {
     /// Most solid objects block movement; low/open objects like fences and
     /// water troughs allow passage.
     pub fn blocks_movement(&self) -> bool {
-        match self {
-            Furniture::Fence | Furniture::WaterTrough => false,
-            _ => true,
-        }
+        !matches!(self, Furniture::Fence | Furniture::WaterTrough)
     }
 
     /// Returns `true` if this furniture blocks line-of-sight.

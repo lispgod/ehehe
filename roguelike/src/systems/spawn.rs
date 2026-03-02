@@ -167,7 +167,7 @@ pub fn spawn_monster(
     // Deterministic item assignment based on position.
     // Some humanoid NPCs carry throwable items (dynamite or molotovs).
     if !matches!(template.faction, Faction::Wildlife) {
-        if item_hash % 5 == 0 {
+        if item_hash.is_multiple_of(5) {
             let dynamite = commands.spawn((
                 Item,
                 Name("Dynamite Stick".into()),
@@ -179,7 +179,7 @@ pub fn spawn_monster(
                 ItemKind::Grenade { damage: 8, radius: 2 },
             )).id();
             inv_items.push(dynamite);
-        } else if item_hash % 7 == 0 {
+        } else if item_hash.is_multiple_of(7) {
             let molotov = commands.spawn((
                 Item,
                 Name("Molotov Cocktail".into()),

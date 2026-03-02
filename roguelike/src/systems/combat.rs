@@ -43,20 +43,14 @@ pub fn combat_system(
         let pos = attacker_pos.map(|p| p.as_grid_vec());
 
         if damage > 0 {
-            if let Some(p) = pos {
-                combat_log.push_at(format!("{a_name} hits {t_name} for {damage} damage"), p);
-            } else {
-                combat_log.push(format!("{a_name} hits {t_name} for {damage} damage"));
-            }
+            combat_log.push_opt(format!("{a_name} hits {t_name} for {damage} damage"), pos);
             damage_events.write(DamageEvent {
                 target: intent.target,
                 amount: damage,
                 source: Some(intent.attacker),
             });
-        } else if let Some(p) = pos {
-            combat_log.push_at(format!("{a_name} attacks {t_name} but deals no damage"), p);
         } else {
-            combat_log.push(format!("{a_name} attacks {t_name} but deals no damage"));
+            combat_log.push_opt(format!("{a_name} attacks {t_name} but deals no damage"), pos);
         }
     }
 }
@@ -114,11 +108,7 @@ pub fn death_system(
         }
 
         let label = name.map_or("Something", |n| &n.0);
-        if let Some(p) = pos {
-            combat_log.push_at(format!("{label} has been slain!"), p.as_grid_vec());
-        } else {
-            combat_log.push(format!("{label} has been slain!"));
-        }
+        combat_log.push_opt(format!("{label} has been slain!"), pos.map(|p| p.as_grid_vec()));
 
         // If the player died, transition to Dead state (don't despawn so UI can read stats).
         if is_player.is_some() {
@@ -150,8 +140,8 @@ pub fn death_system(
         let is_wildlife = faction.is_some_and(|f| matches!(f, Faction::Wildlife));
 
         // Drop entire NPC inventory on the ground (animals drop nothing).
-        if !is_wildlife {
-            if let (Some(inv), Some(p)) = (inventory, pos) {
+        if !is_wildlife
+            && let (Some(inv), Some(p)) = (inventory, pos) {
                 for &item_entity in &inv.items {
                     commands.entity(item_entity).insert(Position { x: p.x, y: p.y });
                 }
@@ -159,11 +149,10 @@ pub fn death_system(
                     combat_log.push_at(format!("{label} dropped their gear!"), p.as_grid_vec());
                 }
             }
-        }
 
         // Loot drop: non-wildlife entities with a LootTable may also drop collectible supplies.
-        if !is_wildlife {
-            if let (Some(_lt), Some(p)) = (loot_table, pos) {
+        if !is_wildlife
+            && let (Some(_lt), Some(p)) = (loot_table, pos) {
                 // Drop collectible supplies (caps + random ammo).
                 let coll_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 1), p.y, seed.0.wrapping_add(33333));
                 if coll_roll < 0.5 {
@@ -188,7 +177,6 @@ pub fn death_system(
                     ));
                 }
             }
-        }
 
         commands.entity(entity).despawn();
     }
@@ -204,17 +192,15 @@ pub fn npc_level_up_system(
     for (killer_entity, reward) in pending_npc_exp.entries.drain(..) {
         if let Ok((mut exp, mut level, mut stats, mut hp, killer_name, killer_pos)) = npc_query.get_mut(killer_entity) {
             exp.current += reward;
-            while exp.current >= exp.next_level {
-                exp.current -= exp.next_level;
-                level.0 += 1;
-                exp.next_level = 20 + (level.0 - 1) * 10;
+            while exp.ready_to_level() {
+                let new_level = exp.advance_level(&mut level);
                 stats.attack += 1;
                 stats.defense += 1;
                 hp.max += 3;
                 hp.current = hp.max;
                 let k_name = killer_name.map_or("???", |n| &n.0);
                 if let Some(p) = killer_pos {
-                    combat_log.push_at(format!("{k_name} levels up to {}!", level.0), p.as_grid_vec());
+                    combat_log.push_at(format!("{k_name} levels up to {new_level}!"), p.as_grid_vec());
                 }
             }
         }
@@ -242,19 +228,16 @@ pub fn level_up_system(
     pending_exp.0 = 0;
 
     // Check for level-up(s).
-    while exp.current >= exp.next_level {
-        exp.current -= exp.next_level;
-        level.0 += 1;
-        // Scale next-level requirement.
-        exp.next_level = 20 + (level.0 - 1) * 10;
+    while exp.ready_to_level() {
+        let new_level = exp.advance_level(&mut level);
         // Stat bonuses per level.
         stats.attack += 1;
         stats.defense += 1;
         hp.max += 5;
         stamina.max += 5;
         combat_log.push(format!(
-            "LEVEL UP! Now level {}! ATK {} DEF {} HP {} STA {}",
-            level.0, stats.attack, stats.defense, hp.max, stamina.max
+            "LEVEL UP! Now level {new_level}! ATK {} DEF {} HP {} STA {}",
+            stats.attack, stats.defense, hp.max, stamina.max
         ));
     }
 }

@@ -370,14 +370,9 @@ pub fn input_system(
                                     combat_log.push("Gun is empty! Press R to reload.".into());
                                     handled = true;
                                 }
-                            } else if matches!(kind, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. }) {
+                            } else if let ItemKind::Knife { attack } | ItemKind::Tomahawk { attack } = kind {
                                 let delta = cursor.pos - player_pos.as_grid_vec();
                                 if delta != crate::grid_vec::GridVec::ZERO {
-                                    let (range, damage) = match kind {
-                                        ItemKind::Knife { attack } => (crate::systems::projectile::THROWN_RANGE, *attack),
-                                        ItemKind::Tomahawk { attack } => (crate::systems::projectile::THROWN_RANGE, *attack),
-                                        _ => unreachable!(),
-                                    };
                                     extra_world_ticks.0 = 1;
                                     intents.throw_item_intents.write(ThrowItemIntent {
                                         thrower: player_entity,
@@ -385,8 +380,8 @@ pub fn input_system(
                                         item_index: idx,
                                         dx: delta.x,
                                         dy: delta.y,
-                                        range,
-                                        damage,
+                                        range: crate::systems::projectile::THROWN_RANGE,
+                                        damage: *attack,
                                     });
                                     advance_turn(&mut next_turn_state);
                                     handled = true;

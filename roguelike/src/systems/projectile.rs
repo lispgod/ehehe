@@ -23,6 +23,43 @@ pub const THROWN_RANGE: i32 = 12;
 /// Shrapnel that hits the player who threw the grenade deals reduced damage.
 const SELF_DAMAGE_DIVISOR: i32 = 2;
 
+/// Result of resolving a bullet hit-chance roll.
+enum BulletHitResult {
+    Miss,
+    Headshot { damage: i32 },
+    Hit { damage: i32 },
+}
+
+/// Resolves bullet hit-chance, headshot, and miss rolls for a single target.
+/// Returns the outcome so callers can handle damage events and logging.
+fn resolve_bullet_hit(
+    tile: GridVec,
+    aim_point: GridVec,
+    path_index: usize,
+    target_max_hp: i32,
+    penetration: i32,
+) -> BulletHitResult {
+    let dx = (aim_point.x - tile.x) as f64;
+    let dy = (aim_point.y - tile.y) as f64;
+    let distance = (dx * dx + dy * dy).sqrt();
+    let hit_chance = (0.95 - distance * 0.04).clamp(0.15, 0.95);
+    let headshot_chance = 0.02 + if distance < 0.5 { 0.08 } else { 0.0 };
+
+    let roll_seed = 7919_u64.wrapping_add(path_index as u64);
+    let roll = value_noise(tile.x, tile.y + path_index as i32, roll_seed);
+
+    if roll > hit_chance {
+        return BulletHitResult::Miss;
+    }
+
+    let hs_roll = value_noise(tile.x, tile.y + path_index as i32, roll_seed.wrapping_add(13));
+    if hs_roll < headshot_chance {
+        return BulletHitResult::Headshot { damage: target_max_hp };
+    }
+
+    BulletHitResult::Hit { damage: penetration }
+}
+
 /// Spawns a bullet projectile entity along a Bresenham line from origin to endpoint.
 pub fn spawn_bullet(
     commands: &mut Commands,
@@ -163,40 +200,32 @@ pub fn projectile_system(
                     let is_bullet = proj.tiles_per_tick == BULLET_TILES_PER_TICK;
                     if is_bullet {
                         let aim_point = proj.path.last().copied().unwrap_or(tile);
-                        let dx = (aim_point.x - tile.x) as f64;
-                        let dy = (aim_point.y - tile.y) as f64;
-                        let distance = (dx * dx + dy * dy).sqrt();
-                        let hit_chance = (0.95 - distance * 0.04).clamp(0.15, 0.95);
-                        let headshot_chance = 0.02 + if distance < 0.5 { 0.08 } else { 0.0 };
-
-                        let roll_seed = 7919_u64.wrapping_add(proj.path_index as u64);
-                        let roll = value_noise(tile.x, tile.y + proj.path_index as i32, roll_seed);
-
-                        if roll > hit_chance {
-                            // Miss
-                            combat_log.push_at(
-                                format!("{source_name}'s bullet barely misses {t_name}!"),
-                                tile,
-                            );
-                            continue;
-                        }
-
-                        // Headshot check
-                        let hs_roll = value_noise(tile.x, tile.y + proj.path_index as i32, roll_seed.wrapping_add(13));
-                        if hs_roll < headshot_chance {
-                            let hs_damage = *t_max_hp;
-                            damage_events.write(DamageEvent {
-                                target: *target_entity,
-                                amount: hs_damage,
-                                source: Some(proj.source),
-                            });
-                            combat_log.push_at(
-                                format!("{source_name} headshots {t_name}!"),
-                                tile,
-                            );
-                            sound_events.add(tile);
-                            proj.penetration -= target_def;
-                            continue;
+                        match resolve_bullet_hit(tile, aim_point, proj.path_index, *t_max_hp, proj.penetration) {
+                            BulletHitResult::Miss => {
+                                combat_log.push_at(
+                                    format!("{source_name}'s bullet barely misses {t_name}!"),
+                                    tile,
+                                );
+                                continue;
+                            }
+                            BulletHitResult::Headshot { damage: hs_damage } => {
+                                damage_events.write(DamageEvent {
+                                    target: *target_entity,
+                                    amount: hs_damage,
+                                    source: Some(proj.source),
+                                });
+                                combat_log.push_at(
+                                    format!("{source_name} headshots {t_name}!"),
+                                    tile,
+                                );
+                                sound_events.add(tile);
+                                proj.penetration -= target_def;
+                                continue;
+                            }
+                            BulletHitResult::Hit { .. } => {
+                                // Fall through to normal hit handling below,
+                                // which uses proj.penetration (same value).
+                            }
                         }
                     }
 
@@ -232,43 +261,36 @@ pub fn projectile_system(
                 let is_bullet = proj.tiles_per_tick == BULLET_TILES_PER_TICK;
                 if is_bullet {
                     let aim_point = proj.path.last().copied().unwrap_or(tile);
-                    let dx = (aim_point.x - tile.x) as f64;
-                    let dy = (aim_point.y - tile.y) as f64;
-                    let distance = (dx * dx + dy * dy).sqrt();
-                    let hit_chance = (0.95 - distance * 0.04).clamp(0.15, 0.95);
-                    let headshot_chance = 0.02 + if distance < 0.5 { 0.08 } else { 0.0 };
-
-                    let roll_seed = 7919_u64.wrapping_add(proj.path_index as u64);
-                    let roll = value_noise(tile.x, tile.y + proj.path_index as i32, roll_seed);
                     let p_name = player_name.map_or("???", |n| &n.0);
-
-                    if roll > hit_chance {
-                        combat_log.push(format!("{source_name}'s bullet barely misses {p_name}!"));
-                        // Bullet continues through on miss — don't despawn.
-                    } else {
-                        // Headshot check
-                        let hs_roll = value_noise(tile.x, tile.y + proj.path_index as i32, roll_seed.wrapping_add(13));
-                        if hs_roll < headshot_chance {
-                            let hs_damage = player_health.max;
+                    match resolve_bullet_hit(tile, aim_point, proj.path_index, player_health.max, proj.penetration) {
+                        BulletHitResult::Miss => {
+                            combat_log.push(format!("{source_name}'s bullet barely misses {p_name}!"));
+                            // Bullet continues through on miss — don't despawn.
+                        }
+                        BulletHitResult::Headshot { damage: hs_damage } => {
                             damage_events.write(DamageEvent {
                                 target: *player_entity,
                                 amount: hs_damage,
                                 source: Some(proj.source),
                             });
                             combat_log.push(format!("{source_name} headshots {p_name}!"));
-                        } else {
-                            let hit_damage = proj.penetration;
+                            sound_events.add(tile);
+                            proj.penetration -= player_stats.defense;
+                            despawn = true;
+                            break;
+                        }
+                        BulletHitResult::Hit { damage: hit_damage } => {
                             damage_events.write(DamageEvent {
                                 target: *player_entity,
                                 amount: hit_damage,
                                 source: Some(proj.source),
                             });
                             combat_log.push(format!("{source_name}'s bullet hits {p_name} for {hit_damage} damage!"));
+                            sound_events.add(tile);
+                            proj.penetration -= player_stats.defense;
+                            despawn = true;
+                            break;
                         }
-                        sound_events.add(tile);
-                        proj.penetration -= player_stats.defense;
-                        despawn = true;
-                        break;
                     }
                 } else {
                     // Non-bullet (shrapnel) always hits.

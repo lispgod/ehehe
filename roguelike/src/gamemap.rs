@@ -102,12 +102,11 @@ impl GameMap {
             let cross_half_width = 1;
             for x in (cx - cross_half_width)..=(cx + cross_half_width) {
                 for y in 1..height - 1 {
-                    if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-                        if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                    if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y))
+                        && !matches!(voxel.furniture, Some(Furniture::Wall)) {
                             voxel.floor = Some(Floor::Dirt);
                             voxel.furniture = None;
                         }
-                    }
                 }
             }
         }
@@ -445,11 +444,10 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
 /// Helper: sets furniture at a position if within bounds and not occupied by a wall.
 fn set_furniture(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, furn: Furniture) {
     let pos = GridVec::new(x, y);
-    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-        if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+    if let Some(voxel) = map.get_voxel_at_mut(&pos)
+        && !matches!(voxel.furniture, Some(Furniture::Wall)) {
             voxel.furniture = Some(furn);
         }
-    }
 }
 
 /// Places street furniture (benches, lamp posts, barrels, signs, hitching posts)
@@ -557,8 +555,8 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             let pos = center + GridVec::new(dx, dy);
-            if pos.distance_squared(center) <= radius_sq {
-                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+            if pos.distance_squared(center) <= radius_sq
+                && let Some(voxel) = map.get_voxel_at_mut(&pos) {
                     // Don't clear border walls
                     let is_border = pos.x == 0 || pos.y == 0
                         || pos.x == map_width - 1 || pos.y == map_height - 1;
@@ -566,7 +564,6 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
                         voxel.furniture = None;
                     }
                 }
-            }
         }
     }
 }

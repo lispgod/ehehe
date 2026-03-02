@@ -138,6 +138,13 @@ pub fn draw_system(
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left = camera.0 - GridVec::new(w_radius, h_radius);
 
+        /// Returns `true` if the screen-relative coordinate is within the render area.
+        #[inline]
+        fn in_bounds(screen: GridVec, render_width: u16, render_height: u16) -> bool {
+            (0..render_width as CoordinateUnit).contains(&screen.x)
+                && (0..render_height as CoordinateUnit).contains(&screen.y)
+        }
+
         // Tint tiles visible to hostile entities with a red hue (enemy FOV cone).
         {
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
@@ -173,11 +180,7 @@ pub fn draw_system(
                     continue;
                 }
                 let screen = world_pos - bottom_left;
-                if screen.x >= 0
-                    && screen.x < render_width as CoordinateUnit
-                    && screen.y >= 0
-                    && screen.y < render_height as CoordinateUnit
-                {
+                if in_bounds(screen, render_width, render_height) {
                     let age = current_turn.saturating_sub(blood_turn);
                     // Lerp from bright red (200,0,0) to dark red (80,20,10) over 50 turns
                     let t = (age as f32 / 50.0).min(1.0);
@@ -197,10 +200,7 @@ pub fn draw_system(
         for (pos, renderable, name) in &renderables {
             let screen = pos.as_grid_vec() - bottom_left;
 
-            if screen.x >= 0
-                && screen.x < render_width as CoordinateUnit
-                && screen.y >= 0
-                && screen.y < render_height as CoordinateUnit
+            if in_bounds(screen, render_width, render_height)
             {
                 // Only draw entities that are currently visible (not merely revealed)
                 let entity_visible = visible_tiles
@@ -229,10 +229,7 @@ pub fn draw_system(
                 continue; // not yet visible
             }
             let screen = *particle_pos - bottom_left;
-            if screen.x >= 0
-                && screen.x < render_width as CoordinateUnit
-                && screen.y >= 0
-                && screen.y < render_height as CoordinateUnit
+            if in_bounds(screen, render_width, render_height)
             {
                 let visible = visible_tiles
                     .map(|vt| vt.contains(particle_pos))
@@ -255,10 +252,7 @@ pub fn draw_system(
         let cursor_blink_visible = cursor.blink_visible();
         {
             let cursor_screen = cursor.pos - bottom_left;
-            if cursor_screen.x >= 0
-                && cursor_screen.x < render_width as CoordinateUnit
-                && cursor_screen.y >= 0
-                && cursor_screen.y < render_height as CoordinateUnit
+            if in_bounds(cursor_screen, render_width, render_height)
                 && cursor_blink_visible {
                     let sx = cursor_screen.x as usize;
                     let sy = cursor_screen.y as usize;
@@ -271,10 +265,7 @@ pub fn draw_system(
         // Render projectile entities on the map with fast blinking effect.
         for (proj_pos, proj_render) in &projectiles {
             let screen = proj_pos.as_grid_vec() - bottom_left;
-            if screen.x >= 0
-                && screen.x < render_width as CoordinateUnit
-                && screen.y >= 0
-                && screen.y < render_height as CoordinateUnit
+            if in_bounds(screen, render_width, render_height)
             {
                 let visible = visible_tiles
                     .map(|vt| vt.contains(&proj_pos.as_grid_vec()))
@@ -282,7 +273,7 @@ pub fn draw_system(
                 if visible {
                     let bg = render_packet[screen.y as usize][screen.x as usize].2;
                     // Fast blink: alternate between bright and dim every 3 frames
-                    let blink_bright = (cursor.blink_frame() / 3) % 2 == 0;
+                    let blink_bright = (cursor.blink_frame() / 3).is_multiple_of(2);
                     let fg = if blink_bright {
                         proj_render.fg
                     } else {
@@ -303,10 +294,7 @@ pub fn draw_system(
         // (Sound indicators are pre-computed in particle_tick_system.)
         for event_pos in &spell_particles.sound_indicators {
             let screen = *event_pos - bottom_left;
-            if screen.x >= 0
-                && screen.x < render_width as CoordinateUnit
-                && screen.y >= 0
-                && screen.y < render_height as CoordinateUnit
+            if in_bounds(screen, render_width, render_height)
             {
                 let bg = render_packet[screen.y as usize][screen.x as usize].2;
                 render_packet[screen.y as usize][screen.x as usize] =
@@ -369,14 +357,13 @@ pub fn draw_system(
             let mut items = Vec::new();
             if let Some(vt) = visible_tiles {
                 for tile in vt {
-                    if let Some(voxel) = game_map.0.get_voxel_at(tile) {
-                        if let Some(ref furn) = voxel.furniture {
+                    if let Some(voxel) = game_map.0.get_voxel_at(tile)
+                        && let Some(ref furn) = voxel.furniture {
                             let name = format!("{furn}");
                             if seen.insert(name.clone()) {
                                 items.push((furn.symbol(), furn.fg_color(), name));
                             }
                         }
-                    }
                 }
             }
             items

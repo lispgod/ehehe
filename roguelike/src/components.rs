@@ -448,6 +448,22 @@ pub struct Experience {
     pub next_level: i32,
 }
 
+impl Experience {
+    /// Returns `true` if enough EXP has been accumulated for the next level.
+    pub fn ready_to_level(&self) -> bool {
+        self.current >= self.next_level
+    }
+
+    /// Consumes the EXP threshold for one level-up and recalculates the
+    /// next-level requirement. Returns the new level number.
+    pub fn advance_level(&mut self, level: &mut Level) -> i32 {
+        self.current -= self.next_level;
+        level.0 += 1;
+        self.next_level = 20 + (level.0 - 1) * 10;
+        level.0
+    }
+}
+
 /// Player level. Increases when enough EXP is accumulated.
 /// Each level grants stat bonuses (attack, defense, max HP, max stamina).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]

@@ -145,6 +145,7 @@ pub fn projectile_system(
                     damage_events.write(DamageEvent {
                         target: *target_entity,
                         amount: hit_damage,
+                        source: Some(proj.source),
                     });
                     combat_log.push(format!("Projectile hits {t_name} for {hit_damage} damage!"));
                     proj.penetration -= target_def;
@@ -163,6 +164,7 @@ pub fn projectile_system(
                     damage_events.write(DamageEvent {
                         target: *player_entity,
                         amount: self_damage,
+                        source: Some(proj.source),
                     });
                     combat_log.push(format!("Shrapnel hits you for {self_damage} damage!"));
                     despawn = true;

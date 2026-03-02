@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
 use crate::typeenums::{Floor, Furniture};
@@ -9,6 +11,9 @@ pub struct GameMap {
     pub width: CoordinateUnit,
     pub height: CoordinateUnit,
     pub voxels: Vec<Vec<Voxel>>,
+    /// Tracks the world turn at which each fire tile was ignited.
+    /// Used for deterministic burnout.
+    pub fire_turns: HashMap<GridVec, u32>,
 }
 
 /// A rectangular building footprint used during town generation.
@@ -71,6 +76,7 @@ impl GameMap {
             width,
             height,
             voxels,
+            fire_turns: HashMap::new(),
         };
 
         // ── Step 2: Main street (horizontal dirt road) ──────────────

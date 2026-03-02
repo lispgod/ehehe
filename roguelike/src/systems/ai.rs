@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Inventory, ItemKind, PatrolOrigin, Player, Position, Speed, Viewshed};
+use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Viewshed};
 use crate::events::{AiRangedAttackIntent, AttackIntent, MolotovCastIntent, MoveIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
@@ -158,6 +158,7 @@ const PATROL_RADIUS: i32 = 8;
 ///
 /// NPCs also fight entities of hostile factions (outlaws vs lawmen vs wildlife).
 pub fn ai_system(
+    mut commands: Commands,
     mut ai_query: Query<
         (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>),
         Without<Player>,
@@ -165,6 +166,8 @@ pub fn ai_system(
     player_query: Query<(Entity, &Position), With<Player>>,
     // Query all NPCs with position + faction for inter-faction combat targeting
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
+    // Query all items on the floor (have Position + Item, no inventory ownership)
+    floor_items: Query<(Entity, &Position), With<Item>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
     turn_counter: Res<TurnCounter>,
@@ -224,6 +227,38 @@ pub fn ai_system(
             faction_target
         };
 
+        // Find the nearest visible floor item for scavenging during idle/patrol.
+        let nearest_item: Option<(Entity, GridVec)> = {
+            let mut best_dist = i32::MAX;
+            let mut best = None;
+            for (item_ent, item_pos) in &floor_items {
+                let iv = item_pos.as_grid_vec();
+                let dist = my_pos.chebyshev_distance(iv);
+                if dist < best_dist
+                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&iv))
+                {
+                    // Only pick up items if NPC has inventory space.
+                    if inventory.as_ref().is_some_and(|inv| inv.items.len() < 9) {
+                        best_dist = dist;
+                        best = Some((item_ent, iv));
+                    }
+                }
+            }
+            best
+        };
+
+        // NPC auto-pickup: if standing on an item, pick it up.
+        if let Some((item_ent, item_vec)) = nearest_item {
+            if item_vec == my_pos {
+                if let Some(ref mut inv) = inventory {
+                    if inv.items.len() < 9 {
+                        commands.entity(item_ent).remove::<Position>();
+                        inv.items.push(item_ent);
+                    }
+                }
+            }
+        }
+
         match *ai {
             AiState::Idle => {
                 // Check if any target is visible — transition to Chasing.
@@ -237,6 +272,24 @@ pub fn ai_system(
                             }
                         }
                     }
+                } else if let Some((_, item_vec)) = nearest_item {
+                    // No combat target but a floor item is visible — pathfind to it.
+                    let step = a_star_first_step(my_pos, item_vec, |p| {
+                        game_map.0.is_passable(&p)
+                            && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
+                    });
+                    if let Some(step) = step {
+                        if !step.is_zero() {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            if let Some(ref mut look) = ai_look_dir {
+                                look.0 = step.king_step();
+                                if let Some(ref mut vs) = viewshed {
+                                    vs.dirty = true;
+                                }
+                            }
+                        }
+                    }
+                    energy.spend_action();
                 } else {
                     // Idle: slowly rotate look direction.
                     if let Some(ref mut look) = ai_look_dir {
@@ -257,6 +310,27 @@ pub fn ai_system(
                 // If we spot a target, transition to Chasing.
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
+                    continue;
+                }
+
+                // If a floor item is visible, pathfind toward it.
+                if let Some((_, item_vec)) = nearest_item {
+                    let step = a_star_first_step(my_pos, item_vec, |p| {
+                        game_map.0.is_passable(&p)
+                            && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
+                    });
+                    if let Some(step) = step {
+                        if !step.is_zero() {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            if let Some(ref mut look) = ai_look_dir {
+                                look.0 = step.king_step();
+                                if let Some(ref mut vs) = viewshed {
+                                    vs.dirty = true;
+                                }
+                            }
+                        }
+                    }
+                    energy.spend_action();
                     continue;
                 }
 
@@ -347,8 +421,15 @@ pub fn ai_system(
                 energy.spend_action();
             }
             AiState::Chasing => {
-                // Determine the target to chase.
-                let target_info = if player_visible {
+                // When chasing, keep pursuing the player if they are within
+                // sight range (distance-based), not just within the directional
+                // viewshed cone. This prevents the NPC from losing the target
+                // during rotation ticks and makes chasing more persistent.
+                let sight_range = viewshed.as_ref().map(|vs| vs.range).unwrap_or(8);
+                let player_in_range = player_vec.is_some_and(|pv|
+                    my_pos.chebyshev_distance(pv) <= sight_range
+                );
+                let target_info = if player_visible || player_in_range {
                     player_info.map(|(e, p)| (e, p.as_grid_vec()))
                 } else if let Some(ft) = faction_target {
                     Some(ft)
@@ -429,6 +510,7 @@ pub fn ai_system(
 
                 // Check inventory for a loaded gun to fire. Decrements the gun's
                 // loaded rounds directly, keeping inventory-based ammo in sync.
+                // If all guns are empty, attempt to reload one before attacking.
                 let mut used_gun = false;
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec))
@@ -450,6 +532,21 @@ pub fn ai_system(
                                     });
                                     used_gun = true;
                                 }
+                        } else {
+                            // No loaded gun found — try to reload an empty gun.
+                            let empty_gun = inv.items.iter().copied().find(|&ent| {
+                                item_kinds.get(ent).ok().is_some_and(|k|
+                                    matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+                                )
+                            });
+                            if let Some(gun_entity) = empty_gun {
+                                if let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                    && let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind {
+                                        // NPCs reload their gun fully in one action.
+                                        *loaded = capacity;
+                                        used_gun = true; // Spent this action reloading.
+                                    }
+                            }
                         }
                     } else if let Some(mut ammo_pool) = ammo
                         && ammo_pool.spend_one() {

@@ -59,7 +59,9 @@ pub fn end_world_turn(
 }
 
 /// Fire system: spreads fire to adjacent flammable tiles and damages entities
-/// standing on fire. Fire tiles eventually burn out to scorched earth.
+/// standing on fire. Fire tiles burn out deterministically after
+/// `FIRE_BURNOUT_TURNS` world turns, destroying any furniture and leaving
+/// scorched earth.
 ///
 /// Runs every world turn during `WorldTurn`.
 pub fn fire_system(
@@ -87,6 +89,18 @@ pub fn fire_system(
         }
     }
 
+    // Register any new fire tiles that the tracker doesn't know about yet.
+    for y in 1..map_height - 1 {
+        for x in 1..map_width - 1 {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
+                if matches!(voxel.floor, Some(Floor::Fire)) {
+                    game_map.0.fire_turns.entry(pos).or_insert(turn_counter.0);
+                }
+            }
+        }
+    }
+
     // Spread fire and burn out old fire tiles every FIRE_SPREAD_INTERVAL turns.
     if !turn_counter.0.is_multiple_of(FIRE_SPREAD_INTERVAL) {
         return;
@@ -104,14 +118,11 @@ pub fn fire_system(
                     continue;
                 }
 
-                // Probabilistic burnout: each spread interval, each fire tile has
-                // a 1/FIRE_BURNOUT_TURNS chance of burning out. Over time this
-                // guarantees all fires eventually expire with an expected lifetime
-                // of ~FIRE_BURNOUT_TURNS * FIRE_SPREAD_INTERVAL turns.
-                let burnout_hash = (x.wrapping_mul(37) ^ y.wrapping_mul(53))
-                    .wrapping_add(turn_counter.0 as i32);
-                if burnout_hash.unsigned_abs() % FIRE_BURNOUT_TURNS == 0 {
-                    burnout_tiles.push(pos);
+                // Deterministic burnout: fire burns out after FIRE_BURNOUT_TURNS world turns.
+                if let Some(&ignited_at) = game_map.0.fire_turns.get(&pos) {
+                    if turn_counter.0.saturating_sub(ignited_at) >= FIRE_BURNOUT_TURNS {
+                        burnout_tiles.push(pos);
+                    }
                 }
 
                 // Spread fire to adjacent flammable furniture.
@@ -136,10 +147,12 @@ pub fn fire_system(
         }
     }
 
-    // Apply burnout.
-    for tile in burnout_tiles {
-        if let Some(voxel) = game_map.0.get_voxel_at_mut(&tile) {
+    // Apply burnout: destroy any remaining furniture and leave scorched earth.
+    for tile in &burnout_tiles {
+        if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
+            voxel.furniture = None;
             voxel.floor = Some(Floor::ScorchedEarth);
         }
+        game_map.0.fire_turns.remove(tile);
     }
 }

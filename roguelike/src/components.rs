@@ -457,6 +457,11 @@ pub enum CollectibleKind {
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct ExpReward(pub i32);
 
+/// Tracks which entity last dealt damage to this entity.
+/// Used to attribute the killing blow for EXP rewards.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LastDamageSource(pub Entity);
+
 #[cfg(test)]
 mod tests {
     use super::*;

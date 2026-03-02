@@ -297,7 +297,7 @@ impl Default for CursorPosition {
         Self {
             pos: GridVec::new(SPAWN_X, SPAWN_Y),
             blink_frame: 0,
-            blink_half_period: 3, // At 12 FPS: toggles every 3 frames → 2 blinks/sec
+            blink_half_period: 8, // At 30 FPS: toggles every 8 frames → ~2 blinks/sec
         }
     }
 }
@@ -514,14 +514,14 @@ mod tests {
         let mut cursor = CursorPosition::default();
         // Initially visible (frame 0)
         assert!(cursor.blink_visible());
-        // Advance past half_period (3 frames at 12 FPS)
-        for _ in 0..3 {
+        // Advance past half_period (8 frames at 30 FPS)
+        for _ in 0..8 {
             cursor.tick_blink();
         }
         // Should now be invisible
         assert!(!cursor.blink_visible());
         // Advance another half_period
-        for _ in 0..3 {
+        for _ in 0..8 {
             cursor.tick_blink();
         }
         // Should be visible again (full cycle)

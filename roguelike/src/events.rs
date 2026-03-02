@@ -22,6 +22,8 @@ pub struct AttackIntent {
 pub struct DamageEvent {
     pub target: Entity,
     pub amount: CoordinateUnit,
+    /// Entity that dealt this damage. Used to attribute kills for EXP.
+    pub source: Option<Entity>,
 }
 
 /// Fired when the player throws a grenade (area-of-effect attack).

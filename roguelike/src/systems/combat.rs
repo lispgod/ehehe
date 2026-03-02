@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Health, HellGate, Hostile, Item, ItemKind, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable};
+use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Health, HellGate, Hostile, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, GameState, KillCount, MapSeed, PendingExp};
@@ -46,6 +46,7 @@ pub fn combat_system(
             damage_events.write(DamageEvent {
                 target: intent.target,
                 amount: damage,
+                source: Some(intent.attacker),
             });
         } else {
             combat_log.push(format!("{a_name} attacks {t_name} but deals no damage"));
@@ -54,33 +55,40 @@ pub fn combat_system(
 }
 
 /// Applies damage events to entity health pools using `Health::apply_damage`.
+/// Also records the damage source on the target for kill attribution.
 pub fn apply_damage_system(
+    mut commands: Commands,
     mut events: MessageReader<DamageEvent>,
     mut health_query: Query<&mut Health>,
 ) {
     for event in events.read() {
         if let Ok(mut health) = health_query.get_mut(event.target) {
             health.apply_damage(event.amount);
+            if let Some(source) = event.source {
+                commands.entity(event.target).insert(LastDamageSource(source));
+            }
         }
     }
 }
 
 /// Despawns entities whose health has reached zero.
 /// Logs a death message, increments the kill counter for hostile entities,
-/// awards EXP to the PendingExp resource, spawns loot from entities with a LootTable,
-/// and removes the entity from the world.
+/// awards EXP to the PendingExp resource only when the player dealt the killing
+/// blow, spawns loot from entities with a LootTable, and removes the entity.
 /// If the Hell Gate is destroyed, transitions to the Victory state.
 /// If the player dies, transitions to the Dead state.
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&HellGate>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&ExpReward>)>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&HellGate>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&ExpReward>, Option<&LastDamageSource>)>,
+    player_entities: Query<Entity, With<Player>>,
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
     mut next_game_state: ResMut<NextState<GameState>>,
     seed: Res<MapSeed>,
     mut pending_exp: ResMut<PendingExp>,
 ) {
-    for (entity, health, name, hostile, hell_gate, pos, loot_table, is_player, exp_reward) in &query {
+    let player_entity = player_entities.single().ok();
+    for (entity, health, name, hostile, hell_gate, pos, loot_table, is_player, exp_reward, last_damage_source) in &query {
         if health.is_dead() {
             let label = name.map_or("Something", |n| &n.0);
             combat_log.push(format!("{label} has been slain!"));
@@ -93,10 +101,15 @@ pub fn death_system(
             }
 
             if hostile.is_some() {
-                kill_count.0 += 1;
-                // Award EXP from killed hostile.
-                if let Some(reward) = exp_reward {
-                    pending_exp.0 += reward.0;
+                // Only count kills and award EXP if the player dealt the killing blow.
+                let player_killed = player_entity.is_some_and(|pe|
+                    last_damage_source.is_some_and(|lds| lds.0 == pe)
+                );
+                if player_killed {
+                    kill_count.0 += 1;
+                    if let Some(reward) = exp_reward {
+                        pending_exp.0 += reward.0;
+                    }
                 }
             }
             if hell_gate.is_some() {
@@ -330,6 +343,7 @@ pub fn melee_wide_system(
                     damage_events.write(DamageEvent {
                         target: target_entity,
                         amount: damage,
+                        source: Some(intent.attacker),
                     });
                     combat_log.push(format!("{a_name} roundhouse kicks {t_name} for {damage} damage!"));
                     hit_count += 1;

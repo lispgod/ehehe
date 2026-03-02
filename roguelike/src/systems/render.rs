@@ -735,7 +735,7 @@ fn render_inventory_overlay(
     items: &[(String, String)],
     selected: usize,
 ) {
-    let w = 44u16.min(game_area.width.saturating_sub(4));
+    let w = 52u16.min(game_area.width.saturating_sub(4));
     let h = (items.len() as u16 + 6).min(game_area.height.saturating_sub(4)).max(8);
 
     if w < 20 || h < 5 {
@@ -793,7 +793,7 @@ fn render_inventory_overlay(
     let widths = [
         Constraint::Length(3),
         Constraint::Min(16),
-        Constraint::Length(14),
+        Constraint::Min(18),
     ];
 
     let table = Table::new(rows, widths)

@@ -510,6 +510,7 @@ pub fn throw_system(
                     damage_events.write(crate::events::DamageEvent {
                         target: *target_entity,
                         amount: dmg,
+                        source: Some(intent.thrower),
                     });
                     combat_log.push(format!("Threw {item_name} at {t_name} for {dmg} damage!"));
                 } else {

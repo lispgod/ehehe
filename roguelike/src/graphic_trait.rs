@@ -25,6 +25,7 @@ impl GraphicElement for Floor {
             Floor::Moss => "~".into(),
             Floor::Lava => "~".into(),
             Floor::ScorchedEarth => ".".into(),
+            Floor::WoodPlanks => "=".into(),
         }
     }
 
@@ -39,6 +40,7 @@ impl GraphicElement for Floor {
             Floor::Moss => RatColor::Rgb(50, 120, 50),
             Floor::Lava => RatColor::Rgb(255, 80, 0),
             Floor::ScorchedEarth => RatColor::Rgb(120, 40, 20),
+            Floor::WoodPlanks => RatColor::Rgb(160, 120, 60),
         }
     }
 
@@ -55,6 +57,18 @@ impl GraphicElement for Furniture {
             Furniture::Bush => "%".into(),
             Furniture::Rock => "o".into(),
             Furniture::DeadTree => "t".into(),
+            Furniture::Bench => "H".into(),
+            Furniture::LampPost => "!".into(),
+            Furniture::Barrel => "0".into(),
+            Furniture::Crate => "B".into(),
+            Furniture::Cactus => "Y".into(),
+            Furniture::HitchingPost => "F".into(),
+            Furniture::WaterTrough => "U".into(),
+            Furniture::Fence => "-".into(),
+            Furniture::Table => "n".into(),
+            Furniture::Chair => "h".into(),
+            Furniture::Piano => "M".into(),
+            Furniture::Sign => "]".into(),
         }
     }
 
@@ -65,6 +79,18 @@ impl GraphicElement for Furniture {
             Furniture::Bush => RatColor::Rgb(60, 150, 40),
             Furniture::Rock => RatColor::Rgb(128, 128, 128),
             Furniture::DeadTree => RatColor::Rgb(100, 80, 50),
+            Furniture::Bench => RatColor::Rgb(139, 90, 43),
+            Furniture::LampPost => RatColor::Rgb(218, 165, 32),
+            Furniture::Barrel => RatColor::Rgb(139, 90, 43),
+            Furniture::Crate => RatColor::Rgb(160, 120, 60),
+            Furniture::Cactus => RatColor::Rgb(34, 120, 34),
+            Furniture::HitchingPost => RatColor::Rgb(120, 80, 40),
+            Furniture::WaterTrough => RatColor::Rgb(70, 130, 180),
+            Furniture::Fence => RatColor::Rgb(160, 120, 60),
+            Furniture::Table => RatColor::Rgb(139, 90, 43),
+            Furniture::Chair => RatColor::Rgb(120, 80, 40),
+            Furniture::Piano => RatColor::Rgb(40, 40, 40),
+            Furniture::Sign => RatColor::Rgb(180, 150, 80),
         }
     }
 

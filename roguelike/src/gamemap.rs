@@ -1,7 +1,7 @@
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
 use crate::typeenums::{Floor, Furniture};
-use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT, GATE_POINT};
+use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT};
 use crate::voxel::Voxel;
 
 /// The game map: a simple 2D grid of voxels.
@@ -11,56 +11,50 @@ pub struct GameMap {
     pub voxels: Vec<Vec<Voxel>>,
 }
 
+/// A rectangular building footprint used during town generation.
+struct Building {
+    x: CoordinateUnit,
+    y: CoordinateUnit,
+    w: CoordinateUnit,
+    h: CoordinateUnit,
+    /// What kind of building: 0=house, 1=saloon, 2=stable, 3=general store.
+    kind: u32,
+}
+
 impl GameMap {
-    /// Creates a new game map using layered noise for natural terrain.
+    /// Creates a new game map as a cowboy western town.
     ///
     /// The generation pipeline:
-    ///   1. **Biome layer** — low-frequency fBm selects the dominant floor type
-    ///      (grass, dirt, sand, gravel) in broad, natural regions.
-    ///   2. **Detail layer** — higher-frequency noise adds local variation
-    ///      (tall grass, flowers, moss) within biome regions.
-    ///   3. **Tree density layer** — separate fBm controls forest density,
-    ///      producing organic clusters and natural clearings.
-    ///   4. **Spawn clearing** — a guaranteed open area around the spawn point
-    ///      so the player always starts in a navigable space.
-    ///   5. **Undergrowth** — bushes and rocks placed at medium noise density
-    ///      to fill the space between trees naturally.
+    ///   1. **Desert base** — noise-driven arid terrain (sand, dirt, gravel).
+    ///   2. **Main street** — a wide dirt road running horizontally.
+    ///   3. **Buildings** — deterministically placed houses, saloons, stables
+    ///      with walls and wood-plank interiors.
+    ///   4. **Street furniture** — benches, lamp posts, barrels, crates,
+    ///      hitching posts, water troughs, signs placed along streets.
+    ///   5. **Decorative elements** — cacti, dead trees, rocks in open areas.
+    ///   6. **Spawn clearing** — guaranteed open area around the player spawn.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
         let mut voxels = Vec::with_capacity(height as usize);
 
-        // Different seed offsets for decorrelated noise layers.
         let biome_seed = seed;
         let detail_seed = seed.wrapping_add(12345);
-        let tree_seed = seed.wrapping_add(67890);
-        let undergrowth_seed = seed.wrapping_add(24680);
 
+        // ── Step 1: Base desert terrain ─────────────────────────────
         for y in 0..height {
             let mut row = Vec::with_capacity(width as usize);
             for x in 0..width {
                 let fx = x as f64;
                 let fy = y as f64;
 
-                // ── Floor selection ─────────────────────────────────
-                // Low-frequency biome noise: broad terrain regions.
                 let biome = fbm(fx, fy, 4, 0.03, 0.5, biome_seed);
-                // Higher-frequency detail: local variation.
                 let detail = fbm(fx, fy, 3, 0.1, 0.5, detail_seed);
 
-                let floor = select_floor(biome, detail);
+                let floor = select_desert_floor(biome, detail);
 
-                // ── Furniture placement ─────────────────────────────
                 let furniture = if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
-                    // Map border walls.
                     Some(Furniture::Wall)
                 } else {
-                    select_furniture(
-                        fx,
-                        fy,
-                        biome,
-                        tree_seed,
-                        undergrowth_seed,
-                        GridVec::new(x, y),
-                    )
+                    None
                 };
 
                 row.push(Voxel {
@@ -78,20 +72,33 @@ impl GameMap {
             voxels,
         };
 
-        // Place initial scorched earth around the Hell Gate position.
-        for dy in -2..=2_i32 {
-            for dx in -2..=2_i32 {
-                let pos = GATE_POINT + GridVec::new(dx, dy);
-                let dist_sq = (dx * dx + dy * dy) as f64;
-                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                    if dist_sq <= 1.0 {
-                        voxel.floor = Some(Floor::Lava);
-                    } else {
-                        voxel.floor = Some(Floor::ScorchedEarth);
-                    }
+        // ── Step 2: Main street (horizontal dirt road) ──────────────
+        let street_y = height / 2;
+        let street_half_width = 2;
+        for y in (street_y - street_half_width)..=(street_y + street_half_width) {
+            for x in 1..width - 1 {
+                if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
+                    voxel.floor = Some(Floor::Dirt);
+                    voxel.furniture = None;
                 }
             }
         }
+
+        // ── Step 3: Generate buildings ──────────────────────────────
+        let buildings = generate_buildings(width, height, seed);
+
+        for b in &buildings {
+            place_building(&mut map, b, seed);
+        }
+
+        // ── Step 4: Street furniture along the main street ──────────
+        place_street_furniture(&mut map, width, street_y, street_half_width, seed);
+
+        // ── Step 5: Decorative elements in open areas ───────────────
+        place_desert_decorations(&mut map, width, height, seed);
+
+        // ── Step 6: Spawn clearing ──────────────────────────────────
+        clear_around(&mut map, SPAWN_POINT, 6);
 
         map
     }
@@ -183,125 +190,309 @@ impl GameMap {
     }
 }
 
-/// Selects a floor tile from layered noise values.
-///
-/// The biome value (0–1) chooses the dominant terrain, and the detail
-/// value adds local variation within each biome band.
-fn select_floor(biome: f64, detail: f64) -> Floor {
-    if biome < 0.30 {
-        // Low biome → sandy/gravelly terrain
-        if detail < 0.4 {
+/// Selects a desert/arid floor tile from layered noise values.
+fn select_desert_floor(biome: f64, detail: f64) -> Floor {
+    if biome < 0.35 {
+        if detail < 0.5 {
             Floor::Sand
-        } else if detail < 0.7 {
+        } else if detail < 0.8 {
             Floor::Gravel
         } else {
             Floor::Dirt
         }
-    } else if biome < 0.50 {
-        // Transition zone → dirt with some grass
+    } else if biome < 0.60 {
+        if detail < 0.4 {
+            Floor::Dirt
+        } else if detail < 0.7 {
+            Floor::Sand
+        } else {
+            Floor::Gravel
+        }
+    } else if biome < 0.80 {
+        if detail < 0.3 {
+            Floor::Sand
+        } else if detail < 0.5 {
+            Floor::Dirt
+        } else if detail < 0.75 {
+            Floor::Gravel
+        } else {
+            Floor::Grass
+        }
+    } else {
+        // Occasional sparse grass/dry vegetation at high biome values
         if detail < 0.3 {
             Floor::Dirt
         } else if detail < 0.6 {
-            Floor::Grass
-        } else {
-            Floor::Gravel
-        }
-    } else if biome < 0.75 {
-        // Forest biome → mostly grass with variation
-        if detail < 0.15 {
-            Floor::Flowers
-        } else if detail < 0.45 {
-            Floor::Grass
-        } else if detail < 0.70 {
-            Floor::TallGrass
+            Floor::Sand
         } else if detail < 0.85 {
-            Floor::Moss
-        } else {
-            Floor::Dirt
-        }
-    } else {
-        // Dense forest → lush undergrowth
-        if detail < 0.2 {
-            Floor::Moss
-        } else if detail < 0.55 {
-            Floor::TallGrass
-        } else if detail < 0.8 {
             Floor::Grass
         } else {
-            Floor::Flowers
+            Floor::TallGrass
         }
     }
 }
 
-/// Selects furniture (trees, bushes, rocks) based on noise-driven density.
+/// Generates deterministic building footprints for the western town.
 ///
-/// The tree density is controlled by a separate fBm layer so forest
-/// clusters form organically. A Euclidean-distance clearing around the
-/// spawn point guarantees the player starts in open space.
-fn select_furniture(
-    fx: f64,
-    fy: f64,
-    biome: f64,
-    tree_seed: NoiseSeed,
-    undergrowth_seed: NoiseSeed,
-    pos: GridVec,
-) -> Option<Furniture> {
-    // ── Spawn clearing ──────────────────────────────────────────
-    // Tiles within Euclidean distance < 6 from spawn are kept clear.
-    // We use squared distance to avoid a sqrt per tile.
-    let dist_sq = pos.distance_squared(SPAWN_POINT) as f64;
-    let clearing_radius_sq = 6.0 * 6.0;
-    if dist_sq < clearing_radius_sq {
-        return None;
-    }
+/// Buildings are placed in rows above and below the main street.
+/// Uses noise for position jitter and building kind selection.
+fn generate_buildings(
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+) -> Vec<Building> {
+    let mut buildings = Vec::new();
+    let street_y = height / 2;
+    let bldg_seed = seed.wrapping_add(11111);
 
-    // ── Gate clearing ───────────────────────────────────────────
-    // Keep the area around the Hell Gate clear so the player can approach.
-    let gate_dist_sq = pos.distance_squared(GATE_POINT) as f64;
-    let gate_clearing_sq = 4.0 * 4.0;
-    if gate_dist_sq < gate_clearing_sq {
-        return None;
-    }
+    // Building rows: above and below the main street
+    let rows: &[(CoordinateUnit, CoordinateUnit)] = &[
+        (street_y + 5, street_y + 5 + 12),   // south row
+        (street_y - 16, street_y - 5),        // north row
+    ];
 
-    // Smooth transition zone (radius 6–10): reduced density.
-    let transition_radius_sq = 10.0 * 10.0;
-    let transition_factor = if dist_sq < transition_radius_sq {
-        (dist_sq - clearing_radius_sq) / (transition_radius_sq - clearing_radius_sq)
-    } else {
-        1.0
-    };
+    for &(row_min_y, row_max_y) in rows {
+        let mut cx = 6;
+        let mut bldg_index = 0u32;
+        while cx < width - 10 {
+            let noise = value_noise(cx, bldg_index as i32, bldg_seed);
+            let kind_noise = value_noise(bldg_index as i32, cx, bldg_seed.wrapping_add(2222));
 
-    // ── Tree density ────────────────────────────────────────────
-    // fBm controls where forests cluster; biome modulates overall density.
-    let tree_noise = fbm(fx, fy, 4, 0.05, 0.5, tree_seed);
-    let base_density = biome * 0.5 + 0.1; // denser in high-biome areas
-    let tree_threshold = 1.0 - (base_density * transition_factor);
+            let bw = 6 + (noise * 6.0) as CoordinateUnit; // width 6–11
+            let bh = 5 + (noise * 4.0) as CoordinateUnit; // height 5–8
+            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 3.0) as CoordinateUnit;
+            let by = row_min_y + by_jitter;
 
-    // Per-tile jitter prevents perfectly smooth cluster edges.
-    let jitter = value_noise(pos.x, pos.y, tree_seed.wrapping_add(99999));
+            // Don't exceed row bounds or map bounds
+            if by + bh <= row_max_y && by > 0 && by + bh < height - 1 && cx + bw < width - 1 {
+                let kind = (kind_noise * 4.0) as u32;
+                buildings.push(Building {
+                    x: cx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    kind: kind.min(3),
+                });
+            }
 
-    if tree_noise > tree_threshold && jitter > 0.3 {
-        // High density area → trees (with occasional dead trees)
-        let variety = value_noise(pos.x, pos.y, tree_seed.wrapping_add(11111));
-        if variety < 0.12 {
-            return Some(Furniture::DeadTree);
+            cx += bw + 3 + (noise * 3.0) as CoordinateUnit; // gap between buildings
+            bldg_index += 1;
         }
-        return Some(Furniture::Tree);
     }
 
-    // ── Undergrowth (bushes, rocks) ─────────────────────────────
-    let under_noise = fbm(fx, fy, 3, 0.08, 0.5, undergrowth_seed);
-    let under_jitter = value_noise(pos.x, pos.y, undergrowth_seed.wrapping_add(77777));
+    buildings
+}
 
-    if under_noise > 0.62 && under_jitter > 0.6 && transition_factor > 0.5 {
-        let pick = value_noise(pos.x, pos.y, undergrowth_seed.wrapping_add(33333));
-        if pick < 0.6 {
-            return Some(Furniture::Bush);
+/// Places a building on the map: walls around the perimeter, wood plank floor,
+/// and interior furniture based on building kind.
+fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
+    let furn_seed = seed.wrapping_add(55555);
+
+    for y in b.y..b.y + b.h {
+        for x in b.x..b.x + b.w {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                let is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
+                // Leave a doorway in the center of the bottom wall
+                let is_door = y == b.y + b.h - 1
+                    && x == b.x + b.w / 2;
+
+                if is_border && !is_door {
+                    voxel.furniture = Some(Furniture::Wall);
+                    voxel.floor = Some(Floor::WoodPlanks);
+                } else {
+                    voxel.furniture = None;
+                    voxel.floor = Some(Floor::WoodPlanks);
+                }
+            }
         }
-        return Some(Furniture::Rock);
     }
 
-    None
+    // Place interior furniture based on building kind
+    let interior_x = b.x + 1;
+    let interior_y = b.y + 1;
+    let iw = b.w - 2;
+    let ih = b.h - 2;
+
+    match b.kind {
+        0 => {
+            // House: table and chairs
+            if iw >= 2 && ih >= 2 {
+                set_furniture(map, interior_x + 1, interior_y + 1, Furniture::Table);
+                set_furniture(map, interior_x, interior_y + 1, Furniture::Chair);
+                if iw >= 3 {
+                    set_furniture(map, interior_x + 2, interior_y + 1, Furniture::Chair);
+                }
+                if ih >= 3 {
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
+                }
+            }
+        }
+        1 => {
+            // Saloon: piano, tables, chairs, barrels
+            if iw >= 4 && ih >= 3 {
+                set_furniture(map, interior_x, interior_y, Furniture::Piano);
+                set_furniture(map, interior_x + 2, interior_y + 1, Furniture::Table);
+                set_furniture(map, interior_x + 1, interior_y + 1, Furniture::Chair);
+                set_furniture(map, interior_x + 3, interior_y + 1, Furniture::Chair);
+                if iw >= 5 {
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
+                    set_furniture(map, interior_x + iw - 1, interior_y + 1, Furniture::Barrel);
+                }
+            }
+        }
+        2 => {
+            // Stable: hitching posts, water trough, some crates
+            if iw >= 3 && ih >= 2 {
+                set_furniture(map, interior_x, interior_y, Furniture::HitchingPost);
+                set_furniture(map, interior_x + 2, interior_y, Furniture::HitchingPost);
+                set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::WaterTrough);
+                if iw >= 4 {
+                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Crate);
+                }
+            }
+        }
+        _ => {
+            // General store: barrels, crates, table
+            if iw >= 3 && ih >= 2 {
+                set_furniture(map, interior_x, interior_y, Furniture::Barrel);
+                set_furniture(map, interior_x + 1, interior_y, Furniture::Crate);
+                if iw >= 4 {
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
+                }
+                let noise = value_noise(b.x, b.y, furn_seed);
+                if noise > 0.5 && ih >= 3 {
+                    set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::Table);
+                }
+            }
+        }
+    }
+}
+
+/// Helper: sets furniture at a position if within bounds and not occupied by a wall.
+fn set_furniture(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, furn: Furniture) {
+    let pos = GridVec::new(x, y);
+    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+        if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+            voxel.furniture = Some(furn);
+        }
+    }
+}
+
+/// Places street furniture (benches, lamp posts, barrels, signs, hitching posts)
+/// along the main street sidewalks.
+fn place_street_furniture(
+    map: &mut GameMap,
+    width: CoordinateUnit,
+    street_y: CoordinateUnit,
+    street_half_width: CoordinateUnit,
+    seed: NoiseSeed,
+) {
+    let furn_seed = seed.wrapping_add(77777);
+    let sidewalk_north = street_y - street_half_width - 1;
+    let sidewalk_south = street_y + street_half_width + 1;
+
+    for x in (4..width - 4).step_by(4) {
+        let noise = value_noise(x, sidewalk_north, furn_seed);
+        let furn = match (noise * 6.0) as u32 {
+            0 => Furniture::LampPost,
+            1 => Furniture::Bench,
+            2 => Furniture::Barrel,
+            3 => Furniture::HitchingPost,
+            4 => Furniture::Sign,
+            _ => Furniture::Crate,
+        };
+        set_furniture(map, x, sidewalk_north, furn);
+    }
+
+    for x in (6..width - 4).step_by(4) {
+        let noise = value_noise(x, sidewalk_south, furn_seed.wrapping_add(1111));
+        let furn = match (noise * 6.0) as u32 {
+            0 => Furniture::Bench,
+            1 => Furniture::LampPost,
+            2 => Furniture::WaterTrough,
+            3 => Furniture::Barrel,
+            4 => Furniture::HitchingPost,
+            _ => Furniture::Sign,
+        };
+        set_furniture(map, x, sidewalk_south, furn);
+    }
+}
+
+/// Places desert decorations (cacti, dead trees, rocks, fences)
+/// in open areas using noise-driven density.
+fn place_desert_decorations(
+    map: &mut GameMap,
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+) {
+    let deco_seed = seed.wrapping_add(99999);
+    let density_seed = seed.wrapping_add(88888);
+
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let pos = GridVec::new(x, y);
+            // Skip if already has furniture or is near spawn
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                if voxel.furniture.is_some() {
+                    continue;
+                }
+                if matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            let dist_sq = pos.distance_squared(SPAWN_POINT) as f64;
+            if dist_sq < 36.0 {
+                continue;
+            }
+
+            let noise = value_noise(x, y, deco_seed);
+            let density = fbm(x as f64, y as f64, 3, 0.06, 0.5, density_seed);
+
+            // Only place decorations in sparse patches
+            if noise > 0.04 || density < 0.45 {
+                continue;
+            }
+
+            let pick = value_noise(y, x, deco_seed.wrapping_add(44444));
+            let furn = if pick < 0.35 {
+                Furniture::Cactus
+            } else if pick < 0.55 {
+                Furniture::DeadTree
+            } else if pick < 0.75 {
+                Furniture::Rock
+            } else {
+                Furniture::Bush
+            };
+            set_furniture(map, x, y, furn);
+        }
+    }
+}
+
+/// Clears all furniture within a given radius of a point.
+fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
+    let radius_sq = radius * radius;
+    let map_width = map.width;
+    let map_height = map.height;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let pos = center + GridVec::new(dx, dy);
+            if pos.distance_squared(center) < radius_sq {
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    // Don't clear border walls
+                    let is_border = pos.x == 0 || pos.y == 0
+                        || pos.x == map_width - 1 || pos.y == map_height - 1;
+                    if !is_border {
+                        voxel.furniture = None;
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for GameMap {
@@ -461,5 +652,40 @@ mod tests {
         let packet = map.create_render_packet(&center, 20, 10);
         assert_eq!(packet.len(), 10);
         assert_eq!(packet[0].len(), 20);
+    }
+
+    #[test]
+    fn game_map_has_buildings_with_wood_floors() {
+        let map = GameMap::new(120, 80, 42);
+        let mut wood_count = 0;
+        for y in 0..80 {
+            for x in 0..120 {
+                if matches!(map.voxels[y][x].floor, Some(Floor::WoodPlanks)) {
+                    wood_count += 1;
+                }
+            }
+        }
+        assert!(wood_count > 50, "Map should contain buildings with wood plank floors, found {wood_count}");
+    }
+
+    #[test]
+    fn game_map_has_western_furniture() {
+        let map = GameMap::new(120, 80, 42);
+        let mut has_bench = false;
+        let mut has_barrel = false;
+        let mut has_cactus = false;
+        for y in 0..80 {
+            for x in 0..120 {
+                match &map.voxels[y][x].furniture {
+                    Some(Furniture::Bench) => has_bench = true,
+                    Some(Furniture::Barrel) => has_barrel = true,
+                    Some(Furniture::Cactus) => has_cactus = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(has_bench, "Map should contain benches");
+        assert!(has_barrel, "Map should contain barrels");
+        assert!(has_cactus, "Map should contain cacti");
     }
 }

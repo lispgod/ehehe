@@ -65,11 +65,15 @@ pub fn spell_system(
                     if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos)
                         && let Some(ref furn) = voxel.furniture {
                             match furn {
-                                Furniture::Tree | Furniture::DeadTree | Furniture::Bush | Furniture::Rock => {
+                                Furniture::Tree | Furniture::DeadTree | Furniture::Bush | Furniture::Rock
+                                | Furniture::Bench | Furniture::Barrel | Furniture::Crate
+                                | Furniture::Table | Furniture::Chair | Furniture::Piano
+                                | Furniture::Cactus | Furniture::Sign => {
                                     voxel.furniture = None;
                                     destroyed_count += 1;
                                 }
-                                Furniture::Wall => {} // Walls are indestructible.
+                                Furniture::Wall | Furniture::LampPost | Furniture::HitchingPost
+                                | Furniture::WaterTrough | Furniture::Fence => {} // Sturdy items survive.
                             }
                         }
                 }

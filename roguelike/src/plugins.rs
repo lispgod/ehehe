@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience,
-    Health, HellGate, Hostile,
+    Health,
     Ammo, Inventory, Item, ItemKind, Level, Stamina, Name, Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
@@ -16,9 +16,9 @@ use crate::resources::{
     KillCount, MapSeed, PendingExp, RestartRequested, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
-use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, projectile, render, spawn, spatial_index, spell, turn, visibility, wave_spawn};
+use crate::systems::{ai, camera, combat, input, inventory, movement, projectile, render, spawn, spatial_index, spell, turn, visibility};
 use crate::systems::spawn::MONSTER_TEMPLATES;
-use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y, GATE_POINT, GATE_X, GATE_Y};
+use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y};
 
 // ─────────────────────────── System Sets ───────────────────────────
 
@@ -92,7 +92,7 @@ impl Plugin for RoguelikePlugin {
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
             // ── Startup ──
-            .add_systems(Startup, (spawn_player, spawn_monsters, spawn_hell_gate).chain())
+            .add_systems(Startup, (spawn_player, spawn_monsters).chain())
             // ── System-set ordering ──
             .configure_sets(
                 Update,
@@ -153,15 +153,13 @@ impl Plugin for RoguelikePlugin {
                     .after(RoguelikeSet::Consequence)
                     .run_if(in_state(TurnState::PlayerTurn)),
             )
-            // ── World turn: energy accumulation + AI + wave spawning + corruption + action resolution ──
+            // ── World turn: energy accumulation + AI + action resolution ──
             .add_systems(
                 Update,
                 (
                     ai::energy_accumulate_system,
                     ai::ai_system,
                     combat::ai_ranged_attack_system,
-                    wave_spawn::wave_spawn_system,
-                    corruption::corruption_system,
                 )
                     .chain()
                     .after(RoguelikeSet::Consequence)
@@ -170,7 +168,7 @@ impl Plugin for RoguelikePlugin {
             .add_systems(
                 Update,
                 turn::end_world_turn
-                    .after(corruption::corruption_system)
+                    .after(combat::ai_ranged_attack_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             )
             // ── Render (always runs — shows PAUSED overlay when paused) ──
@@ -199,14 +197,6 @@ fn spawn_player(mut commands: Commands) {
 /// deterministic placement.
 fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<MapSeed>) {
     do_spawn_monsters(&mut commands, &map, seed.0);
-}
-
-/// Spawns the Enemy Stronghold entity — the main objective the player must destroy to win.
-///
-/// The stronghold is a destructible, hostile entity with high health that blocks movement.
-/// Enemies emerge from it each wave, and the surrounding land corrupts over time.
-fn spawn_hell_gate(mut commands: Commands) {
-    do_spawn_hell_gate(&mut commands);
 }
 
 /// Helper: spawns the player entity.
@@ -282,16 +272,12 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     let spawn_seed = seed.wrapping_add(54321);
     let template_seed = seed.wrapping_add(98765);
     let min_spawn_dist_sq = 12 * 12;
-    let gate_exclusion_sq = 3 * 3;
 
     for y in 1..map.0.height - 1 {
         for x in 1..map.0.width - 1 {
             let pos = GridVec::new(x, y);
 
             if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
-                continue;
-            }
-            if pos.distance_squared(GATE_POINT) < gate_exclusion_sq {
                 continue;
             }
             if !map.0.is_passable(&pos) {
@@ -310,33 +296,6 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             spawn::spawn_monster(commands, template, x, y, 0, 0, 0, 0, 0.25);
         }
     }
-}
-
-/// Helper: spawns the Enemy Stronghold entity.
-fn do_spawn_hell_gate(commands: &mut Commands) {
-    commands.spawn((
-        Position {
-            x: GATE_X,
-            y: GATE_Y,
-        },
-        HellGate,
-        Hostile,
-        Name("Outlaw Hideout".into()),
-        Renderable {
-            symbol: "Ω".into(),
-            fg: RatColor::Rgb(255, 0, 0),
-            bg: RatColor::Rgb(80, 0, 0),
-        },
-        BlocksMovement,
-        Health {
-            current: 100,
-            max: 100,
-        },
-        CombatStats {
-            attack: 0,
-            defense: 3,
-        },
-    ));
 }
 
 /// System that handles game restart by despawning all entities and re-spawning.
@@ -383,5 +342,4 @@ fn restart_system(
 
     do_spawn_player(&mut commands);
     do_spawn_monsters(&mut commands, &game_map, seed.0);
-    do_spawn_hell_gate(&mut commands);
 }

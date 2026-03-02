@@ -10,6 +10,7 @@ pub enum Floor {
     Moss,
     Lava,
     ScorchedEarth,
+    WoodPlanks,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.
@@ -20,4 +21,16 @@ pub enum Furniture {
     Bush,
     Rock,
     DeadTree,
+    Bench,
+    LampPost,
+    Barrel,
+    Crate,
+    Cactus,
+    HitchingPost,
+    WaterTrough,
+    Fence,
+    Table,
+    Chair,
+    Piano,
+    Sign,
 }

@@ -580,8 +580,9 @@ fn render_stats_column(
 
     // Collectibles
     let coll_text = format!(
-        "Cap:{} Pdr:{} .31:{} .36:{} .44:{}",
-        collectibles.caps, collectibles.powder, collectibles.bullets_31, collectibles.bullets_36, collectibles.bullets_44
+        "Cap:{} Pdr:{} .31:{} .36:{} .44:{} | .50:{} .58:{} .577:{} .69:{}",
+        collectibles.caps, collectibles.powder, collectibles.bullets_31, collectibles.bullets_36, collectibles.bullets_44,
+        collectibles.bullets_50, collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69
     );
     frame.render_widget(
         Paragraph::new(Line::from(coll_text).dark_gray()),

@@ -15,6 +15,10 @@ fn can_reload(collectibles: &Collectibles, caliber: Caliber) -> bool {
         Caliber::Cal31 => collectibles.bullets_31 > 0,
         Caliber::Cal36 => collectibles.bullets_36 > 0,
         Caliber::Cal44 => collectibles.bullets_44 > 0,
+        Caliber::Cal50 => collectibles.bullets_50 > 0,
+        Caliber::Cal58 => collectibles.bullets_58 > 0,
+        Caliber::Cal577 => collectibles.bullets_577 > 0,
+        Caliber::Cal69 => collectibles.bullets_69 > 0,
     };
     has_bullet && collectibles.caps > 0 && collectibles.powder > 0
 }
@@ -27,6 +31,10 @@ fn consume_reload_supplies(collectibles: &mut Collectibles, caliber: Caliber) {
         Caliber::Cal31 => collectibles.bullets_31 -= 1,
         Caliber::Cal36 => collectibles.bullets_36 -= 1,
         Caliber::Cal44 => collectibles.bullets_44 -= 1,
+        Caliber::Cal50 => collectibles.bullets_50 -= 1,
+        Caliber::Cal58 => collectibles.bullets_58 -= 1,
+        Caliber::Cal577 => collectibles.bullets_577 -= 1,
+        Caliber::Cal69 => collectibles.bullets_69 -= 1,
     }
     collectibles.caps -= 1;
     collectibles.powder -= 1;
@@ -256,21 +264,32 @@ pub fn spawn_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
         weight: f64,
     }
     let gun_templates = [
-        GunTemplate { name: "Colt Army", fg: RatColor::Rgb(140, 140, 160), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 6, weight: 0.10 },
-        GunTemplate { name: "Colt Pocket", fg: RatColor::Rgb(160, 150, 140), loaded: 5, capacity: 5, caliber: Caliber::Cal31, attack: 3, weight: 0.10 },
-        GunTemplate { name: "Remington New Model Army", fg: RatColor::Rgb(120, 120, 130), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 7, weight: 0.08 },
-        GunTemplate { name: "Colt Sheriff", fg: RatColor::Rgb(170, 160, 150), loaded: 5, capacity: 5, caliber: Caliber::Cal36, attack: 4, weight: 0.07 },
+        // Existing revolvers
+        GunTemplate { name: "Colt Army", fg: RatColor::Rgb(140, 140, 160), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 6, weight: 0.07 },
+        GunTemplate { name: "Colt Pocket", fg: RatColor::Rgb(160, 150, 140), loaded: 5, capacity: 5, caliber: Caliber::Cal31, attack: 3, weight: 0.07 },
+        GunTemplate { name: "Remington New Model Army", fg: RatColor::Rgb(120, 120, 130), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 7, weight: 0.05 },
+        GunTemplate { name: "Colt Sheriff", fg: RatColor::Rgb(170, 160, 150), loaded: 5, capacity: 5, caliber: Caliber::Cal36, attack: 4, weight: 0.04 },
+        // New revolvers
+        GunTemplate { name: "Starr 1858 DA", fg: RatColor::Rgb(130, 130, 145), loaded: 6, capacity: 6, caliber: Caliber::Cal44, attack: 5, weight: 0.03 },
+        GunTemplate { name: "Savage 1856", fg: RatColor::Rgb(145, 140, 135), loaded: 6, capacity: 6, caliber: Caliber::Cal36, attack: 4, weight: 0.03 },
+        GunTemplate { name: "Adams Revolver", fg: RatColor::Rgb(135, 135, 150), loaded: 5, capacity: 5, caliber: Caliber::Cal44, attack: 5, weight: 0.03 },
+        // Rifles
+        GunTemplate { name: "Hawken Rifle", fg: RatColor::Rgb(160, 130, 90), loaded: 1, capacity: 1, caliber: Caliber::Cal50, attack: 10, weight: 0.02 },
+        GunTemplate { name: "Springfield 1842", fg: RatColor::Rgb(140, 120, 80), loaded: 1, capacity: 1, caliber: Caliber::Cal69, attack: 12, weight: 0.02 },
+        GunTemplate { name: "Springfield 1855", fg: RatColor::Rgb(150, 125, 85), loaded: 1, capacity: 1, caliber: Caliber::Cal58, attack: 10, weight: 0.02 },
+        GunTemplate { name: "Enfield 1853", fg: RatColor::Rgb(145, 128, 88), loaded: 1, capacity: 1, caliber: Caliber::Cal577, attack: 10, weight: 0.02 },
     ];
 
     for gt in &gun_templates {
         cumulative += gt.weight;
         if roll < cumulative {
+            let symbol = if gt.capacity == 1 { "r" } else { "p" };
             commands.spawn((
                 Position { x, y },
                 Item,
                 Name(gt.name.into()),
                 Renderable {
-                    symbol: "p".into(),
+                    symbol: symbol.into(),
                     fg: gt.fg,
                     bg: RatColor::Black,
                 },
@@ -398,6 +417,10 @@ pub fn auto_pickup_system(
                 CollectibleKind::Bullets31(n) => collectibles.bullets_31 += n,
                 CollectibleKind::Bullets36(n) => collectibles.bullets_36 += n,
                 CollectibleKind::Bullets44(n) => collectibles.bullets_44 += n,
+                CollectibleKind::Bullets50(n) => collectibles.bullets_50 += n,
+                CollectibleKind::Bullets58(n) => collectibles.bullets_58 += n,
+                CollectibleKind::Bullets577(n) => collectibles.bullets_577 += n,
+                CollectibleKind::Bullets69(n) => collectibles.bullets_69 += n,
                 CollectibleKind::Powder(n) => collectibles.powder += n,
                 CollectibleKind::Bandages(n) => collectibles.bandages += n,
                 CollectibleKind::Dollars(n) => collectibles.dollars += n,

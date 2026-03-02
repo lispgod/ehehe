@@ -275,15 +275,23 @@ pub enum Faction {
     Vaqueros,
 }
 
-/// Bullet caliber for period-accurate cap-and-ball revolvers.
+/// Bullet caliber for period-accurate cap-and-ball revolvers and rifles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Caliber {
     /// .31 caliber (Colt Pocket)
     Cal31,
-    /// .36 caliber (Colt Navy, Colt Sheriff)
+    /// .36 caliber (Colt Navy, Colt Sheriff, Savage 1856)
     Cal36,
-    /// .44 caliber (Colt Army, Remington New Model Army)
+    /// .44 caliber (Colt Army, Remington New Model Army, Starr 1858, Adams)
     Cal44,
+    /// .50 caliber (Hawken Rifle)
+    Cal50,
+    /// .58 caliber (Springfield Model 1855)
+    Cal58,
+    /// .577 caliber (Enfield Pattern 1853)
+    Cal577,
+    /// .69 caliber (Springfield Model 1842)
+    Cal69,
 }
 
 impl std::fmt::Display for Caliber {
@@ -292,6 +300,10 @@ impl std::fmt::Display for Caliber {
             Caliber::Cal31 => write!(f, ".31"),
             Caliber::Cal36 => write!(f, ".36"),
             Caliber::Cal44 => write!(f, ".44"),
+            Caliber::Cal50 => write!(f, ".50"),
+            Caliber::Cal58 => write!(f, ".58"),
+            Caliber::Cal577 => write!(f, ".577"),
+            Caliber::Cal69 => write!(f, ".69"),
         }
     }
 }
@@ -448,6 +460,10 @@ pub enum CollectibleKind {
     Bullets31(i32),
     Bullets36(i32),
     Bullets44(i32),
+    Bullets50(i32),
+    Bullets58(i32),
+    Bullets577(i32),
+    Bullets69(i32),
     Powder(i32),
     Bandages(i32),
     Dollars(i32),

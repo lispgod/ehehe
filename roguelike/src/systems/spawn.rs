@@ -122,20 +122,34 @@ pub fn spawn_monster(
     // Build NPC inventory items.
     let mut inv_items: Vec<Entity> = Vec::new();
 
+    // Deterministic hash based on position for weapon/item assignment.
+    let item_hash = (x.wrapping_mul(31) ^ y.wrapping_mul(17)).unsigned_abs();
+
     // NPCs with ammo get a gun in their inventory (same structure as player).
     if template.ammo > 0 {
-        // Gun stats match faction theme: Lawmen carry .36 Colt Sheriffs (moderate),
-        // Outlaws carry .44 Colt Armys (heavy), others carry .31 Colt Pockets (light).
-        let (gun_name, caliber, capacity, gun_attack) = match template.faction {
-            Faction::Lawmen => ("Colt Sheriff", Caliber::Cal36, 5, 4),
-            Faction::Outlaws => ("Colt Army", Caliber::Cal44, 6, 6),
-            _ => ("Colt Pocket", Caliber::Cal31, 5, 3),
-        };
+        // Use position-based hash to deterministically assign varied weapons.
+        // Some NPCs get rifles, some revolvers, from the full period-accurate pool.
+        let weapon_pool: &[(&str, Caliber, i32, i32, &str)] = &[
+            // (name, caliber, capacity, attack, symbol)
+            ("Colt Sheriff", Caliber::Cal36, 5, 4, "p"),
+            ("Colt Army", Caliber::Cal44, 6, 6, "p"),
+            ("Colt Pocket", Caliber::Cal31, 5, 3, "p"),
+            ("Remington New Model Army", Caliber::Cal44, 6, 7, "p"),
+            ("Starr 1858 DA", Caliber::Cal44, 6, 5, "p"),
+            ("Savage 1856", Caliber::Cal36, 6, 4, "p"),
+            ("Adams Revolver", Caliber::Cal44, 5, 5, "p"),
+            ("Hawken Rifle", Caliber::Cal50, 1, 10, "r"),
+            ("Springfield 1842", Caliber::Cal69, 1, 12, "r"),
+            ("Springfield 1855", Caliber::Cal58, 1, 10, "r"),
+            ("Enfield 1853", Caliber::Cal577, 1, 10, "r"),
+        ];
+        let weapon_idx = (item_hash as usize) % weapon_pool.len();
+        let (gun_name, caliber, capacity, gun_attack, symbol) = weapon_pool[weapon_idx];
         let gun = commands.spawn((
             Item,
-            Name(gun_name.into()),
+            Name(String::from(gun_name)),
             Renderable {
-                symbol: "p".into(),
+                symbol: String::from(symbol),
                 fg: RatColor::Rgb(140, 140, 160),
                 bg: RatColor::Black,
             },
@@ -144,7 +158,7 @@ pub fn spawn_monster(
                 capacity,
                 caliber,
                 attack: gun_attack,
-                name: gun_name.into(),
+                name: String::from(gun_name),
             },
         )).id();
         inv_items.push(gun);
@@ -152,7 +166,6 @@ pub fn spawn_monster(
 
     // Deterministic item assignment based on position.
     // Some humanoid NPCs carry throwable items (dynamite or molotovs).
-    let item_hash = (x.wrapping_mul(31) ^ y.wrapping_mul(17)).unsigned_abs();
     if !matches!(template.faction, Faction::Wildlife) {
         if item_hash % 5 == 0 {
             let dynamite = commands.spawn((

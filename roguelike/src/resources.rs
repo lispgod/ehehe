@@ -324,6 +324,14 @@ pub struct Collectibles {
     pub bullets_36: i32,
     /// .44 caliber lead bullets
     pub bullets_44: i32,
+    /// .50 caliber lead bullets
+    pub bullets_50: i32,
+    /// .58 caliber lead bullets
+    pub bullets_58: i32,
+    /// .577 caliber lead bullets
+    pub bullets_577: i32,
+    /// .69 caliber lead bullets
+    pub bullets_69: i32,
     /// Black powder charges (needed for reloading: 1 per round)
     pub powder: i32,
     /// Bandages (healing item)
@@ -339,6 +347,10 @@ impl Default for Collectibles {
             bullets_31: 10,
             bullets_36: 20,
             bullets_44: 20,
+            bullets_50: 5,
+            bullets_58: 5,
+            bullets_577: 5,
+            bullets_69: 5,
             powder: 30,
             bandages: 5,
             dollars: 0,

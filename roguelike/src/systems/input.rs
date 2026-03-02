@@ -339,11 +339,12 @@ pub fn input_system(
                 if let Some(inv) = player_inv
                     && let Some(&item_entity) = inv.items.get(idx)
                         && let Ok(kind) = item_kind_query.get(item_entity) {
-                            if let ItemKind::Gun { loaded, .. } = kind {
+                            if let ItemKind::Gun { loaded, name, .. } = kind {
                                 if *loaded > 0 {
                                     let delta = cursor.pos - player_pos.as_grid_vec();
                                     if delta != crate::grid_vec::GridVec::ZERO {
-                                        extra_world_ticks.0 = 1;
+                                        // Double-action revolvers (Starr 1858) cost only 1 tick.
+                                        extra_world_ticks.0 = if name.contains("Starr") { 0 } else { 1 };
                                         intents.ranged_intents.write(RangedAttackIntent {
                                             attacker: player_entity,
                                             range: RANGED_ATTACK_RANGE,

@@ -96,6 +96,35 @@ impl GridVec {
         dx * dx + dy * dy
     }
 
+    /// Squared length (norm²) of this vector: x² + y².
+    ///
+    /// Equivalent to `self.distance_squared(ZERO)` but more idiomatic
+    /// for expressing magnitude. Useful as the denominator in
+    /// projection formulas and for sorting by distance from origin.
+    ///
+    /// ‖v‖² = v · v (the dot product of a vector with itself).
+    #[inline]
+    pub fn norm_squared(self) -> CoordinateUnit {
+        self.x * self.x + self.y * self.y
+    }
+
+    /// Euclidean distance (L₂ norm): √(Δx² + Δy²).
+    ///
+    /// The true straight-line distance between two grid points.
+    /// Prefer `distance_squared` for comparisons (avoids `sqrt`);
+    /// use this when the actual distance value is needed (e.g.,
+    /// for attenuation, display, or non-monotonic formulas).
+    #[inline]
+    pub fn euclidean_distance(self, other: Self) -> f64 {
+        (self.distance_squared(other) as f64).sqrt()
+    }
+
+    /// Returns `true` if this vector is the zero (identity) element.
+    #[inline]
+    pub fn is_zero(self) -> bool {
+        self.x == 0 && self.y == 0
+    }
+
     /// Convert to `(f64, f64)` for floating-point calculations (noise, etc.).
     #[inline]
     pub fn as_f64(self) -> (f64, f64) {
@@ -691,5 +720,79 @@ mod tests {
         for n in &p.all_neighbors() {
             assert_eq!(p.chebyshev_distance(*n), 1);
         }
+    }
+
+    // ─── norm_squared tests ─────────────────────────────────────
+
+    #[test]
+    fn norm_squared_zero() {
+        assert_eq!(GridVec::ZERO.norm_squared(), 0);
+    }
+
+    #[test]
+    fn norm_squared_unit_vectors() {
+        for dir in &GridVec::DIRECTIONS_4 {
+            assert_eq!(dir.norm_squared(), 1);
+        }
+    }
+
+    #[test]
+    fn norm_squared_equals_dot_self() {
+        let v = GridVec::new(3, 4);
+        assert_eq!(v.norm_squared(), v.dot(v));
+    }
+
+    #[test]
+    fn norm_squared_equals_distance_squared_to_zero() {
+        let v = GridVec::new(7, -2);
+        assert_eq!(v.norm_squared(), v.distance_squared(GridVec::ZERO));
+    }
+
+    #[test]
+    fn norm_squared_pythagorean() {
+        let v = GridVec::new(3, 4);
+        assert_eq!(v.norm_squared(), 25); // 3² + 4² = 25
+    }
+
+    // ─── euclidean_distance tests ────────────────────────────────
+
+    #[test]
+    fn euclidean_distance_pythagorean() {
+        let a = GridVec::new(0, 0);
+        let b = GridVec::new(3, 4);
+        assert!((a.euclidean_distance(b) - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn euclidean_distance_symmetric() {
+        let a = GridVec::new(1, 2);
+        let b = GridVec::new(5, 7);
+        assert!((a.euclidean_distance(b) - b.euclidean_distance(a)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn euclidean_distance_zero_self() {
+        let v = GridVec::new(3, 4);
+        assert_eq!(v.euclidean_distance(v), 0.0);
+    }
+
+    // ─── is_zero tests ──────────────────────────────────────────
+
+    #[test]
+    fn is_zero_true_for_zero() {
+        assert!(GridVec::ZERO.is_zero());
+    }
+
+    #[test]
+    fn is_zero_false_for_nonzero() {
+        assert!(!GridVec::new(1, 0).is_zero());
+        assert!(!GridVec::new(0, 1).is_zero());
+        assert!(!GridVec::new(-1, -1).is_zero());
+    }
+
+    #[test]
+    fn is_zero_consistent_with_eq() {
+        let v = GridVec::new(3, -7);
+        assert_eq!(v.is_zero(), v == GridVec::ZERO);
     }
 }

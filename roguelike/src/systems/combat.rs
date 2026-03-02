@@ -10,6 +10,7 @@ use crate::typedefs::RatColor;
 /// Resolves attack intents into damage events.
 ///
 /// Damage = max(0, attacker.attack − target.defense).
+/// Uses `CombatStats::damage_against` for the formal damage model.
 /// Emits a `DamageEvent` for each successful hit and logs combat messages.
 pub fn combat_system(
     mut intents: MessageReader<AttackIntent>,
@@ -25,7 +26,7 @@ pub fn combat_system(
             continue;
         };
 
-        let damage = (attacker_stats.attack - target_stats.defense).max(0);
+        let damage = attacker_stats.damage_against(target_stats);
         let a_name = attacker_name.map_or("???", |n| &n.0);
         let t_name = target_name.map_or("???", |n| &n.0);
 
@@ -41,14 +42,14 @@ pub fn combat_system(
     }
 }
 
-/// Applies damage events to entity health pools.
+/// Applies damage events to entity health pools using `Health::apply_damage`.
 pub fn apply_damage_system(
     mut events: MessageReader<DamageEvent>,
     mut health_query: Query<&mut Health>,
 ) {
     for event in events.read() {
         if let Ok(mut health) = health_query.get_mut(event.target) {
-            health.current = (health.current - event.amount).max(0);
+            health.apply_damage(event.amount);
         }
     }
 }
@@ -69,7 +70,7 @@ pub fn death_system(
     mut pending_exp: ResMut<PendingExp>,
 ) {
     for (entity, health, name, hostile, hell_gate, pos, loot_table, is_player, exp_reward) in &query {
-        if health.current <= 0 {
+        if health.is_dead() {
             let label = name.map_or("Something", |n| &n.0);
             combat_log.push(format!("{label} has been slain!"));
 
@@ -212,11 +213,11 @@ pub fn ranged_attack_system(
             }
         } else {
             // Legacy path: use global Ammo pool.
-            if ammo.current <= 0 {
+            if ammo.is_empty() {
                 combat_log.push("Out of ammo!".into());
                 continue;
             }
-            ammo.current -= 1;
+            ammo.spend_one();
             damage = caster_stats.attack;
         }
 
@@ -299,6 +300,7 @@ pub fn ai_ranged_attack_system(
 /// Resolves roundhouse kick attack intents.
 /// Hits all adjacent hostile entities (Chebyshev distance 1).
 /// This is a powerful melee attack that sweeps all enemies around the player.
+/// Uses `CombatStats::damage_against` for the formal damage model.
 pub fn melee_wide_system(
     mut intents: MessageReader<MeleeWideIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
@@ -317,7 +319,7 @@ pub fn melee_wide_system(
         for (target_entity, target_pos, target_stats, target_name) in &targets {
             let dist = origin.chebyshev_distance(target_pos.as_grid_vec());
             if dist == 1 {
-                let damage = (attacker_stats.attack - target_stats.defense).max(0);
+                let damage = attacker_stats.damage_against(target_stats);
                 let t_name = target_name.map_or("???", |n| &n.0);
                 if damage > 0 {
                     damage_events.write(DamageEvent {

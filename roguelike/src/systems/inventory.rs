@@ -94,8 +94,7 @@ pub fn use_item_system(
             ItemKind::Whiskey { heal } => {
                 let heal = *heal;
                 if let Ok(mut hp) = health_query.single_mut() {
-                    let healed = heal.min(hp.max - hp.current);
-                    hp.current = (hp.current + heal).min(hp.max);
+                    let healed = hp.heal(heal);
                     combat_log.push(format!("Used {item_name}, healed {healed} HP"));
                 }
                 inv.items.remove(intent.item_index);
@@ -447,7 +446,7 @@ pub fn throw_system(
             landing = tile;
 
             if let Some((target_entity, target_def, t_name)) = target_by_pos.get(&tile) {
-                let dmg = (intent.damage - target_def).max(0);
+                let dmg = crate::components::compute_damage(intent.damage, *target_def);
                 if dmg > 0 {
                     damage_events.write(crate::events::DamageEvent {
                         target: *target_entity,

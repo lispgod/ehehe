@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Inventory, Stamina, Name, Player};
+use crate::components::{CombatStats, Inventory, Stamina, Name};
 use crate::events::{MolotovCastIntent, SpellCastIntent};
 use crate::resources::{CombatLog, GameMapResource, SpellParticles};
 use crate::typeenums::{Floor, Furniture};
@@ -19,7 +19,7 @@ const SPELL_STAMINA_COST: i32 = 10;
 pub fn spell_system(
     mut commands: Commands,
     mut intents: MessageReader<SpellCastIntent>,
-    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>), With<Player>>,
+    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>)>,
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
 ) {
@@ -103,7 +103,7 @@ pub fn spell_system(
 pub fn molotov_system(
     mut commands: Commands,
     mut intents: MessageReader<MolotovCastIntent>,
-    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>), With<Player>>,
+    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>)>,
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
     mut spell_particles: ResMut<SpellParticles>,

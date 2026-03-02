@@ -537,7 +537,7 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
 
 impl Default for GameMap {
     fn default() -> Self {
-        GameMap::new(80, 50, 42)
+        GameMap::new(200, 140, 42)
     }
 }
 

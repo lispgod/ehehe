@@ -3,8 +3,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, PatrolOrigin, Player, Position, Speed, Viewshed};
-use crate::events::{AiRangedAttackIntent, AttackIntent, MoveIntent};
+use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Inventory, ItemKind, PatrolOrigin, Player, Position, Speed, Viewshed};
+use crate::events::{AiRangedAttackIntent, AttackIntent, MolotovCastIntent, MoveIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex};
 
@@ -150,15 +150,16 @@ const PATROL_RADIUS: i32 = 8;
 /// - **Patrolling**: wander around patrol origin. If player or enemy faction
 ///   entity is spotted, switch to `Chasing`.
 ///   - Lawmen: patrol in a structured pattern around their origin.
-///   - Wildlife: random wandering.
+///   - Wildlife: random wandering with occasional idle pauses.
 ///   - Outlaws: skulk (move slowly, stay near buildings).
 /// - **Chasing**: use **A\* pathfinding** to pursue the player or nearest
-///   hostile faction entity.
+///   hostile faction entity. NPCs with guns fire them; NPCs with throwables
+///   (dynamite, molotovs) use them at range.
 ///
 /// NPCs also fight entities of hostile factions (outlaws vs lawmen vs wildlife).
 pub fn ai_system(
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position), With<Player>>,
@@ -167,14 +168,17 @@ pub fn ai_system(
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
     blockers: Query<(), With<BlocksMovement>>,
+    item_kinds: Query<&ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
     mut ranged_intents: MessageWriter<AiRangedAttackIntent>,
     mut attack_intents: MessageWriter<AttackIntent>,
+    mut spell_intents: MessageWriter<SpellCastIntent>,
+    mut molotov_intents: MessageWriter<MolotovCastIntent>,
 ) {
     let player_info = player_query.single().ok();
     let player_vec = player_info.map(|(_, p)| p.as_grid_vec());
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin, mut inventory) in &mut ai_query {
         // Only act if enough energy has accumulated.
         if !energy.can_act() {
             continue;
@@ -258,6 +262,27 @@ pub fn ai_system(
                 // Patrol behavior depends on faction.
                 let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
 
+                // Natural movement: occasional idle pauses based on position hash.
+                let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
+                    .wrapping_add(energy.0) as u32;
+                if pause_hash % 5 == 0 {
+                    // Skip this turn (idle pause for natural movement).
+                    if let Some(ref mut look) = ai_look_dir {
+                        // Slowly look around during pause.
+                        let current_normalized = look.0.king_step();
+                        let idx = GridVec::DIRECTIONS_8.iter()
+                            .position(|&d| d == current_normalized)
+                            .map(|i| (i + 1) % 8)
+                            .unwrap_or(0);
+                        look.0 = GridVec::DIRECTIONS_8[idx];
+                        if let Some(ref mut vs) = viewshed {
+                            vs.dirty = true;
+                        }
+                    }
+                    energy.spend_action();
+                    continue;
+                }
+
                 let patrol_step = match my_faction {
                     Some(Faction::Lawmen) => {
                         // Sheriff/Lawmen: structured patrol around origin
@@ -275,8 +300,9 @@ pub fn ai_system(
                     Some(Faction::Wildlife) => {
                         // Animals: random wandering using prime multipliers for
                         // pseudo-random direction based on position and energy.
-                        let dir_idx = ((my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13))
-                            .wrapping_add(energy.0)) as usize % 8;
+                        // Occasionally change direction for more natural movement.
+                        let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13));
+                        let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])
                     }
                     Some(Faction::Outlaws) => {
@@ -285,16 +311,16 @@ pub fn ai_system(
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
                             Some((origin - my_pos).king_step())
                         } else {
-                            let dir_idx = ((my_pos.x.wrapping_mul(3) ^ my_pos.y.wrapping_mul(11))
-                                .wrapping_add(energy.0)) as usize % 8;
+                            let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(3) ^ my_pos.y.wrapping_mul(11));
+                            let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                             Some(GridVec::DIRECTIONS_8[dir_idx])
                         }
                     }
                     _ => {
                         // Vaqueros and others: wander using prime multipliers (5, 9)
                         // for pseudo-random direction.
-                        let dir_idx = ((my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9))
-                            .wrapping_add(energy.0)) as usize % 8;
+                        let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9));
+                        let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])
                     }
                 };
@@ -355,25 +381,91 @@ pub fn ai_system(
 
                 let dist = my_pos.chebyshev_distance(target_vec);
 
-                // Ranged attack for Lawmen/Outlaws with ammo.
-                let is_ranged = my_faction.is_some_and(|f| f == Faction::Lawmen || f == Faction::Outlaws);
-                let can_shoot = is_ranged
-                    && ammo.is_some()
-                    && dist > 1
-                    && dist <= AI_RANGED_ATTACK_RANGE
-                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec));
-
-                if can_shoot
-                    && let Some(mut ammo_pool) = ammo
-                        && ammo_pool.spend_one() {
-                            ranged_intents.write(AiRangedAttackIntent {
-                                attacker: entity,
-                                target: target_entity,
-                                range: AI_RANGED_ATTACK_RANGE,
-                            });
-                            energy.spend_action();
-                            continue;
+                // Check inventory for throwable items (grenade/molotov) at medium range.
+                let mut used_throwable = false;
+                if dist >= 3 && dist <= 6 {
+                    if let Some(ref mut inv) = inventory {
+                        // Find a throwable item in inventory.
+                        let throwable_idx = inv.items.iter().position(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Grenade { .. } | ItemKind::Molotov { .. })
+                            )
+                        });
+                        if let Some(idx) = throwable_idx {
+                            let item_ent = inv.items[idx];
+                            if let Ok(kind) = item_kinds.get(item_ent) {
+                                match kind {
+                                    ItemKind::Grenade { damage: _, radius } => {
+                                        spell_intents.write(SpellCastIntent {
+                                            caster: entity,
+                                            radius: *radius,
+                                            target: target_vec,
+                                            grenade_index: idx,
+                                        });
+                                        used_throwable = true;
+                                    }
+                                    ItemKind::Molotov { damage, radius } => {
+                                        molotov_intents.write(MolotovCastIntent {
+                                            caster: entity,
+                                            radius: *radius,
+                                            damage: *damage,
+                                            target: target_vec,
+                                            item_index: idx,
+                                        });
+                                        used_throwable = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
+                    }
+                }
+                if used_throwable {
+                    energy.spend_action();
+                    continue;
+                }
+
+                // Check inventory for a loaded gun to fire.
+                let mut used_gun = false;
+                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec))
+                {
+                    if let Some(ref mut inv) = inventory {
+                        let gun_idx = inv.items.iter().position(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
+                            )
+                        });
+                        if gun_idx.is_some() {
+                            // Fire using the legacy ammo system for AI (compatible with
+                            // ai_ranged_attack_system which spawns the bullet).
+                            if let Some(mut ammo_pool) = ammo
+                                && ammo_pool.spend_one() {
+                                    ranged_intents.write(AiRangedAttackIntent {
+                                        attacker: entity,
+                                        target: target_entity,
+                                        range: AI_RANGED_ATTACK_RANGE,
+                                    });
+                                    used_gun = true;
+                                }
+                        }
+                    } else {
+                        // Fallback: NPCs without inventory but with ammo (legacy path).
+                        if let Some(mut ammo_pool) = ammo
+                            && ammo_pool.spend_one() {
+                                ranged_intents.write(AiRangedAttackIntent {
+                                    attacker: entity,
+                                    target: target_entity,
+                                    range: AI_RANGED_ATTACK_RANGE,
+                                });
+                                used_gun = true;
+                            }
+                    }
+                }
+                if used_gun {
+                    energy.spend_action();
+                    continue;
+                }
 
                 // Adjacent to target? Attack directly (faction fight or player).
                 if dist == 1 {

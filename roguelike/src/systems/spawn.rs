@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiState, Ammo, BlocksMovement, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
-    LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
+    AiLookDir, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
+    Inventory, Item, ItemKind, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
@@ -50,6 +50,10 @@ pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,
 /// with optional stat bonuses for wave scaling.
 ///
+/// NPCs with ammo > 0 get an Inventory containing a gun item matching
+/// their faction, making their inventory structure identical to the player's.
+/// Some NPCs also receive throwable items (dynamite, molotovs).
+///
 /// This is the single spawn point for all hostile NPCs — both initial map
 /// population and wave spawning use this helper, ensuring consistent
 /// component bundles.
@@ -67,6 +71,66 @@ pub fn spawn_monster(
     let scaled_health = template.health + health_bonus;
     let scaled_attack = template.attack + attack_bonus;
     let scaled_defense = template.defense + defense_bonus;
+
+    // Build NPC inventory items.
+    let mut inv_items: Vec<Entity> = Vec::new();
+
+    // NPCs with ammo get a gun in their inventory (same structure as player).
+    if template.ammo > 0 {
+        let (gun_name, caliber, capacity, gun_attack) = match template.faction {
+            Faction::Lawmen => ("Colt Sheriff", Caliber::Cal36, 5, 4),
+            Faction::Outlaws => ("Colt Army", Caliber::Cal44, 6, 6),
+            _ => ("Colt Pocket", Caliber::Cal31, 5, 3),
+        };
+        let gun = commands.spawn((
+            Item,
+            Name(gun_name.into()),
+            Renderable {
+                symbol: "P".into(),
+                fg: RatColor::Rgb(140, 140, 160),
+                bg: RatColor::Black,
+            },
+            ItemKind::Gun {
+                loaded: template.ammo.min(capacity),
+                capacity,
+                caliber,
+                attack: gun_attack,
+                name: gun_name.into(),
+            },
+        )).id();
+        inv_items.push(gun);
+    }
+
+    // Deterministic item assignment based on position.
+    // Some humanoid NPCs carry throwable items (dynamite or molotovs).
+    let item_hash = (x.wrapping_mul(31) ^ y.wrapping_mul(17)).unsigned_abs();
+    if !matches!(template.faction, Faction::Wildlife) {
+        if item_hash % 5 == 0 {
+            let dynamite = commands.spawn((
+                Item,
+                Name("Dynamite Stick".into()),
+                Renderable {
+                    symbol: "*".into(),
+                    fg: RatColor::Rgb(255, 165, 0),
+                    bg: RatColor::Black,
+                },
+                ItemKind::Grenade { damage: 8, radius: 2 },
+            )).id();
+            inv_items.push(dynamite);
+        } else if item_hash % 7 == 0 {
+            let molotov = commands.spawn((
+                Item,
+                Name("Molotov Cocktail".into()),
+                Renderable {
+                    symbol: "m".into(),
+                    fg: RatColor::Rgb(255, 100, 0),
+                    bg: RatColor::Black,
+                },
+                ItemKind::Molotov { damage: 6, radius: 4 },
+            )).id();
+            inv_items.push(molotov);
+        }
+    }
 
     commands.spawn((
         Position { x, y },
@@ -105,5 +169,6 @@ pub fn spawn_monster(
             current: template.ammo,
             max: template.ammo,
         },
+        Inventory { items: inv_items },
     ));
 }

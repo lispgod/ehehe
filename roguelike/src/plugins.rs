@@ -76,7 +76,7 @@ impl Plugin for RoguelikePlugin {
             .add_message::<MolotovCastIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
-            .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
+            .insert_resource(GameMapResource(GameMap::new(200, 140, seed)))
             .insert_resource(CameraPosition(SPAWN_POINT))
             .init_resource::<SpatialIndex>()
             .init_resource::<CombatLog>()
@@ -162,6 +162,7 @@ impl Plugin for RoguelikePlugin {
                     ai::energy_accumulate_system,
                     ai::ai_system,
                     combat::ai_ranged_attack_system,
+                    turn::fire_system,
                 )
                     .chain()
                     .after(RoguelikeSet::Consequence)
@@ -170,7 +171,7 @@ impl Plugin for RoguelikePlugin {
             .add_systems(
                 Update,
                 turn::end_world_turn
-                    .after(combat::ai_ranged_attack_system)
+                    .after(turn::fire_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             )
             // ── Render (always runs — shows PAUSED overlay when paused) ──
@@ -350,7 +351,7 @@ fn restart_system(
     *cursor = CursorPosition::default();
     *collectibles = Collectibles::default();
     extra_ticks.0 = 0;
-    *game_map = GameMapResource(GameMap::new(120, 80, seed.0));
+    *game_map = GameMapResource(GameMap::new(200, 140, seed.0));
 
     next_game_state.set(GameState::Playing);
 

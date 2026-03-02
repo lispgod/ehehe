@@ -453,7 +453,8 @@ fn place_desert_decorations(
             let noise = value_noise(x, y, deco_seed);
             let density = fbm(x as f64, y as f64, 3, 0.06, 0.5, density_seed);
 
-            // Only place decorations in sparse patches
+            // ~4% of tiles pass the noise check; density threshold creates
+            // natural-looking clusters rather than uniform scatter.
             if noise > 0.04 || density < 0.45 {
                 continue;
             }
@@ -481,7 +482,7 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             let pos = center + GridVec::new(dx, dy);
-            if pos.distance_squared(center) < radius_sq {
+            if pos.distance_squared(center) <= radius_sq {
                 if let Some(voxel) = map.get_voxel_at_mut(&pos) {
                     // Don't clear border walls
                     let is_border = pos.x == 0 || pos.y == 0

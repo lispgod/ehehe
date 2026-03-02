@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience,
-    Health,
-    Ammo, Inventory, Item, ItemKind, Level, Stamina, Name, Player, Position, Renderable, Speed, Viewshed, ACTION_COST,
+    Ammo, BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience,
+    Health, Inventory, Item, ItemKind, Level, Stamina, Name, Player, Position,
+    Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::gamemap::GameMap;

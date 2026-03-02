@@ -9,6 +9,29 @@ use crate::grid_vec::GridVec;
 use crate::resources::{Collectibles, CombatLog, GameMapResource, InputState, SpellParticles, SpatialIndex};
 use crate::typedefs::RatColor;
 
+/// Checks whether the collectible pool has the required supplies to reload one round.
+fn can_reload(collectibles: &Collectibles, caliber: Caliber) -> bool {
+    let has_bullet = match caliber {
+        Caliber::Cal31 => collectibles.bullets_31 > 0,
+        Caliber::Cal36 => collectibles.bullets_36 > 0,
+        Caliber::Cal44 => collectibles.bullets_44 > 0,
+    };
+    has_bullet && collectibles.caps > 0 && collectibles.powder > 0
+}
+
+/// Consumes one round of reload supplies (1 matching bullet + 1 cap + 1 powder).
+///
+/// **Pre-condition**: `can_reload(collectibles, caliber)` is `true`.
+fn consume_reload_supplies(collectibles: &mut Collectibles, caliber: Caliber) {
+    match caliber {
+        Caliber::Cal31 => collectibles.bullets_31 -= 1,
+        Caliber::Cal36 => collectibles.bullets_36 -= 1,
+        Caliber::Cal44 => collectibles.bullets_44 -= 1,
+    }
+    collectibles.caps -= 1;
+    collectibles.powder -= 1;
+}
+
 /// Processes pickup intents: player picks up an item on the ground at their position.
 pub fn pickup_system(
     mut intents: MessageReader<PickupItemIntent>,
@@ -116,33 +139,20 @@ pub fn use_item_system(
 
                 if loaded >= capacity {
                     combat_log.push(format!("{gun_name} is fully loaded ({capacity}/{capacity})"));
-                } else {
-                    let has_bullet = match caliber {
-                        Caliber::Cal31 => collectibles.bullets_31 > 0,
-                        Caliber::Cal36 => collectibles.bullets_36 > 0,
-                        Caliber::Cal44 => collectibles.bullets_44 > 0,
-                    };
-                    if has_bullet && collectibles.caps > 0 && collectibles.powder > 0 {
-                        match caliber {
-                            Caliber::Cal31 => collectibles.bullets_31 -= 1,
-                            Caliber::Cal36 => collectibles.bullets_36 -= 1,
-                            Caliber::Cal44 => collectibles.bullets_44 -= 1,
+                } else if can_reload(&collectibles, caliber) {
+                    consume_reload_supplies(&mut collectibles, caliber);
+                    if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity)
+                        && let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
+                            *loaded += 1;
+                            combat_log.push(format!(
+                                "Loaded 1 round into {gun_name} ({}/{capacity})",
+                                *loaded
+                            ));
                         }
-                        collectibles.caps -= 1;
-                        collectibles.powder -= 1;
-                        if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity)
-                            && let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
-                                *loaded += 1;
-                                combat_log.push(format!(
-                                    "Loaded 1 round into {gun_name} ({}/{capacity})",
-                                    *loaded
-                                ));
-                            }
-                    } else {
-                        combat_log.push(format!(
-                            "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
-                        ));
-                    }
+                } else {
+                    combat_log.push(format!(
+                        "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
+                    ));
                 }
             }
             ItemKind::Knife { .. } => {
@@ -327,28 +337,15 @@ pub fn reload_system(
     };
 
     // Check if collectibles are available for reloading.
-    let has_bullet = match caliber {
-        Caliber::Cal31 => collectibles.bullets_31 > 0,
-        Caliber::Cal36 => collectibles.bullets_36 > 0,
-        Caliber::Cal44 => collectibles.bullets_44 > 0,
-    };
-    if !has_bullet || collectibles.caps <= 0 || collectibles.powder <= 0 {
+    if !can_reload(&collectibles, caliber) {
         combat_log.push(format!(
             "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
         ));
         return;
     }
 
-    // Consume collectibles.
-    match caliber {
-        Caliber::Cal31 => collectibles.bullets_31 -= 1,
-        Caliber::Cal36 => collectibles.bullets_36 -= 1,
-        Caliber::Cal44 => collectibles.bullets_44 -= 1,
-    }
-    collectibles.caps -= 1;
-    collectibles.powder -= 1;
-
-    // Increment loaded count.
+    // Consume collectibles and increment loaded count.
+    consume_reload_supplies(&mut collectibles, caliber);
     if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(gun_ent)
         && let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind_mut {
             *loaded += 1;

@@ -24,11 +24,28 @@ pub fn spell_system(
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
     seed: Res<MapSeed>,
+    mut spell_particles: ResMut<SpellParticles>,
 ) {
     for intent in intents.read() {
         let Ok((caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
             continue;
         };
+
+        // Sand throw (sentinel: grenade_index == usize::MAX) — visual particles only.
+        if intent.grenade_index == usize::MAX {
+            if let Some(mut stamina) = stamina {
+                stamina.spend(5); // Sand throw costs 5 stamina
+            }
+            // Create sand cloud particles at target.
+            let origin = intent.target;
+            for dx in -intent.radius..=intent.radius {
+                for dy in -intent.radius..=intent.radius {
+                    let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
+                    spell_particles.particles.push((pos, 6, 0));
+                }
+            }
+            continue;
+        }
 
         // Consume stamina.
         if let Some(mut stamina) = stamina

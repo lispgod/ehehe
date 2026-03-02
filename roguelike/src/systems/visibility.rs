@@ -7,16 +7,26 @@ use crate::grid_vec::GridVec;
 use crate::resources::{CursorPosition, GameMapResource};
 use crate::typedefs::{CoordinateUnit, MyPoint};
 
+/// Minimum FOV radius when cursor is centered on the player (circle in all directions).
+pub const FOV_MIN_RADIUS: CoordinateUnit = 12;
+
+/// Maximum FOV range when cursor is far from the player.
+pub const FOV_MAX_RANGE: CoordinateUnit = 120;
+
 /// Recomputes the `visible_tiles` set for every entity whose `Viewshed` is
 /// dirty (e.g., because the entity moved). Uses recursive symmetric
 /// shadowcasting — the mathematically correct O(visible_tiles) algorithm
 /// that eliminates the artifacts of Bresenham ray casting.
 ///
+/// FOV model:
+/// - When the cursor/look direction is centered on the entity, FOV is a circle
+///   with radius `FOV_MIN_RADIUS` in all directions.
+/// - As the cursor moves further from the entity, the FOV range increases
+///   (up to `FOV_MAX_RANGE`) but the cone narrows proportionally.
+/// - This creates a "spotlight" effect: far aiming = long narrow beam,
+///   close aiming = short wide circle.
+///
 /// Reference: Albert Ford, "Symmetric Shadowcasting" (2017).
-/// The algorithm guarantees:
-///   1. **Symmetry** — if A can see B then B can see A.
-///   2. **Completeness** — no visible tile is missed.
-///   3. **Efficiency** — each visible tile is visited at most once per octant.
 pub fn visibility_system(
     game_map: Res<GameMapResource>,
     mut query: Query<(Entity, &Position, &mut Viewshed, Option<&AiLookDir>)>,
@@ -32,7 +42,17 @@ pub fn visibility_system(
 
         viewshed.visible_tiles.clear();
         let origin = pos.as_grid_vec();
-        let range = viewshed.range;
+
+        // Determine the aiming direction.
+        let cone_dir = if player_entity == Some(entity) {
+            let d = cursor.pos - origin;
+            if d.is_zero() { None } else { Some(d) }
+        } else {
+            ai_look_dir.map(|look| look.0).filter(|d| !d.is_zero())
+        };
+
+        // Compute dynamic FOV range and cone width based on cursor distance.
+        let (effective_range, cos_threshold) = compute_fov_params(cone_dir);
 
         // The origin is always visible.
         viewshed.visible_tiles.insert(origin);
@@ -43,7 +63,7 @@ pub fn visibility_system(
                 &game_map,
                 &mut viewshed.visible_tiles,
                 origin,
-                range,
+                effective_range,
                 octant,
                 1,
                 Slope { y: 1, x: 1 }, // start slope = 1/1
@@ -51,21 +71,10 @@ pub fn visibility_system(
             );
         }
 
-        // Directional FOV: filter visible tiles to a cone.
-        // For the player: cone toward the cursor position.
-        // For enemies with AiLookDir: cone toward their look direction.
-        let cone_dir = if player_entity == Some(entity) {
-            let d = cursor.pos - origin;
-            if d.is_zero() { None } else { Some(d) }
-        } else {
-            ai_look_dir.map(|look| look.0).filter(|d| !d.is_zero())
-        };
-
+        // Directional FOV: filter visible tiles to a cone when aiming.
         if let Some(dir) = cone_dir {
             let (cdx, cdy) = (dir.x as f64, dir.y as f64);
             let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
-            // cos(60°) ≈ 0.5 gives a 120° cone (half-angle 60°)
-            let cos_threshold = 0.5_f64;
 
             viewshed.visible_tiles.retain(|&tile| {
                 let diff = tile - origin;
@@ -73,18 +82,54 @@ pub fn visibility_system(
                     return true; // always see own tile
                 }
                 let (dx, dy) = (diff.x as f64, diff.y as f64);
-                let len = (dx * dx + dy * dy).sqrt();
+                let tile_dist = (dx * dx + dy * dy).sqrt();
+
+                // Always see tiles within the minimum radius (close circle).
+                if tile_dist <= FOV_MIN_RADIUS as f64 {
+                    return true;
+                }
+
+                let len = tile_dist;
                 let dot = (dx * cdx + dy * cdy) / (len * cursor_len);
                 dot >= cos_threshold
             });
         }
 
         // Merge visible into revealed (fog of war memory).
-        // Clone the visible set to avoid overlapping borrows.
         let newly_visible: Vec<MyPoint> = viewshed.visible_tiles.iter().copied().collect();
         viewshed.revealed_tiles.extend(newly_visible);
         viewshed.dirty = false;
     }
+}
+
+/// Computes FOV range and cone half-angle cosine based on cursor distance.
+///
+/// - `cursor_dir`: None means cursor is centered (full circle at min radius).
+/// - Returns `(effective_range, cos_threshold)`.
+///
+/// When cursor is close: range = FOV_MIN_RADIUS, cos_threshold ≈ -1 (360°).
+/// When cursor is far: range = FOV_MAX_RANGE, cos_threshold ≈ 0.85 (narrow ~30° cone).
+pub fn compute_fov_params(cursor_dir: Option<GridVec>) -> (CoordinateUnit, f64) {
+    let Some(dir) = cursor_dir else {
+        return (FOV_MIN_RADIUS, -1.0); // full circle
+    };
+
+    let dist = ((dir.x as f64).powi(2) + (dir.y as f64).powi(2)).sqrt();
+    if dist < 1.0 {
+        return (FOV_MIN_RADIUS, -1.0); // full circle
+    }
+
+    // Interpolation factor: 0.0 at distance 0, 1.0 at distance 40+
+    let t = (dist / 40.0).min(1.0);
+
+    // Range increases from FOV_MIN_RADIUS to FOV_MAX_RANGE
+    let range = FOV_MIN_RADIUS as f64 + t * (FOV_MAX_RANGE - FOV_MIN_RADIUS) as f64;
+
+    // Cone narrows: cos threshold goes from -1.0 (360°) to 0.85 (~30° cone)
+    // At t=0: cos = -1.0 (see everything), at t=1: cos = 0.85 (narrow)
+    let cos_threshold = -1.0 + t * 1.85; // range: [-1.0, 0.85]
+
+    (range as CoordinateUnit, cos_threshold)
 }
 
 // ───────────────────────── Shadowcasting internals ─────────────────────────

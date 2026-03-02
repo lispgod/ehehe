@@ -8,10 +8,16 @@ use crate::resources::{CombatLog, GameMapResource, SoundEvents};
 use crate::typedefs::RatColor;
 
 /// Bullet travel speed in tiles per tick.
-pub const BULLET_TILES_PER_TICK: usize = 5;
+pub const BULLET_TILES_PER_TICK: usize = 12;
 
 /// Shrapnel travel speed in tiles per tick.
 pub const SHRAPNEL_TILES_PER_TICK: usize = 2;
+
+/// Knife/Tomahawk travel speed in tiles per tick.
+pub const THROWN_TILES_PER_TICK: usize = 6;
+
+/// Maximum range for thrown knives and tomahawks (in tiles).
+pub const THROWN_RANGE: i32 = 12;
 
 /// Shrapnel self-damage multiplier (fraction of original damage dealt to the caster).
 /// Shrapnel that hits the player who threw the grenade deals reduced damage.

@@ -71,7 +71,7 @@ pub fn pickup_system(
 
                 // Add to inventory.
                 if let Ok(mut inv) = inventory_query.single_mut() {
-                    if inv.items.len() < 9 {
+                    if inv.items.len() < crate::systems::input::MAX_INVENTORY_SIZE {
                         // Remove position so it's no longer on the map.
                         commands.entity(ent).remove::<Position>();
                         inv.items.push(ent);
@@ -191,28 +191,28 @@ const LOOT_TABLE: &[LootEntry] = &[
         symbol: "w",
         fg: RatColor::Rgb(180, 120, 60),
         kind: ItemKind::Whiskey { heal: 10 },
-        weight: 0.13,
+        weight: 0.18,
     },
     LootEntry {
         name: "Dynamite Stick",
         symbol: "*",
         fg: RatColor::Rgb(255, 165, 0),
         kind: ItemKind::Grenade { damage: 8, radius: 2 },
-        weight: 0.10,
+        weight: 0.12,
     },
     LootEntry {
         name: "Molotov Cocktail",
         symbol: "m",
         fg: RatColor::Rgb(255, 100, 0),
         kind: ItemKind::Molotov { damage: 6, radius: 4 },
-        weight: 0.10,
+        weight: 0.12,
     },
     LootEntry {
         name: "Bowie Knife",
         symbol: "/",
         fg: RatColor::Rgb(192, 192, 210),
         kind: ItemKind::Knife { attack: 4 },
-        weight: 0.11,
+        weight: 0.12,
     },
     LootEntry {
         name: "Tomahawk",
@@ -220,13 +220,6 @@ const LOOT_TABLE: &[LootEntry] = &[
         fg: RatColor::Rgb(160, 120, 80),
         kind: ItemKind::Tomahawk { attack: 5 },
         weight: 0.11,
-    },
-    LootEntry {
-        name: "Bandages",
-        symbol: "+",
-        fg: RatColor::Rgb(220, 210, 200),
-        kind: ItemKind::Whiskey { heal: 5 },
-        weight: 0.10,
     },
 ];
 
@@ -431,7 +424,7 @@ pub fn auto_pickup_system(
         }
 
         if let Ok(mut inv) = inventory_query.single_mut()
-            && inv.items.len() < 9 {
+            && inv.items.len() < crate::systems::input::MAX_INVENTORY_SIZE {
                 commands.entity(item_entity).remove::<Position>();
                 inv.items.push(item_entity);
                 combat_log.push(format!("Picked up {name_str}"));

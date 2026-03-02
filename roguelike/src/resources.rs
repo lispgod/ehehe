@@ -50,6 +50,8 @@ pub struct InputState {
     pub quit_confirm: bool,
     /// Set to true when the player requests a reload (R key).
     pub reload_pending: bool,
+    /// Stamina cost for a pending dive action.
+    pub dive_stamina_pending: i32,
 }
 
 impl Default for InputState {
@@ -61,6 +63,7 @@ impl Default for InputState {
             welcome_visible: true, // shown on first launch
             quit_confirm: false,
             reload_pending: false,
+            dive_stamina_pending: 0,
         }
     }
 }
@@ -358,9 +361,51 @@ impl Default for Collectibles {
             bullets_577: 5,
             bullets_69: 5,
             powder: 30,
-            bandages: 5,
+            bandages: 0,
             dollars: 0,
         }
+    }
+}
+
+/// Dynamic RNG resource seeded through map seed + tick count.
+/// Use this for all gameplay randomness to ensure deterministic behavior
+/// that varies each tick.
+#[derive(Resource, Debug, Default)]
+pub struct DynamicRng {
+    /// Monotonically increasing counter, incremented each world turn.
+    pub tick: u64,
+}
+
+impl DynamicRng {
+    /// Returns a deterministic pseudo-random value in [0.0, 1.0) for the
+    /// given key, using map_seed + tick as the seed.
+    pub fn roll(&self, map_seed: u64, key: u64) -> f64 {
+        // LCG constant from Knuth (MMIX) for good bit-mixing properties
+        let seed = map_seed.wrapping_add(self.tick).wrapping_mul(6364136223846793005).wrapping_add(key);
+        // Squirrel3-like hash for good distribution
+        let mut h = seed;
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x45d9f3b);
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x45d9f3b);
+        h ^= h >> 16;
+        (h as u32) as f64 / u32::MAX as f64
+    }
+
+    /// Returns a random index in `[0, len)` using the dynamic RNG.
+    pub fn random_index(&self, map_seed: u64, key: u64, len: usize) -> usize {
+        if len == 0 { return 0; }
+        (self.roll(map_seed, key) * len as f64) as usize % len
+    }
+
+    /// Advance the tick counter by one.
+    pub fn advance(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+    }
+
+    /// Reset the tick counter (on game restart).
+    pub fn reset(&mut self) {
+        self.tick = 0;
     }
 }
 
@@ -417,6 +462,11 @@ impl CursorPosition {
     /// Returns true when the cursor should be visible (inverted colors).
     pub fn blink_visible(&self) -> bool {
         (self.blink_frame / self.blink_half_period).is_multiple_of(2)
+    }
+
+    /// Returns the raw blink frame counter.
+    pub fn blink_frame(&self) -> u32 {
+        self.blink_frame
     }
 
     /// Advance the blink counter by one frame.
@@ -607,7 +657,7 @@ mod tests {
         assert_eq!(c.bullets_36, 20);
         assert_eq!(c.bullets_44, 20);
         assert_eq!(c.powder, 30);
-        assert_eq!(c.bandages, 5);
+        assert_eq!(c.bandages, 0);
         assert_eq!(c.dollars, 0);
     }
 

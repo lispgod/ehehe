@@ -57,15 +57,14 @@ pub fn movement_system(
         let player_at_target = spatial.entities_at(&target).iter().find(|&&e| {
             e != intent.entity && players.contains(e)
         });
-        if let Some(&target_entity) = player_at_target {
-            if hostiles.contains(intent.entity) {
+        if let Some(&target_entity) = player_at_target
+            && hostiles.contains(intent.entity) {
                 attack_intents.write(AttackIntent {
                     attacker: intent.entity,
                     target: target_entity,
                 });
                 continue;
             }
-        }
 
         // 1. Check map tile walkability (no blocking furniture).
         let tile_passable = game_map.0.is_passable(&target);
@@ -92,7 +91,7 @@ pub fn movement_system(
             // When the player moves, the cursor moves by the same delta
             // so the player keeps looking in the same relative direction.
             if is_player {
-                cursor.pos = cursor.pos + delta;
+                cursor.pos += delta;
             }
 
             // Mark viewshed dirty so visibility is recalculated.

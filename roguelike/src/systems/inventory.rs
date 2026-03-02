@@ -90,7 +90,7 @@ pub fn use_item_system(
         // Dereference Bevy's `Mut<ItemKind>` wrapper to pattern match.
         // This borrows the inner value immutably first; if we need to mutate
         // (e.g. increment loaded rounds), we call `get_mut` on a second query.
-        match &*kind {
+        match kind {
             ItemKind::Whiskey { heal } => {
                 let heal = *heal;
                 if let Ok(mut hp) = health_query.single_mut() {
@@ -130,15 +130,14 @@ pub fn use_item_system(
                         }
                         collectibles.caps -= 1;
                         collectibles.powder -= 1;
-                        if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity) {
-                            if let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
+                        if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity)
+                            && let ItemKind::Gun { ref mut loaded, .. } = *kind_mut {
                                 *loaded += 1;
                                 combat_log.push(format!(
                                     "Loaded 1 round into {gun_name} ({}/{capacity})",
                                     *loaded
                                 ));
                             }
-                        }
                     } else {
                         combat_log.push(format!(
                             "Need: 1 {caliber} bullet, 1 cap, 1 powder to reload {gun_name}"
@@ -305,8 +304,8 @@ pub fn reload_system(
         item_kind_query
             .get(ent)
             .ok()
-            .map_or(false, |(k, _)| {
-                matches!(&*k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+            .is_some_and(|(k, _)| {
+                matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
             })
     }).copied();
 
@@ -320,7 +319,7 @@ pub fn reload_system(
         let Ok((ref kind, _)) = item_kind_query.get(gun_ent) else {
             return;
         };
-        if let ItemKind::Gun { caliber, name, .. } = &**kind {
+        if let ItemKind::Gun { caliber, name, .. } = kind {
             (*caliber, name.clone())
         } else {
             return;
@@ -350,15 +349,14 @@ pub fn reload_system(
     collectibles.powder -= 1;
 
     // Increment loaded count.
-    if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(gun_ent) {
-        if let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind_mut {
+    if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(gun_ent)
+        && let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind_mut {
             *loaded += 1;
             combat_log.push(format!(
                 "Loaded 1 round into {gun_name} ({}/{capacity})",
                 *loaded
             ));
         }
-    }
 }
 
 /// Auto-pickup system: automatically picks up any item when the player walks
@@ -402,13 +400,12 @@ pub fn auto_pickup_system(
             continue;
         }
 
-        if let Ok(mut inv) = inventory_query.single_mut() {
-            if inv.items.len() < 9 {
+        if let Ok(mut inv) = inventory_query.single_mut()
+            && inv.items.len() < 9 {
                 commands.entity(item_entity).remove::<Position>();
                 inv.items.push(item_entity);
                 combat_log.push(format!("Picked up {name_str}"));
             }
-        }
     }
 }
 

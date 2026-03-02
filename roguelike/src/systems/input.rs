@@ -292,7 +292,7 @@ pub fn input_system(
                 }
                 if let Some(target) = best_pos {
                     let step = (target - cursor.pos).king_step();
-                    cursor.pos = cursor.pos + step;
+                    cursor.pos += step;
                     if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                     advance_turn(&mut next_turn_state);
                 } else {
@@ -341,9 +341,9 @@ pub fn input_system(
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
                 let mut handled = false;
-                if let Some(inv) = player_inv {
-                    if let Some(&item_entity) = inv.items.get(idx) {
-                        if let Ok(kind) = item_kind_query.get(item_entity) {
+                if let Some(inv) = player_inv
+                    && let Some(&item_entity) = inv.items.get(idx)
+                        && let Ok(kind) = item_kind_query.get(item_entity) {
                             if let ItemKind::Gun { loaded, .. } = kind {
                                 if *loaded > 0 {
                                     let delta = cursor.pos - player_pos.as_grid_vec();
@@ -407,8 +407,6 @@ pub fn input_system(
                                 handled = true;
                             }
                         }
-                    }
-                }
                 if !handled {
                     // Non-gun items: use normally.
                     intents.use_item_intents.write(UseItemIntent {

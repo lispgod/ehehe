@@ -132,15 +132,14 @@ pub fn draw_system(
                     let in_player_view = visible_tiles
                         .map(|vt| vt.contains(&world))
                         .unwrap_or(false);
-                    if in_player_view && enemy_visible.contains(&world) {
-                        if let RatColor::Rgb(r, g, b) = cell.2 {
+                    if in_player_view && enemy_visible.contains(&world)
+                        && let RatColor::Rgb(r, g, b) = cell.2 {
                             cell.2 = RatColor::Rgb(
                                 r.saturating_add(15),
                                 g.saturating_add(10),
                                 b.saturating_add(5),
                             );
                         }
-                    }
                 }
             }
         }
@@ -213,15 +212,13 @@ pub fn draw_system(
                 && cursor_screen.x < render_width as CoordinateUnit
                 && cursor_screen.y >= 0
                 && cursor_screen.y < render_height as CoordinateUnit
-            {
-                if cursor_blink_visible {
+                && cursor_blink_visible {
                     let sx = cursor_screen.x as usize;
                     let sy = cursor_screen.y as usize;
                     // Invert fg and bg colors for the cursor cell.
                     let (sym, fg, bg) = &render_packet[sy][sx];
                     render_packet[sy][sx] = (sym.clone(), *bg, *fg);
                 }
-            }
         }
 
         // Render projectile entities on the map.
@@ -558,7 +555,7 @@ fn render_inventory_bar(
                 spans.push(Span::from("  ").dark_gray());
             }
             spans.push(Span::from(format!("{}:", i + 1)).bold().yellow());
-            spans.push(Span::from(format!("{name}")).white());
+            spans.push(Span::from(name.to_string()).white());
             if !desc.is_empty() {
                 spans.push(Span::from(format!("({desc})")).dark_gray());
             }

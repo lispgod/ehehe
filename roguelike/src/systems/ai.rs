@@ -164,27 +164,26 @@ pub fn ai_system(
         match *ai {
             AiState::Idle => {
                 // Check if player is visible — no energy cost for looking.
-                if let Some(vs) = viewshed {
-                    if vs.visible_tiles.contains(&player_vec) {
+                if let Some(vs) = viewshed
+                    && vs.visible_tiles.contains(&player_vec) {
                         *ai = AiState::Chasing;
                     }
-                }
             }
             AiState::Chasing => {
                 let dist = my_pos.chebyshev_distance(player_vec);
 
                 // Military faction entities attempt ranged attacks when they can see
                 // the player, have ammo, and are not adjacent.
-                let is_military = faction.map_or(false, |f| *f == Faction::Lawmen);
+                let is_military = faction.is_some_and(|f| *f == Faction::Lawmen);
                 let can_shoot = is_military
                     && ammo.is_some()
                     && dist > 1
                     && dist <= AI_RANGED_ATTACK_RANGE
-                    && viewshed.as_ref().map_or(false, |vs| vs.visible_tiles.contains(&player_vec));
+                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&player_vec));
 
-                if can_shoot {
-                    if let Some(mut ammo_pool) = ammo {
-                        if ammo_pool.spend_one() {
+                if can_shoot
+                    && let Some(mut ammo_pool) = ammo
+                        && ammo_pool.spend_one() {
                             ranged_intents.write(AiRangedAttackIntent {
                                 attacker: entity,
                                 target: player_entity,
@@ -193,8 +192,6 @@ pub fn ai_system(
                             energy.spend_action();
                             continue;
                         }
-                    }
-                }
 
                 // A* pathfinding: find optimal route around obstacles.
                 // Falls back to greedy king-step if no path is found.

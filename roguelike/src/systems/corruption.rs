@@ -58,15 +58,14 @@ pub fn corruption_system(
                 }
 
                 // Inner ring: lava. Outer ring: scorched earth.
-                if let Some(ref floor) = voxel.floor {
-                    if !matches!(floor, Floor::Lava | Floor::ScorchedEarth) {
+                if let Some(ref floor) = voxel.floor
+                    && !matches!(floor, Floor::Lava | Floor::ScorchedEarth) {
                         if dist_sq <= inner_sq {
                             voxel.floor = Some(Floor::Lava);
                         } else {
                             voxel.floor = Some(Floor::ScorchedEarth);
                         }
                     }
-                }
             }
         }
     }

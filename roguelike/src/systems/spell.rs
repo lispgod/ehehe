@@ -28,20 +28,18 @@ pub fn spell_system(
         };
 
         // Consume stamina.
-        if let Some(mut stamina) = stamina {
-            if !stamina.spend(SPELL_STAMINA_COST) {
+        if let Some(mut stamina) = stamina
+            && !stamina.spend(SPELL_STAMINA_COST) {
                 combat_log.push("Not enough stamina!".into());
                 continue;
             }
-        }
 
         // Consume the grenade item from inventory.
-        if let Some(mut inv) = inventory {
-            if intent.grenade_index < inv.items.len() {
+        if let Some(mut inv) = inventory
+            && intent.grenade_index < inv.items.len() {
                 let grenade_entity = inv.items.remove(intent.grenade_index);
                 commands.entity(grenade_entity).despawn();
             }
-        }
 
         let origin = intent.target;
         let c_name = caster_name.map_or("???", |n| &n.0);
@@ -64,8 +62,8 @@ pub fn spell_system(
                 let dist = dx.abs().max(dy.abs());
                 if dist > 0 && dist <= intent.radius {
                     let target_pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos) {
-                        if let Some(ref furn) = voxel.furniture {
+                    if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos)
+                        && let Some(ref furn) = voxel.furniture {
                             match furn {
                                 Furniture::Tree | Furniture::DeadTree | Furniture::Bush | Furniture::Rock => {
                                     voxel.furniture = None;
@@ -74,7 +72,6 @@ pub fn spell_system(
                                 Furniture::Wall => {} // Walls are indestructible.
                             }
                         }
-                    }
                 }
             }
         }

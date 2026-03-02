@@ -8,13 +8,14 @@ use crate::resources::{CombatLog, GameMapResource, SoundEvents};
 use crate::typedefs::RatColor;
 
 /// Bullet travel speed in tiles per tick.
-pub const BULLET_TILES_PER_TICK: usize = 12;
+/// Kept low so the bullet trail is visible on screen for several frames.
+pub const BULLET_TILES_PER_TICK: usize = 3;
 
 /// Shrapnel travel speed in tiles per tick.
-pub const SHRAPNEL_TILES_PER_TICK: usize = 2;
+pub const SHRAPNEL_TILES_PER_TICK: usize = 1;
 
 /// Knife/Tomahawk travel speed in tiles per tick.
-pub const THROWN_TILES_PER_TICK: usize = 6;
+pub const THROWN_TILES_PER_TICK: usize = 2;
 
 /// Maximum range for thrown knives and tomahawks (in tiles).
 pub const THROWN_RANGE: i32 = 12;

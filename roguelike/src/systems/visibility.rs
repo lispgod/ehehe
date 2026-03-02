@@ -70,18 +70,19 @@ pub fn visibility_system(
             let cos_t = if cone_dir.is_some() { 0.6 } else { -1.0 };
             (range, cos_t)
         } else if is_npc {
-            // Human NPCs: always directional, narrower than player.
+            // Human NPCs: always directional, narrow ~45° cone.
             // They never get circle FOV — always looking in their direction.
             if let Some(dir) = cone_dir {
                 let dist = ((dir.x as f64).powi(2) + (dir.y as f64).powi(2)).sqrt();
                 let range = (viewshed.range as f64 + dist * 8.0).min(FOV_MAX_RANGE as f64);
-                // Narrower than player: higher cos_threshold baseline.
+                // Narrow cone: baseline cos 0.86, up to 0.94 at distance.
+                // This yields roughly a 40–55° full FOV cone (≈ 45°).
                 let cone_t = (dist / 3.0).min(1.0);
-                let cos_t = -0.3 + cone_t * 1.15;
+                let cos_t = 0.86 + cone_t * 0.08;
                 (range as CoordinateUnit, cos_t)
             } else {
-                // NPC has no look direction set — use a forward hemisphere.
-                (viewshed.range, 0.0)
+                // NPC has no look direction set — use a narrow forward cone.
+                (viewshed.range, 0.86)
             }
         } else {
             // Player: use the original formula.

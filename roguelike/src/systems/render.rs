@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
-use crate::components::{Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Experience, Faction, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
@@ -72,7 +72,7 @@ pub fn draw_system(
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
-    hostile_viewsheds: Query<&Viewshed, With<Hostile>>,
+    hostile_viewsheds: Query<(&Viewshed, Option<&Faction>), With<Hostile>>,
     projectiles: Query<(&Position, &Renderable), With<Projectile>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
@@ -146,9 +146,13 @@ pub fn draw_system(
         }
 
         // Tint tiles visible to hostile entities with a red hue (enemy FOV cone).
+        // Only human NPCs have FOV highlighting — animals (Wildlife) are excluded.
         {
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
-            for vs in &hostile_viewsheds {
+            for (vs, faction) in &hostile_viewsheds {
+                if faction.is_some_and(|f| matches!(f, Faction::Wildlife)) {
+                    continue;
+                }
                 enemy_visible.extend(&vs.visible_tiles);
             }
             for (screen_y, row) in render_packet.iter_mut().enumerate() {

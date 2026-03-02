@@ -57,8 +57,8 @@ pub fn visibility_system(
             if cursor_dir != GridVec::ZERO {
                 let (cdx, cdy) = (cursor_dir.x as f64, cursor_dir.y as f64);
                 let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
-                // cos_threshold of 0.0 gives a 180° cone (hemisphere)
-                let cos_threshold = 0.0_f64;
+                // cos(60°) ≈ 0.5 gives a 120° cone (half-angle 60°)
+                let cos_threshold = 0.5_f64;
 
                 viewshed.visible_tiles.retain(|&tile| {
                     let diff = tile - origin;

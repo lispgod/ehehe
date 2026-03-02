@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Hostile, Stamina, Name, Player, Position};
+use crate::components::{CombatStats, Hostile, Inventory, Stamina, Name, Player, Position};
 use crate::events::{DamageEvent, SpellCastIntent};
 use crate::resources::{CombatLog, GameMapResource, SpellParticles};
 use crate::typeenums::Furniture;
@@ -19,9 +19,10 @@ const PARTICLE_LIFETIME: u32 = 8;
 /// potentially the player. Emits `DamageEvent` for each hit.
 /// Consumes stamina from the caster and generates shrapnel particle animations.
 pub fn spell_system(
+    mut commands: Commands,
     mut intents: MessageReader<SpellCastIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
-    mut caster_query: Query<(&Position, &CombatStats, Option<&Name>, Option<&mut Stamina>), With<Player>>,
+    mut caster_query: Query<(&Position, &CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>), With<Player>>,
     targets: Query<(Entity, &Position, Option<&Name>), With<Hostile>>,
     player_entities: Query<(Entity, &Position), With<Player>>,
     mut combat_log: ResMut<CombatLog>,
@@ -29,7 +30,7 @@ pub fn spell_system(
     mut game_map: ResMut<GameMapResource>,
 ) {
     for intent in intents.read() {
-        let Ok((caster_pos, caster_stats, caster_name, stamina)) = caster_query.get_mut(intent.caster) else {
+        let Ok((caster_pos, caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
             continue;
         };
 
@@ -42,8 +43,17 @@ pub fn spell_system(
             stamina.current -= SPELL_STAMINA_COST;
         }
 
-        let origin = caster_pos.as_grid_vec();
+        // Consume the grenade item from inventory.
+        if let Some(mut inv) = inventory {
+            if intent.grenade_index < inv.items.len() {
+                let grenade_entity = inv.items.remove(intent.grenade_index);
+                commands.entity(grenade_entity).despawn();
+            }
+        }
+
+        let origin = intent.target;
         let c_name = caster_name.map_or("???", |n| &n.0);
+        let _ = caster_pos; // grenade detonates at target, not caster
         let mut hit_count = 0;
 
         // Grenade shrapnel damages all hostile entities within radius.
@@ -68,15 +78,19 @@ pub fn spell_system(
             }
         }
 
-        // Grenade self-damage: shrapnel always hits the thrower.
-        if let Ok((player_entity, _player_pos)) = player_entities.single() {
+        // Grenade self-damage: shrapnel hits the thrower only if within blast radius.
+        if let Ok((player_entity, player_pos)) = player_entities.single() {
             if player_entity == intent.caster {
-                let self_damage = (caster_stats.attack / 2).max(1);
-                damage_events.write(DamageEvent {
-                    target: player_entity,
-                    amount: self_damage,
-                });
-                combat_log.push(format!("Grenade shrapnel hits you for {self_damage} damage!"));
+                let player_vec = player_pos.as_grid_vec();
+                let dist = origin.chebyshev_distance(player_vec);
+                if dist <= intent.radius {
+                    let self_damage = (caster_stats.attack / 2).max(1);
+                    damage_events.write(DamageEvent {
+                        target: player_entity,
+                        amount: self_damage,
+                    });
+                    combat_log.push(format!("Grenade shrapnel hits you for {self_damage} damage!"));
+                }
             }
         }
 

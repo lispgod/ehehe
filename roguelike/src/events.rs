@@ -25,11 +25,15 @@ pub struct DamageEvent {
 }
 
 /// Fired when the player throws a grenade (area-of-effect attack).
-/// Damages all hostile entities within `radius` tiles of the caster.
+/// Damages all hostile entities within `radius` tiles of the target.
 #[derive(Message, Debug, Clone)]
 pub struct SpellCastIntent {
     pub caster: Entity,
     pub radius: CoordinateUnit,
+    /// World position where the grenade detonates (cursor position).
+    pub target: crate::grid_vec::GridVec,
+    /// Inventory index of the grenade item to consume.
+    pub grenade_index: usize,
 }
 
 /// Fired when an entity wants to use an inventory item.

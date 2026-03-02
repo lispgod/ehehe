@@ -2,7 +2,7 @@ use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position};
+use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
 use crate::events::{DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::resources::{CombatLog, CursorPosition, GameState, InputMode, InputState, RestartRequested, TurnState};
 
@@ -48,8 +48,7 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "D / →", name: "Move east", docs: "Move the player one tile east (right on the map)." },
     CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (used for aiming guns with 1-9)." },
     CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy." },
-    CommandBinding { key: "F / Space", name: "Throw grenade", docs: "Throw a frag grenade dealing shrapnel damage around you (costs 10 stamina). Warning: can damage you too!" },
-    CommandBinding { key: "R", name: "Aim (ranged)", docs: "Enter aiming mode. Use WASD/arrows to choose bullet trajectory, Esc to cancel. Bullet travels up to 100 tiles. Uses 1 ammo." },
+    CommandBinding { key: "F / Space", name: "Throw grenade", docs: "Throw a grenade from inventory toward the cursor. Warning: can damage you too!" },
     CommandBinding { key: "T", name: "Reload", docs: "Reload weapon from a magazine in your inventory. Current partial magazine is saved to inventory." },
     CommandBinding { key: "E", name: "Roundhouse kick", docs: "Roundhouse kick hitting all adjacent enemies in melee range." },
     CommandBinding { key: "Shift+WASD", name: "Sprint", docs: "Hold Shift while moving to sprint (move 2 tiles per turn)." },
@@ -73,6 +72,7 @@ pub fn input_system(
     mut messages: MessageReader<KeyMessage>,
     mut intents: IntentWriters,
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Ammo>, Option<&Inventory>), With<Player>>,
+    mut player_viewshed: Query<&mut Viewshed, With<Player>>,
     item_kind_query: Query<&ItemKind>,
     hostiles_query: Query<&Position, With<Hostile>>,
     game_state: Res<State<GameState>>,
@@ -100,7 +100,7 @@ pub fn input_system(
         return;
     }
 
-    let Ok((player_entity, player_pos, player_stamina, player_ammo, player_inv)) = player_query.single() else {
+    let Ok((player_entity, player_pos, player_stamina, _player_ammo, player_inv)) = player_query.single() else {
         // Player entity is gone (should only happen transiently).
         for message in messages.read() {
             if matches!(message.code, KeyCode::Char('q') | KeyCode::Esc) {
@@ -113,42 +113,6 @@ pub fn input_system(
     let awaiting_input = turn_state
         .as_ref()
         .is_some_and(|s| *s.get() == TurnState::AwaitingInput);
-
-    // ── Aiming input mode ─────────────────────────────────────
-    if input_state.mode == InputMode::Aiming {
-        for message in messages.read() {
-            let (dx, dy) = match message.code {
-                KeyCode::Char('w') | KeyCode::Up => (0, 1),
-                KeyCode::Char('s') | KeyCode::Down => (0, -1),
-                KeyCode::Char('a') | KeyCode::Left => (-1, 0),
-                KeyCode::Char('d') | KeyCode::Right => (1, 0),
-                // Diagonals via numpad-style or shifted keys
-                KeyCode::Char('W') => (-1, 1),   // NW (Shift+W)
-                KeyCode::Char('A') => (-1, -1),  // SW (Shift+A)
-                KeyCode::Char('D') => (1, 1),    // NE (Shift+D)
-                KeyCode::Char('S') => (1, -1),   // SE (Shift+S)
-                KeyCode::Esc | KeyCode::Char('q') => {
-                    input_state.mode = InputMode::Game;
-                    combat_log.push("Aiming cancelled.".into());
-                    continue;
-                }
-                _ => continue,
-            };
-            // Fire the ranged attack in the chosen direction.
-            intents.ranged_intents.write(RangedAttackIntent {
-                attacker: player_entity,
-                range: RANGED_ATTACK_RANGE,
-                dx,
-                dy,
-                gun_item: None,
-            });
-            if let Some(next) = &mut next_turn_state {
-                next.set(TurnState::PlayerTurn);
-            }
-            input_state.mode = InputMode::Game;
-        }
-        return;
-    }
 
     // ── Inventory input mode ────────────────────────────────────
     if input_state.mode == InputMode::Inventory {
@@ -259,15 +223,19 @@ pub fn input_system(
             // ── Cursor movement (IJKL) ──────────────────────────
             KeyCode::Char('i') if awaiting_input => {
                 cursor.0.y += 1;
+                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
             }
             KeyCode::Char('k') if awaiting_input => {
                 cursor.0.y -= 1;
+                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
             }
             KeyCode::Char('j') if awaiting_input => {
                 cursor.0.x -= 1;
+                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
             }
             KeyCode::Char('l') if awaiting_input => {
                 cursor.0.x += 1;
+                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
             }
             // ── Auto-aim (N): move cursor one step toward nearest hostile ──
             KeyCode::Char('n') if awaiting_input => {
@@ -285,6 +253,7 @@ pub fn input_system(
                 if let Some(target) = best_pos {
                     let step = (target - cursor.0).king_step();
                     cursor.0 = cursor.0 + step;
+                    if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 } else {
                     combat_log.push("No enemies visible.".into());
                 }
@@ -324,34 +293,39 @@ pub fn input_system(
                     next.set(TurnState::PlayerTurn);
                 }
             }
-            // ── Grenade throw: area-of-effect attack around the player ──
+            // ── Grenade throw: throw a grenade from inventory toward the cursor ──
             KeyCode::Char('f') | KeyCode::Char(' ') if awaiting_input => {
                 // Check stamina before throwing grenade.
                 let has_stamina = player_stamina
                     .map(|m| m.current >= SPELL_STAMINA_COST)
                     .unwrap_or(false);
-                if has_stamina {
-                    intents.spell_intents.write(SpellCastIntent {
-                        caster: player_entity,
-                        radius: SPELL_RADIUS,
-                    });
-                    if let Some(next) = &mut next_turn_state {
-                        next.set(TurnState::PlayerTurn);
-                    }
-                } else {
+                if !has_stamina {
                     combat_log.push("Not enough stamina!".into());
-                }
-            }
-            // ── Targeted ranged attack (enter aiming mode) ─────────
-            KeyCode::Char('r') if awaiting_input => {
-                let has_ammo = player_ammo
-                    .map(|a| a.current > 0)
-                    .unwrap_or(false);
-                if has_ammo {
-                    input_state.mode = InputMode::Aiming;
-                    combat_log.push("Aiming... Choose direction (WASD/arrows, Shift+WASD for diagonals, Esc to cancel)".into());
                 } else {
-                    combat_log.push("Out of ammo! Reload with T.".into());
+                    // Find a grenade in inventory.
+                    let grenade_idx = player_inv.and_then(|inv| {
+                        inv.items.iter().enumerate().find_map(|(i, &ent)| {
+                            if let Ok(kind) = item_kind_query.get(ent) {
+                                if matches!(kind, ItemKind::Grenade { .. }) {
+                                    return Some(i);
+                                }
+                            }
+                            None
+                        })
+                    });
+                    if let Some(idx) = grenade_idx {
+                        intents.spell_intents.write(SpellCastIntent {
+                            caster: player_entity,
+                            radius: SPELL_RADIUS,
+                            target: cursor.0,
+                            grenade_index: idx,
+                        });
+                        if let Some(next) = &mut next_turn_state {
+                            next.set(TurnState::PlayerTurn);
+                        }
+                    } else {
+                        combat_log.push("No grenades in inventory!".into());
+                    }
                 }
             }
             // ── Reload weapon from inventory magazine ───────────
@@ -388,13 +362,13 @@ pub fn input_system(
                         if let Ok(kind) = item_kind_query.get(item_entity) {
                             if let ItemKind::Gun { loaded, .. } = kind {
                                 if *loaded > 0 {
-                                    let dir = (cursor.0 - player_pos.as_grid_vec()).king_step();
-                                    if dir != crate::grid_vec::GridVec::ZERO {
+                                    let delta = cursor.0 - player_pos.as_grid_vec();
+                                    if delta != crate::grid_vec::GridVec::ZERO {
                                         intents.ranged_intents.write(RangedAttackIntent {
                                             attacker: player_entity,
                                             range: RANGED_ATTACK_RANGE,
-                                            dx: dir.x,
-                                            dy: dir.y,
+                                            dx: delta.x,
+                                            dy: delta.y,
                                             gun_item: Some(item_entity),
                                         });
                                         if let Some(next) = &mut next_turn_state {
@@ -410,8 +384,8 @@ pub fn input_system(
                                     handled = true;
                                 }
                             } else if matches!(kind, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. }) {
-                                let dir = (cursor.0 - player_pos.as_grid_vec()).king_step();
-                                if dir != crate::grid_vec::GridVec::ZERO {
+                                let delta = cursor.0 - player_pos.as_grid_vec();
+                                if delta != crate::grid_vec::GridVec::ZERO {
                                     let (range, damage) = match kind {
                                         ItemKind::Knife { attack } => (8, *attack),
                                         ItemKind::Tomahawk { attack } => (6, *attack),
@@ -421,8 +395,8 @@ pub fn input_system(
                                         thrower: player_entity,
                                         item_entity,
                                         item_index: idx,
-                                        dx: dir.x,
-                                        dy: dir.y,
+                                        dx: delta.x,
+                                        dy: delta.y,
                                         range,
                                         damage,
                                     });

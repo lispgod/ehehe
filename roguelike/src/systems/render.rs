@@ -192,7 +192,7 @@ pub fn draw_system(
             }
         }
 
-        // Overlay cursor position.
+        // Overlay cursor position with blink effect.
         {
             let cursor_screen = cursor.0 - bottom_left;
             if cursor_screen.x >= 0
@@ -201,8 +201,15 @@ pub fn draw_system(
                 && cursor_screen.y < render_height as CoordinateUnit
             {
                 let bg = render_packet[cursor_screen.y as usize][cursor_screen.x as usize].2;
+                // Blink: alternate symbol/color every 2 ticks.
+                let blink_on = (turn_counter.0 / 2) % 2 == 0;
+                let (sym, fg) = if blink_on {
+                    ("X", RatColor::Rgb(255, 255, 0))
+                } else {
+                    ("+", RatColor::Rgb(180, 180, 0))
+                };
                 render_packet[cursor_screen.y as usize][cursor_screen.x as usize] =
-                    ("X".into(), RatColor::Rgb(255, 255, 0), bg);
+                    (sym.into(), fg, bg);
             }
         }
 
@@ -367,26 +374,6 @@ pub fn draw_system(
         if input_state.mode == InputMode::Inventory {
             render_inventory_overlay(frame, game_area, &inv_item_info, input_state.inv_selection);
         }
-
-        // Show aiming crosshair when in Aiming input mode
-        if input_state.mode == InputMode::Aiming {
-            let label = " AIMING — WASD/Arrows: direction, Shift+WASD: diagonal, Esc: cancel ";
-            let label_width = label.len() as u16;
-            if render_width >= label_width && render_height >= 1 {
-                let cx = game_area.x + (render_width - label_width) / 2;
-                let cy = game_area.y + 1;
-                let aim_area = Rect {
-                    x: cx,
-                    y: cy,
-                    width: label_width,
-                    height: 1,
-                };
-                frame.render_widget(
-                    Paragraph::new(Line::from(label).bold()).on_dark_gray(),
-                    aim_area,
-                );
-            }
-        }
     })?;
 
     Ok(())
@@ -435,7 +422,7 @@ fn render_bottom_panel(
         .map(|s| Line::from(format!(" {s}")).dark_gray())
         .collect();
 
-    let title = format!(" Log | Turn:{} Kills:{} | ?:help ", turn_counter.0, kill_count.0);
+    let title = format!(" Log | Tick:{} Kills:{} | ?:help ", turn_counter.0, kill_count.0);
     frame.render_widget(
         Paragraph::new(if log_lines.is_empty() {
             vec![Line::from(" (no events)".dark_gray())]

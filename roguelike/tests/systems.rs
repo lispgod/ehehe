@@ -607,6 +607,8 @@ fn spell_damages_nearby_enemies() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 
@@ -642,6 +644,8 @@ fn spell_does_not_damage_distant_enemies() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 
@@ -685,6 +689,8 @@ fn spell_hits_multiple_enemies() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 
@@ -721,6 +727,8 @@ fn spell_kills_weak_enemy_and_increments_kill_count() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 
@@ -782,6 +790,8 @@ fn spell_no_hit_logs_message() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 
@@ -894,6 +904,8 @@ fn spell_damages_hell_gate() {
     app.world_mut().write_message(SpellCastIntent {
         caster: player,
         radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
     });
     app.update();
 

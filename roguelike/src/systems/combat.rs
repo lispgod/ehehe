@@ -237,8 +237,12 @@ pub fn ranged_attack_system(
         let mut penetration = damage;
         let mut hit_count = 0;
 
-        // Compute the bullet endpoint using the direction and range.
-        let endpoint = origin + crate::grid_vec::GridVec::new(dx * intent.range, dy * intent.range);
+        // Compute the bullet endpoint: scale the direction vector so the
+        // Bresenham line extends approximately `range` tiles along the
+        // dominant axis, preserving the exact trajectory angle.
+        let max_comp = dx.abs().max(dy.abs());
+        let scale = intent.range.div_euclid(max_comp).max(1);
+        let endpoint = origin + crate::grid_vec::GridVec::new(dx * scale, dy * scale);
 
         // Generate the bullet path using Bresenham's line algorithm.
         // This produces the mathematically correct sequence of tiles the

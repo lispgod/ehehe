@@ -69,8 +69,6 @@ pub enum InputMode {
     #[default]
     Game,
     Inventory,
-    /// Player is choosing a trajectory direction for a ranged attack.
-    Aiming,
 }
 
 /// Turn-phase sub-state that controls the flow within `GameState::Playing`.

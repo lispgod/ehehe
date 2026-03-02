@@ -8,24 +8,28 @@ use crate::events::{DropItemIntent, PickupItemIntent, ThrowItemIntent, UseItemIn
 use crate::grid_vec::GridVec;
 use crate::resources::{Collectibles, CombatLog, GameMapResource, InputState, SpellParticles, SpatialIndex};
 
-/// Processes pickup intents: player picks up an item on the ground at their position.
+/// Maximum inventory capacity (unified for players and NPCs).
+pub const MAX_INVENTORY_SLOTS: usize = 9;
+
+/// Processes pickup intents: any entity picks up an item on the ground at their position.
+/// Works for both the player and NPCs — the picker entity is taken from the intent.
 pub fn pickup_system(
     mut intents: MessageReader<PickupItemIntent>,
     mut commands: Commands,
-    player_query: Query<&Position, With<Player>>,
+    position_query: Query<&Position>,
     items_query: Query<(Entity, &Position, Option<&Name>), With<Item>>,
     spatial: Res<SpatialIndex>,
-    mut inventory_query: Query<&mut Inventory, With<Player>>,
+    mut inventory_query: Query<&mut Inventory>,
     mut combat_log: ResMut<CombatLog>,
 ) {
     for intent in intents.read() {
-        let Ok(player_pos) = player_query.get(intent.picker) else {
+        let Ok(picker_pos) = position_query.get(intent.picker) else {
             continue;
         };
-        let player_vec = player_pos.as_grid_vec();
+        let picker_vec = picker_pos.as_grid_vec();
 
-        // Find items at the player's position using the spatial index.
-        let entities_here = spatial.entities_at(&player_vec);
+        // Find items at the picker's position using the spatial index.
+        let entities_here = spatial.entities_at(&picker_vec);
         let mut picked_up = false;
 
         for &ent in entities_here {
@@ -38,8 +42,8 @@ pub fn pickup_system(
                     .to_string();
 
                 // Add to inventory.
-                if let Ok(mut inv) = inventory_query.single_mut() {
-                    if inv.items.len() < crate::systems::input::MAX_INVENTORY_SIZE {
+                if let Ok(mut inv) = inventory_query.get_mut(intent.picker) {
+                    if inv.items.len() < MAX_INVENTORY_SLOTS {
                         // Remove position so it's no longer on the map.
                         commands.entity(ent).remove::<Position>();
                         inv.items.push(ent);
@@ -59,18 +63,19 @@ pub fn pickup_system(
     }
 }
 
-/// Processes use-item intents: consumes an item from the player's inventory.
+/// Processes use-item intents: consumes an item from any entity's inventory.
+/// Works for both the player and NPCs — the user entity is taken from the intent.
 pub fn use_item_system(
     mut intents: MessageReader<UseItemIntent>,
     mut commands: Commands,
-    mut inventory_query: Query<&mut Inventory, With<Player>>,
-    mut health_query: Query<&mut Health, With<Player>>,
+    mut inventory_query: Query<&mut Inventory>,
+    mut health_query: Query<&mut Health>,
     mut item_kind_query: Query<(&mut ItemKind, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
     mut collectibles: ResMut<Collectibles>,
 ) {
     for intent in intents.read() {
-        let Ok(mut inv) = inventory_query.single_mut() else {
+        let Ok(mut inv) = inventory_query.get_mut(intent.user) else {
             continue;
         };
 
@@ -92,7 +97,7 @@ pub fn use_item_system(
         match kind {
             ItemKind::Whiskey { heal } => {
                 let heal = *heal;
-                if let Ok(mut hp) = health_query.single_mut() {
+                if let Ok(mut hp) = health_query.get_mut(intent.user) {
                     let healed = hp.heal(heal);
                     combat_log.push(format!("Used {item_name}, healed {healed} HP"));
                 }
@@ -249,7 +254,7 @@ pub fn auto_pickup_system(
         }
 
         if let Ok(mut inv) = inventory_query.single_mut()
-            && inv.items.len() < crate::systems::input::MAX_INVENTORY_SIZE {
+            && inv.items.len() < MAX_INVENTORY_SLOTS {
                 commands.entity(item_entity).remove::<Position>();
                 inv.items.push(item_entity);
                 combat_log.push(format!("Picked up {name_str}"));

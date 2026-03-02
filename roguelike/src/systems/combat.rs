@@ -252,12 +252,13 @@ const MISFIRE_CHANCE: f64 = 0.05;
 /// instantly, a bullet entity is spawned that travels along the path over
 /// multiple ticks. Damage is applied when the projectile reaches a hostile.
 ///
-/// Consumes 1 ammo per shot from the gun item or global Ammo pool.
+/// Works for both the player and NPCs — the attacker entity is taken from the
+/// intent. Consumes 1 ammo per shot from the gun item or global Ammo pool.
 /// There is a small chance for the gun to misfire.
 pub fn ranged_attack_system(
     mut commands: Commands,
     mut intents: MessageReader<RangedAttackIntent>,
-    mut caster_query: Query<(&Position, &mut Ammo, &CombatStats, Option<&Name>), With<Player>>,
+    mut caster_query: Query<(&Position, Option<&mut Ammo>, &CombatStats, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
     mut item_kind_query: Query<&mut ItemKind>,
     mut sound_events: ResMut<SoundEvents>,
@@ -265,7 +266,7 @@ pub fn ranged_attack_system(
     seed: Res<MapSeed>,
 ) {
     for intent in intents.read() {
-        let Ok((caster_pos, mut ammo, caster_stats, caster_name)) = caster_query.get_mut(intent.attacker) else {
+        let Ok((caster_pos, ammo, caster_stats, caster_name)) = caster_query.get_mut(intent.attacker) else {
             continue;
         };
         let origin = caster_pos.as_grid_vec();
@@ -288,14 +289,17 @@ pub fn ranged_attack_system(
             } else {
                 continue;
             }
-        } else {
+        } else if let Some(mut ammo_pool) = ammo {
             // Legacy path: use global Ammo pool.
-            if ammo.is_empty() {
+            if ammo_pool.is_empty() {
                 combat_log.push("Out of ammo!".into());
                 continue;
             }
-            ammo.spend_one();
+            ammo_pool.spend_one();
             damage = caster_stats.attack;
+        } else {
+            combat_log.push("No weapon available!".into());
+            continue;
         }
 
         let dx = intent.dx;

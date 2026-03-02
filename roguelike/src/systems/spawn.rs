@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiState, Ammo, BlocksMovement, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
+    AiLookDir, AiState, Ammo, BlocksMovement, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
     LootTable, Name, Position, Renderable, Speed, Viewshed,
 };
+use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
 
 /// Monster archetype for procedural spawning.
@@ -28,10 +29,14 @@ pub struct MonsterTemplate {
 }
 
 /// Shared monster templates used by both initial and wave spawning.
+/// Each enemy type has its own movement speed:
+/// - Coyote: 140 (very fast — acts ~1.4x per tick)
+/// - Rattlesnake: 60 (slow — acts every ~1.7 ticks)
+/// - Outlaw: 90, Vaquero: 85, Cowboy: 80, Gunslinger: 100
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Tier 1: Wildlife
-    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(160, 120, 80), health: 4, attack: 2, defense: 0, speed: 110, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
-    MonsterTemplate { name: "Rattlesnake", symbol: "~", fg: RatColor::Rgb(60, 100, 40), health: 8, attack: 3, defense: 1, speed: 120, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(160, 120, 80), health: 4, attack: 2, defense: 0, speed: 140, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Rattlesnake", symbol: "~", fg: RatColor::Rgb(60, 100, 40), health: 8, attack: 3, defense: 1, speed: 60, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
     // Tier 2: Outlaws
     MonsterTemplate { name: "Outlaw", symbol: "o", fg: RatColor::Rgb(194, 178, 128), health: 12, attack: 4, defense: 1, speed: 90, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
     // Tier 3: Vaqueros
@@ -84,7 +89,9 @@ pub fn spawn_monster(
         },
         Speed(template.speed),
         Energy(0),
+    )).insert((
         AiState::Idle,
+        AiLookDir(GridVec::new(0, -1)), // default: looking south
         LootTable { drop_chance },
         ExpReward(template.exp_reward + exp_bonus),
         Viewshed {

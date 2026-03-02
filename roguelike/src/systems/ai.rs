@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiState, Ammo, BlocksMovement, Energy, Faction, Player, Position, Speed, Viewshed};
+use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Player, Position, Speed, Viewshed};
 use crate::events::{AiRangedAttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex};
@@ -138,7 +138,7 @@ const AI_RANGED_ATTACK_RANGE: i32 = 15;
 /// intent→action→consequence data flow.
 pub fn ai_system(
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position), With<Player>>,
@@ -153,7 +153,7 @@ pub fn ai_system(
     };
     let player_vec = player_pos.as_grid_vec();
 
-    for (entity, pos, mut ai, viewshed, mut energy, faction, ammo) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir) in &mut ai_query {
         // Only act if enough energy has accumulated.
         if !energy.can_act() {
             continue;
@@ -164,12 +164,55 @@ pub fn ai_system(
         match *ai {
             AiState::Idle => {
                 // Check if player is visible — no energy cost for looking.
-                if let Some(vs) = viewshed
-                    && vs.visible_tiles.contains(&player_vec) {
-                        *ai = AiState::Chasing;
+                // Idle enemies periodically scan by rotating their look direction.
+                let player_visible = viewshed.as_ref()
+                    .is_some_and(|vs| vs.visible_tiles.contains(&player_vec));
+                if player_visible {
+                    *ai = AiState::Chasing;
+                    // Point look direction at the player immediately.
+                    if let Some(ref mut look) = ai_look_dir {
+                        let toward = (player_vec - my_pos).king_step();
+                        if !toward.is_zero() {
+                            look.0 = toward;
+                        }
                     }
+                } else {
+                    // Idle enemies slowly scan: rotate look direction each tick.
+                    // This costs energy so they don't act for free forever.
+                    if let Some(ref mut look) = ai_look_dir {
+                        // Rotate 45° clockwise by cycling through DIRECTIONS_8.
+                        // If current direction isn't in the array, normalize via king_step first.
+                        let current_normalized = look.0.king_step();
+                        let idx = GridVec::DIRECTIONS_8.iter()
+                            .position(|&d| d == current_normalized)
+                            .map(|i| (i + 1) % 8)
+                            .unwrap_or(0);
+                        look.0 = GridVec::DIRECTIONS_8[idx];
+                        if let Some(ref mut vs) = viewshed {
+                            vs.dirty = true;
+                        }
+                    }
+                    energy.spend_action();
+                }
             }
             AiState::Chasing => {
+                // If the enemy has an AiLookDir, check if they need to rotate
+                // toward the player first (costs a tick).
+                let toward_player = (player_vec - my_pos).king_step();
+                let needs_rotation = !toward_player.is_zero()
+                    && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_player);
+
+                if needs_rotation {
+                    if let Some(ref mut look) = ai_look_dir {
+                        look.0 = toward_player;
+                        if let Some(ref mut vs) = viewshed {
+                            vs.dirty = true;
+                        }
+                    }
+                    energy.spend_action();
+                    continue;
+                }
+
                 let dist = my_pos.chebyshev_distance(player_vec);
 
                 // Military faction entities attempt ranged attacks when they can see
@@ -210,6 +253,13 @@ pub fn ai_system(
                         dx: step.x,
                         dy: step.y,
                     });
+                    // Update look direction to match movement.
+                    if let Some(ref mut look) = ai_look_dir {
+                        look.0 = step.king_step();
+                        if let Some(ref mut vs) = viewshed {
+                            vs.dirty = true;
+                        }
+                    }
                     // Only deduct energy when an action is actually emitted.
                     energy.spend_action();
                 }

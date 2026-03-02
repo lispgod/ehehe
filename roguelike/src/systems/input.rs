@@ -4,7 +4,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
 use crate::events::{DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
-use crate::resources::{CombatLog, CursorPosition, GameState, InputMode, InputState, RestartRequested, TurnState};
+use crate::resources::{CombatLog, CursorPosition, ExtraWorldTicks, GameState, InputMode, InputState, RestartRequested, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
@@ -41,22 +41,20 @@ pub struct CommandBinding {
 
 /// All keybindings, generated from the exhaustive match arms below.
 /// Used by the `?` help overlay to display available commands.
+/// Related keys are grouped (WASD, IJKL) to reduce visual clutter.
 pub const KEYBINDINGS: &[CommandBinding] = &[
-    CommandBinding { key: "W / ↑", name: "Move north", docs: "Move the player one tile north (up on the map). Cursor follows." },
-    CommandBinding { key: "S / ↓", name: "Move south", docs: "Move the player one tile south (down on the map). Cursor follows." },
-    CommandBinding { key: "A / ←", name: "Move west", docs: "Move the player one tile west (left on the map). Cursor follows." },
-    CommandBinding { key: "D / →", name: "Move east", docs: "Move the player one tile east (right on the map). Cursor follows." },
-    CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (costs 1 tick). Used for aiming." },
-    CommandBinding { key: "C", name: "Center cursor", docs: "Set the cursor onto the player's position (costs 1 tick)." },
-    CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy (costs 1 tick)." },
-    CommandBinding { key: "R", name: "Reload", docs: "Reload first non-full gun using collectibles (1 bullet + 1 cap + 1 powder per round)." },
-    CommandBinding { key: "E", name: "Roundhouse kick", docs: "Roundhouse kick hitting all adjacent enemies in melee range." },
-    CommandBinding { key: ".", name: "Wait", docs: "Skip the current turn without acting." },
-    CommandBinding { key: "G", name: "Pick up item", docs: "Pick up an item on the ground at your position. Collectibles are auto-picked up on contact." },
-    CommandBinding { key: "B", name: "Open inventory", docs: "Open the inventory screen to view and use items." },
-    CommandBinding { key: "1-9", name: "Use/Fire item", docs: "Quickly use an inventory item by slot number. Guns fire toward the cursor. Grenades throw toward the cursor." },
-    CommandBinding { key: "Esc", name: "Menu", docs: "Open the escape menu (Resume / Restart / Quit)." },
-    CommandBinding { key: "? / /", name: "Help", docs: "Toggle this help screen." },
+    CommandBinding { key: "WASD / ↑↓←→", name: "Move (2 ticks)", docs: "Move the player one tile. Physical movement costs 2 ticks." },
+    CommandBinding { key: "IJKL", name: "Cursor (1 tick)", docs: "Move the cursor one tile for aiming. Costs 1 tick." },
+    CommandBinding { key: "C", name: "Center cursor (1 tick)", docs: "Snap cursor onto your position. Costs 1 tick." },
+    CommandBinding { key: "N", name: "Auto-aim (1 tick)", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
+    CommandBinding { key: "R", name: "Reload (1 tick)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 1 tick." },
+    CommandBinding { key: "E", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
+    CommandBinding { key: ".", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
+    CommandBinding { key: "G", name: "Pick up (1 tick)", docs: "Pick up item at your feet. Costs 1 tick." },
+    CommandBinding { key: "B", name: "Inventory", docs: "Open inventory. D:Drop R:Reload Enter:Use." },
+    CommandBinding { key: "1-9", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
+    CommandBinding { key: "Esc", name: "Menu", docs: "Pause menu (Resume / Restart / Quit)." },
+    CommandBinding { key: "? /", name: "Help", docs: "Toggle this help screen." },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -81,6 +79,7 @@ pub fn input_system(
     mut input_state: ResMut<InputState>,
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
+    mut extra_world_ticks: ResMut<ExtraWorldTicks>,
 ) {
     // Handle Dead and Victory states: only Q/Esc to quit, R to restart.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
@@ -144,15 +143,22 @@ pub fn input_system(
                     }
                 }
                 KeyCode::Char('d') | KeyCode::Char('D') => {
+                    // Drop the selected item. Intentionally keeps the inventory
+                    // open (no `mode = InputMode::Game`) so the player can drop
+                    // multiple items without reopening the menu each time.
                     if item_count > 0 && input_state.inv_selection < item_count {
                         intents.drop_item_intents.write(DropItemIntent {
                             user: player_entity,
                             item_index: input_state.inv_selection,
                         });
                         advance_turn(&mut next_turn_state);
-                        input_state.mode = InputMode::Game;
                         clamp_inv_selection(&mut input_state.inv_selection, item_count.saturating_sub(1));
                     }
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    // Reload from inside the inventory — inventory stays open.
+                    input_state.reload_pending = true;
+                    advance_turn(&mut next_turn_state);
                 }
                 _ => {}
             }
@@ -281,17 +287,21 @@ pub fn input_system(
                 }
             }
             // ── Movement keys (only while awaiting input) ───────
-            // Normal movement
+            // Normal movement — costs 2 ticks (physical movement is slower)
             KeyCode::Char('w') | KeyCode::Up if awaiting_input => {
+                extra_world_ticks.0 = 1;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, 1);
             }
             KeyCode::Char('s') | KeyCode::Down if awaiting_input => {
+                extra_world_ticks.0 = 1;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, -1);
             }
             KeyCode::Char('a') | KeyCode::Left if awaiting_input => {
+                extra_world_ticks.0 = 1;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, -1, 0);
             }
             KeyCode::Char('d') | KeyCode::Right if awaiting_input => {
+                extra_world_ticks.0 = 1;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 1, 0);
             }
             // ── Wait / skip turn ────────────────────────────────
@@ -304,8 +314,9 @@ pub fn input_system(
                 input_state.reload_pending = true;
                 advance_turn(&mut next_turn_state);
             }
-            // ── Melee wide (cleave) attack ──────────────────────
+            // ── Melee wide (cleave) attack — costs 2 ticks ────
             KeyCode::Char('e') if awaiting_input => {
+                extra_world_ticks.0 = 1;
                 intents.melee_wide_intents.write(MeleeWideIntent {
                     attacker: player_entity,
                 });
@@ -319,6 +330,7 @@ pub fn input_system(
                 advance_turn(&mut next_turn_state);
             }
             // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw / Grenade ──
+            // Combat actions cost 2 ticks.
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
                 let mut handled = false;
@@ -329,6 +341,7 @@ pub fn input_system(
                                 if *loaded > 0 {
                                     let delta = cursor.pos - player_pos.as_grid_vec();
                                     if delta != crate::grid_vec::GridVec::ZERO {
+                                        extra_world_ticks.0 = 1;
                                         intents.ranged_intents.write(RangedAttackIntent {
                                             attacker: player_entity,
                                             range: RANGED_ATTACK_RANGE,
@@ -354,6 +367,7 @@ pub fn input_system(
                                         ItemKind::Tomahawk { attack } => (6, *attack),
                                         _ => unreachable!(),
                                     };
+                                    extra_world_ticks.0 = 1;
                                     intents.throw_item_intents.write(ThrowItemIntent {
                                         thrower: player_entity,
                                         item_entity,
@@ -377,6 +391,7 @@ pub fn input_system(
                                 if !has_stamina {
                                     combat_log.push("Not enough stamina!".into());
                                 } else {
+                                    extra_world_ticks.0 = 1;
                                     intents.spell_intents.write(SpellCastIntent {
                                         caster: player_entity,
                                         radius: SPELL_RADIUS,

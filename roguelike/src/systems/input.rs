@@ -531,8 +531,8 @@ fn handle_dual_wield(
     }
 
     // Pick two random guns using dynamic RNG
-    let idx1 = (dynamic_rng.roll(seed.0, 0xDA01) * loaded_guns.len() as f64) as usize % loaded_guns.len();
-    let mut idx2 = (dynamic_rng.roll(seed.0, 0xDA02) * (loaded_guns.len() - 1) as f64) as usize;
+    let idx1 = dynamic_rng.random_index(seed.0, 0xDA01, loaded_guns.len());
+    let mut idx2 = dynamic_rng.random_index(seed.0, 0xDA02, loaded_guns.len().saturating_sub(1));
     if idx2 >= idx1 { idx2 += 1; }
     idx2 = idx2.min(loaded_guns.len() - 1);
 
@@ -593,7 +593,7 @@ fn handle_fan_shot(
     }
 
     // Pick random gun
-    let idx = (dynamic_rng.roll(seed.0, 0xFA00) * loaded_guns.len() as f64) as usize % loaded_guns.len();
+    let idx = dynamic_rng.random_index(seed.0, 0xFA00, loaded_guns.len());
     let (gun, rounds) = loaded_guns[idx];
 
     // Fire all loaded rounds
@@ -643,7 +643,7 @@ fn handle_throw_random(
     }
 
     // Pick random item
-    let idx = (dynamic_rng.roll(seed.0, 0x7000) * inv.items.len() as f64) as usize % inv.items.len();
+    let idx = dynamic_rng.random_index(seed.0, 0x7000, inv.items.len());
     let item_entity = inv.items[idx];
 
     // Determine damage based on item type

@@ -380,6 +380,7 @@ impl DynamicRng {
     /// Returns a deterministic pseudo-random value in [0.0, 1.0) for the
     /// given key, using map_seed + tick as the seed.
     pub fn roll(&self, map_seed: u64, key: u64) -> f64 {
+        // LCG constant from Knuth (MMIX) for good bit-mixing properties
         let seed = map_seed.wrapping_add(self.tick).wrapping_mul(6364136223846793005).wrapping_add(key);
         // Squirrel3-like hash for good distribution
         let mut h = seed;
@@ -389,6 +390,12 @@ impl DynamicRng {
         h = h.wrapping_mul(0x45d9f3b);
         h ^= h >> 16;
         (h as u32) as f64 / u32::MAX as f64
+    }
+
+    /// Returns a random index in `[0, len)` using the dynamic RNG.
+    pub fn random_index(&self, map_seed: u64, key: u64, len: usize) -> usize {
+        if len == 0 { return 0; }
+        (self.roll(map_seed, key) * len as f64) as usize % len
     }
 
     /// Advance the tick counter by one.

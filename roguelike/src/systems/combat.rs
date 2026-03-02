@@ -316,7 +316,7 @@ pub fn ranged_attack_system(
         }
 
         // Misfire check: small chance the gun misfires (ammo wasted, no bullet).
-        let misfire_roll = dynamic_rng.roll(seed.0, origin.x as u64 ^ origin.y as u64 ^ 0xDEAD);
+        let misfire_roll = dynamic_rng.roll(seed.0, (origin.x as u64) << 32 | (origin.y as u64 & 0xFFFFFFFF) ^ 0xDEAD);
         if misfire_roll < MISFIRE_CHANCE {
             combat_log.push(format!("{c_name}'s gun misfires! *click*"));
             sound_events.add(origin);

@@ -238,7 +238,10 @@ pub fn draw_system(
 
         let mut render_lines = Vec::new();
 
-        // Reverse the cursor screen Y to match the reversed render order.
+        // Map cursor position from game-space Y to screen-space Y.
+        // The render_packet is built bottom-to-top (Y=0 at bottom) but
+        // render_lines are reversed so Y=0 displays at the top of the
+        // terminal. Convert: screen_y = (height - 1) - game_y.
         let cursor_render_y = cursor_screen_pos.map(|(cx, cy)| (cx, (render_height as usize).saturating_sub(1).saturating_sub(cy)));
 
         for y in 0..render_height as usize {

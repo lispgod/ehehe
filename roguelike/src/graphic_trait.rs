@@ -16,36 +16,47 @@ pub trait GraphicElement {
 impl GraphicElement for Floor {
     fn symbol(&self) -> String {
         match self {
-            Floor::Gravel => ".".into(),
+            Floor::Gravel => ",".into(),
             Floor::Dirt => " ".into(),
-            Floor::Grass => "\"".into(),
-            Floor::Sand => ".".into(),
+            Floor::Grass => " ".into(),
+            Floor::Sand => " ".into(),
             Floor::TallGrass => ";".into(),
             Floor::Flowers => "*".into(),
             Floor::Moss => "~".into(),
             Floor::Lava => "~".into(),
             Floor::ScorchedEarth => ".".into(),
-            Floor::WoodPlanks => "=".into(),
+            Floor::WoodPlanks => " ".into(),
         }
     }
 
     fn fg_color(&self) -> RatColor {
         match self {
-            Floor::Sand => RatColor::Rgb(234, 208, 168),
-            Floor::Dirt => RatColor::Rgb(107, 84, 40),
-            Floor::Gravel => RatColor::Rgb(97, 84, 65),
-            Floor::Grass => RatColor::Rgb(19, 109, 21),
-            Floor::TallGrass => RatColor::Rgb(34, 139, 34),
-            Floor::Flowers => RatColor::Rgb(218, 165, 32),
-            Floor::Moss => RatColor::Rgb(50, 120, 50),
+            Floor::Sand => RatColor::Rgb(180, 160, 120),
+            Floor::Dirt => RatColor::Rgb(100, 78, 42),
+            Floor::Gravel => RatColor::Rgb(110, 95, 75),
+            Floor::Grass => RatColor::Rgb(50, 80, 40),
+            Floor::TallGrass => RatColor::Rgb(60, 100, 45),
+            Floor::Flowers => RatColor::Rgb(180, 140, 50),
+            Floor::Moss => RatColor::Rgb(50, 100, 50),
             Floor::Lava => RatColor::Rgb(255, 80, 0),
-            Floor::ScorchedEarth => RatColor::Rgb(120, 40, 20),
-            Floor::WoodPlanks => RatColor::Rgb(160, 120, 60),
+            Floor::ScorchedEarth => RatColor::Rgb(90, 40, 20),
+            Floor::WoodPlanks => RatColor::Rgb(130, 95, 50),
         }
     }
 
     fn bg_color(&self) -> RatColor {
-        dim(self.fg_color(), 0.8)
+        match self {
+            Floor::Sand => RatColor::Rgb(160, 140, 100),
+            Floor::Dirt => RatColor::Rgb(80, 62, 35),
+            Floor::Gravel => RatColor::Rgb(85, 75, 60),
+            Floor::Grass => RatColor::Rgb(35, 60, 28),
+            Floor::TallGrass => RatColor::Rgb(40, 70, 30),
+            Floor::Flowers => RatColor::Rgb(45, 65, 32),
+            Floor::Moss => RatColor::Rgb(35, 70, 35),
+            Floor::Lava => RatColor::Rgb(180, 50, 0),
+            Floor::ScorchedEarth => RatColor::Rgb(55, 30, 15),
+            Floor::WoodPlanks => RatColor::Rgb(95, 70, 38),
+        }
     }
 }
 
@@ -74,23 +85,23 @@ impl GraphicElement for Furniture {
 
     fn fg_color(&self) -> RatColor {
         match self {
-            Furniture::Wall => RatColor::Rgb(139, 105, 20),
-            Furniture::Tree => RatColor::Rgb(34, 139, 34),
-            Furniture::Bush => RatColor::Rgb(60, 150, 40),
-            Furniture::Rock => RatColor::Rgb(128, 128, 128),
-            Furniture::DeadTree => RatColor::Rgb(100, 80, 50),
-            Furniture::Bench => RatColor::Rgb(139, 90, 43),
-            Furniture::LampPost => RatColor::Rgb(218, 165, 32),
-            Furniture::Barrel => RatColor::Rgb(139, 90, 43),
-            Furniture::Crate => RatColor::Rgb(160, 120, 60),
-            Furniture::Cactus => RatColor::Rgb(34, 120, 34),
-            Furniture::HitchingPost => RatColor::Rgb(120, 80, 40),
-            Furniture::WaterTrough => RatColor::Rgb(70, 130, 180),
-            Furniture::Fence => RatColor::Rgb(160, 120, 60),
-            Furniture::Table => RatColor::Rgb(139, 90, 43),
-            Furniture::Chair => RatColor::Rgb(120, 80, 40),
-            Furniture::Piano => RatColor::Rgb(40, 40, 40),
-            Furniture::Sign => RatColor::Rgb(180, 150, 80),
+            Furniture::Wall => RatColor::Rgb(120, 90, 45),
+            Furniture::Tree => RatColor::Rgb(40, 100, 35),
+            Furniture::Bush => RatColor::Rgb(55, 110, 40),
+            Furniture::Rock => RatColor::Rgb(110, 105, 95),
+            Furniture::DeadTree => RatColor::Rgb(90, 70, 45),
+            Furniture::Bench => RatColor::Rgb(120, 80, 40),
+            Furniture::LampPost => RatColor::Rgb(170, 140, 50),
+            Furniture::Barrel => RatColor::Rgb(120, 80, 40),
+            Furniture::Crate => RatColor::Rgb(130, 100, 50),
+            Furniture::Cactus => RatColor::Rgb(50, 100, 40),
+            Furniture::HitchingPost => RatColor::Rgb(105, 75, 38),
+            Furniture::WaterTrough => RatColor::Rgb(65, 110, 145),
+            Furniture::Fence => RatColor::Rgb(130, 100, 50),
+            Furniture::Table => RatColor::Rgb(120, 80, 40),
+            Furniture::Chair => RatColor::Rgb(105, 75, 38),
+            Furniture::Piano => RatColor::Rgb(50, 45, 40),
+            Furniture::Sign => RatColor::Rgb(150, 125, 70),
         }
     }
 

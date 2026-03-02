@@ -1,7 +1,6 @@
 pub mod ai;
 pub mod camera;
 pub mod combat;
-pub mod corruption;
 pub mod input;
 pub mod inventory;
 pub mod movement;
@@ -12,4 +11,3 @@ pub mod spatial_index;
 pub mod spell;
 pub mod turn;
 pub mod visibility;
-pub mod wave_spawn;

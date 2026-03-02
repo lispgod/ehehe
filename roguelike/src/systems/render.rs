@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
 use crate::components::{Ammo, Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
     CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
@@ -120,7 +121,7 @@ pub fn draw_system(
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left = camera.0 - GridVec::new(w_radius, h_radius);
 
-        // Brighten tiles visible to hostile entities (enemy FOV visualization).
+        // Tint tiles visible to hostile entities with a red hue (enemy FOV cone).
         {
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
             for vs in &hostile_viewsheds {
@@ -135,9 +136,9 @@ pub fn draw_system(
                     if in_player_view && enemy_visible.contains(&world)
                         && let RatColor::Rgb(r, g, b) = cell.2 {
                             cell.2 = RatColor::Rgb(
-                                r.saturating_add(15),
-                                g.saturating_add(10),
-                                b.saturating_add(5),
+                                r.saturating_add(40),
+                                g.saturating_sub(10),
+                                b.saturating_sub(10),
                             );
                         }
                 }
@@ -288,6 +289,25 @@ pub fn draw_system(
             })
             .unwrap_or_default();
 
+        // Collect visible furniture types for the furniture legend.
+        let visible_furniture: Vec<(String, RatColor, String)> = {
+            let mut seen = HashSet::new();
+            let mut items = Vec::new();
+            if let Some(vt) = visible_tiles {
+                for tile in vt {
+                    if let Some(voxel) = game_map.0.get_voxel_at(tile) {
+                        if let Some(ref furn) = voxel.furniture {
+                            let name = format!("{furn:?}");
+                            if seen.insert(name.clone()) {
+                                items.push((furn.symbol(), furn.fg_color(), name));
+                            }
+                        }
+                    }
+                }
+            }
+            items
+        };
+
         // ── Bottom Panel ────────────────────────────────────────
         render_bottom_panel(
             frame,
@@ -296,6 +316,7 @@ pub fn draw_system(
             player_stamina,
             player_ammo,
             &visible_entity_infos,
+            &visible_furniture,
             &combat_log,
             player_level,
             player_exp,
@@ -373,8 +394,8 @@ pub fn draw_system(
     Ok(())
 }
 
-/// Renders the bottom panel with stats, central combat log, and visible entities.
-/// Layout: [Stats | Central Log | Visible]
+/// Renders the bottom panel with stats, central combat log, visible entities, and furniture legend.
+/// Layout: [Stats | Central Log | Furniture | Visible]
 fn render_bottom_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
@@ -382,6 +403,7 @@ fn render_bottom_panel(
     player_stamina: Option<&Stamina>,
     player_ammo: Option<&Ammo>,
     visible_entities: &[(String, RatColor, RatColor, String)],
+    visible_furniture: &[(String, RatColor, String)],
     combat_log: &CombatLog,
     player_level: Option<&Level>,
     player_exp: Option<&Experience>,
@@ -389,19 +411,21 @@ fn render_bottom_panel(
     kill_count: &KillCount,
     collectibles: &Collectibles,
 ) {
-    // Split bottom panel into three horizontal columns: stats | log | visible
+    // Split bottom panel into four horizontal columns: stats | log | furniture | visible
     let horiz_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(22),   // Stats column (HP, Stamina, Ammo, Level)
             Constraint::Min(1),       // Central log (wide, fills remaining space)
+            Constraint::Length(18),   // Furniture legend column
             Constraint::Length(22),   // Visible entities column
         ])
         .split(area);
 
     let stats_area = horiz_chunks[0];
     let log_area = horiz_chunks[1];
-    let visible_area = horiz_chunks[2];
+    let furniture_area = horiz_chunks[2];
+    let visible_area = horiz_chunks[3];
 
     // ── Stats Column (left) ─────────────────────────────────────
     render_stats_column(frame, stats_area, player_hp, player_stamina, player_ammo, player_level, player_exp, collectibles);
@@ -425,6 +449,9 @@ fn render_bottom_panel(
         .wrap(Wrap { trim: true }),
         log_area,
     );
+
+    // ── Furniture Legend Column ─────────────────────────────────
+    render_furniture_column(frame, furniture_area, visible_furniture);
 
     // ── Visible Entities Column (right) ────────────────────────
     render_visible_column(frame, visible_area, visible_entities);
@@ -536,6 +563,31 @@ fn render_visible_column(
     frame.render_widget(
         Paragraph::new(vis_lines)
             .block(Block::default().borders(Borders::ALL).title("Visible")),
+        area,
+    );
+}
+
+/// Renders the furniture legend column showing visible furniture symbols and names.
+fn render_furniture_column(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    visible_furniture: &[(String, RatColor, String)],
+) {
+    let max_items = (area.height.saturating_sub(2)) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for (sym, fg, name) in visible_furniture.iter().take(max_items) {
+        lines.push(Line::from(vec![
+            Span::from(format!(" {sym}")).fg(*fg),
+            Span::from(format!(" {name}")).dark_gray(),
+        ]));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(" (none)".dark_gray()));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title("Furniture")),
         area,
     );
 }

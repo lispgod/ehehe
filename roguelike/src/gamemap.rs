@@ -17,7 +17,8 @@ struct Building {
     y: CoordinateUnit,
     w: CoordinateUnit,
     h: CoordinateUnit,
-    /// What kind of building: 0=house, 1=saloon, 2=stable, 3=general store.
+    /// What kind of building: 0=house, 1=saloon, 2=stable, 3=general store,
+    /// 4=sheriff's office, 5=post office.
     kind: u32,
 }
 
@@ -265,13 +266,13 @@ fn generate_buildings(
 
             // Don't exceed row bounds or map bounds
             if by + bh <= row_max_y && by > 0 && by + bh < height - 1 && cx + bw < width - 1 {
-                let kind = (kind_noise * 4.0) as u32;
+                let kind = (kind_noise * 6.0) as u32;
                 buildings.push(Building {
                     x: cx,
                     y: by,
                     w: bw,
                     h: bh,
-                    kind: kind.min(3),
+                    kind: kind.min(5),
                 });
             }
 
@@ -352,7 +353,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                 }
             }
         }
-        _ => {
+        3 => {
             // General store: barrels, crates, table
             if iw >= 3 && ih >= 2 {
                 set_furniture(map, interior_x, interior_y, Furniture::Barrel);
@@ -363,6 +364,32 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                 let noise = value_noise(b.x, b.y, furn_seed);
                 if noise > 0.5 && ih >= 3 {
                     set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::Table);
+                }
+            }
+        }
+        4 => {
+            // Sheriff's office: table (desk), chair, barrel (lock-up), sign
+            if iw >= 3 && ih >= 2 {
+                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
+                set_furniture(map, interior_x, interior_y, Furniture::Chair);
+                if iw >= 4 {
+                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Barrel);
+                }
+                if ih >= 3 {
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Sign);
+                }
+            }
+        }
+        _ => {
+            // Post office: table (counter), crates (parcels), sign
+            if iw >= 3 && ih >= 2 {
+                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
+                set_furniture(map, interior_x, interior_y, Furniture::Crate);
+                if iw >= 4 {
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
+                }
+                if ih >= 3 {
+                    set_furniture(map, interior_x, interior_y + ih - 1, Furniture::Sign);
                 }
             }
         }

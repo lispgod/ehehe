@@ -82,7 +82,7 @@ mod tests {
         };
         let graphic = voxel.to_graphic(true);
         // Should have the floor's symbol
-        assert_eq!(graphic.0, "\"");
+        assert_eq!(graphic.0, " ");
     }
 
     #[test]

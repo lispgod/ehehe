@@ -49,15 +49,14 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (costs 1 tick). Used for aiming." },
     CommandBinding { key: "C", name: "Center cursor", docs: "Set the cursor onto the player's position (costs 1 tick)." },
     CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy (costs 1 tick)." },
-    CommandBinding { key: "R", name: "Reload", docs: "Reload weapon from a magazine in your inventory. Current partial magazine is saved to inventory." },
+    CommandBinding { key: "R", name: "Reload", docs: "Reload first non-full gun using collectibles (1 bullet + 1 cap + 1 powder per round)." },
     CommandBinding { key: "E", name: "Roundhouse kick", docs: "Roundhouse kick hitting all adjacent enemies in melee range." },
     CommandBinding { key: ".", name: "Wait", docs: "Skip the current turn without acting." },
-    CommandBinding { key: "G", name: "Pick up item", docs: "Pick up an item on the ground at your position. Magazines and grenades are auto-picked up on contact." },
-    CommandBinding { key: "Tab", name: "Open inventory", docs: "Open the inventory screen to view and use items. Magazines can be used to reload." },
+    CommandBinding { key: "G", name: "Pick up item", docs: "Pick up an item on the ground at your position. Collectibles are auto-picked up on contact." },
+    CommandBinding { key: "B", name: "Open inventory", docs: "Open the inventory screen to view and use items." },
     CommandBinding { key: "1-9", name: "Use/Fire item", docs: "Quickly use an inventory item by slot number. Guns fire toward the cursor. Grenades throw toward the cursor." },
-    CommandBinding { key: "P", name: "Pause / Resume", docs: "Toggle pause state." },
+    CommandBinding { key: "Esc", name: "Menu", docs: "Open the escape menu (Resume / Restart / Quit)." },
     CommandBinding { key: "? / /", name: "Help", docs: "Toggle this help screen." },
-    CommandBinding { key: "Q / Esc", name: "Quit", docs: "Open the quit confirmation prompt." },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -118,7 +117,7 @@ pub fn input_system(
         let item_count = player_inv.map_or(0, |inv| inv.items.len());
         for message in messages.read() {
             match message.code {
-                KeyCode::Tab | KeyCode::Esc => {
+                KeyCode::Char('b') | KeyCode::Esc => {
                     input_state.mode = InputMode::Game;
                 }
                 KeyCode::Up | KeyCode::Char('w') => {
@@ -176,6 +175,45 @@ pub fn input_system(
         return;
     }
 
+    // ── ESC menu input mode ─────────────────────────────────────
+    if input_state.mode == InputMode::EscMenu {
+        for message in messages.read() {
+            // Handle quit confirmation sub-mode within ESC menu.
+            if input_state.quit_confirm {
+                match message.code {
+                    KeyCode::Enter => {
+                        intents.exit.write_default();
+                    }
+                    _ => {
+                        input_state.quit_confirm = false;
+                    }
+                }
+                continue;
+            }
+
+            match message.code {
+                KeyCode::Esc => {
+                    // Resume game
+                    input_state.mode = InputMode::Game;
+                    if *game_state.get() == GameState::Paused {
+                        next_game_state.set(GameState::Playing);
+                    }
+                }
+                KeyCode::Char('r') => {
+                    // Restart
+                    input_state.mode = InputMode::Game;
+                    restart_requested.0 = true;
+                }
+                KeyCode::Char('q') => {
+                    // Quit — requires Enter confirmation
+                    input_state.quit_confirm = true;
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
+
     // ── Normal game input mode ──────────────────────────────────
     for message in messages.read() {
         // Dismiss the welcome screen on any key press.
@@ -200,22 +238,19 @@ pub fn input_system(
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
             // ── Global keys (always active) ─────────────────────
-            KeyCode::Char('q') | KeyCode::Esc => {
-                input_state.quit_confirm = true;
-            }
-            KeyCode::Char('p') => {
-                let new = match game_state.get() {
-                    GameState::Playing => GameState::Paused,
-                    GameState::Paused => GameState::Playing,
-                    _ => *game_state.get(),
-                };
-                next_game_state.set(new);
+            KeyCode::Esc => {
+                // Open ESC menu and pause the game.
+                input_state.mode = InputMode::EscMenu;
+                input_state.quit_confirm = false;
+                if *game_state.get() == GameState::Playing {
+                    next_game_state.set(GameState::Paused);
+                }
             }
             KeyCode::Char('?') | KeyCode::Char('/') => {
                 input_state.help_visible = !input_state.help_visible;
             }
             // ── Open inventory ───────────────────────────────────
-            KeyCode::Tab if awaiting_input => {
+            KeyCode::Char('b') if awaiting_input => {
                 input_state.mode = InputMode::Inventory;
                 input_state.inv_selection = 0;
             }

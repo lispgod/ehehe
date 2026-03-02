@@ -256,14 +256,16 @@ pub struct HellGate;
 pub enum Faction {
     Wildlife,
     Outlaws,
+    Lawmen,
     Vaqueros,
-    Cowboys,
 }
 
 /// Bullet caliber for period-accurate cap-and-ball revolvers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Caliber {
-    /// .36 caliber (Colt Navy, Colt Pocket)
+    /// .31 caliber (Colt Pocket)
+    Cal31,
+    /// .36 caliber (Colt Navy, Colt Sheriff)
     Cal36,
     /// .44 caliber (Colt Army, Remington New Model Army)
     Cal44,
@@ -272,6 +274,7 @@ pub enum Caliber {
 impl std::fmt::Display for Caliber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Caliber::Cal31 => write!(f, ".31"),
             Caliber::Cal36 => write!(f, ".36"),
             Caliber::Cal44 => write!(f, ".44"),
         }
@@ -442,6 +445,7 @@ pub struct Level(pub i32);
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum CollectibleKind {
     Caps(i32),
+    Bullets31(i32),
     Bullets36(i32),
     Bullets44(i32),
     Powder(i32),
@@ -797,6 +801,7 @@ mod tests {
 
     #[test]
     fn caliber_display_formatting() {
+        assert_eq!(format!("{}", Caliber::Cal31), ".31");
         assert_eq!(format!("{}", Caliber::Cal36), ".36");
         assert_eq!(format!("{}", Caliber::Cal44), ".44");
     }

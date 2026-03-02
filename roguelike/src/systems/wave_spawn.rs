@@ -36,8 +36,8 @@ const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
     // Tier 3: Vaqueros
     WaveMonsterTemplate { name: "Vaquero", symbol: "v", fg: RatColor::Rgb(107, 112, 60), health: 15, attack: 5, defense: 2, speed: 85, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
     // Tier 4: Cowboys (has ranged attacks)
-    WaveMonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(160, 130, 90), health: 20, attack: 6, defense: 3, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Cowboys, ammo: 10 },
-    WaveMonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(60, 60, 60), health: 28, attack: 8, defense: 4, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Cowboys, ammo: 15 },
+    WaveMonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(160, 130, 90), health: 20, attack: 6, defense: 3, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
+    WaveMonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(60, 60, 60), health: 28, attack: 8, defense: 4, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
 ];
 
 /// Determines which faction tier to spawn based on wave number.

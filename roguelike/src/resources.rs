@@ -39,6 +39,7 @@ pub enum GameState {
 /// In `Game` mode, normal movement/action keys are processed.
 /// In `Inventory` mode, the inventory overlay is shown and
 /// arrow/enter keys navigate and use items.
+/// In `EscMenu` mode, the escape menu is shown with resume/restart/quit.
 /// Also tracks help and welcome overlay visibility.
 #[derive(Resource, Debug)]
 pub struct InputState {
@@ -47,7 +48,7 @@ pub struct InputState {
     pub help_visible: bool,
     pub welcome_visible: bool,
     pub quit_confirm: bool,
-    /// Set to true when the player requests a reload (T key).
+    /// Set to true when the player requests a reload (R key).
     pub reload_pending: bool,
 }
 
@@ -69,6 +70,7 @@ pub enum InputMode {
     #[default]
     Game,
     Inventory,
+    EscMenu,
 }
 
 /// Turn-phase sub-state that controls the flow within `GameState::Playing`.
@@ -256,6 +258,8 @@ pub struct RestartRequested(pub bool);
 pub struct Collectibles {
     /// Percussion caps (needed for reloading: 1 per round)
     pub caps: i32,
+    /// .31 caliber lead bullets
+    pub bullets_31: i32,
     /// .36 caliber lead bullets
     pub bullets_36: i32,
     /// .44 caliber lead bullets
@@ -272,6 +276,7 @@ impl Default for Collectibles {
     fn default() -> Self {
         Self {
             caps: 30,
+            bullets_31: 10,
             bullets_36: 20,
             bullets_44: 20,
             powder: 30,
@@ -494,6 +499,7 @@ mod tests {
     fn collectibles_default_has_starting_supplies() {
         let c = Collectibles::default();
         assert_eq!(c.caps, 30);
+        assert_eq!(c.bullets_31, 10);
         assert_eq!(c.bullets_36, 20);
         assert_eq!(c.bullets_44, 20);
         assert_eq!(c.powder, 30);

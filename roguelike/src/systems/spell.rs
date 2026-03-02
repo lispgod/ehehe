@@ -67,24 +67,22 @@ pub fn spell_system(
                     if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos)
                         && let Some(ref furn) = voxel.furniture {
                             let is_flammable = furn.is_flammable();
-                            match furn {
-                                Furniture::Tree | Furniture::DeadTree | Furniture::Bush | Furniture::Rock
-                                | Furniture::Bench | Furniture::Barrel | Furniture::Crate
-                                | Furniture::Table | Furniture::Chair | Furniture::Piano
-                                | Furniture::Cactus | Furniture::Sign | Furniture::HayBale
-                                | Furniture::Fence => {
-                                    // Dynamite sets some flammable things on fire (inner radius)
-                                    if is_flammable && dist <= 1 {
-                                        voxel.furniture = None;
-                                        voxel.floor = Some(Floor::Fire);
-                                        fire_count += 1;
-                                    } else {
-                                        voxel.furniture = None;
-                                        destroyed_count += 1;
-                                    }
+                            // Sturdy non-destructible objects survive explosions.
+                            let is_indestructible = matches!(
+                                furn,
+                                Furniture::Wall | Furniture::LampPost
+                                | Furniture::HitchingPost | Furniture::WaterTrough
+                            );
+                            if !is_indestructible {
+                                // Dynamite sets flammable things on fire in the inner radius.
+                                if is_flammable && dist <= 1 {
+                                    voxel.furniture = None;
+                                    voxel.floor = Some(Floor::Fire);
+                                    fire_count += 1;
+                                } else {
+                                    voxel.furniture = None;
+                                    destroyed_count += 1;
                                 }
-                                Furniture::Wall | Furniture::LampPost | Furniture::HitchingPost
-                                | Furniture::WaterTrough => {} // Sturdy items survive.
                             }
                         }
                 }

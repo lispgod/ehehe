@@ -273,13 +273,15 @@ pub fn ai_system(
                         }
                     }
                     Some(Faction::Wildlife) => {
-                        // Animals: random wandering
+                        // Animals: random wandering using prime multipliers for
+                        // pseudo-random direction based on position and energy.
                         let dir_idx = ((my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13))
                             .wrapping_add(energy.0)) as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])
                     }
                     Some(Faction::Outlaws) => {
-                        // Outlaws: skulk — stay near origin, move slowly and randomly
+                        // Outlaws: skulk — stay near origin, move slowly and randomly.
+                        // Uses different prime multipliers (3, 11) for varied patterns.
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
                             Some((origin - my_pos).king_step())
                         } else {
@@ -289,7 +291,8 @@ pub fn ai_system(
                         }
                     }
                     _ => {
-                        // Vaqueros and others: wander
+                        // Vaqueros and others: wander using prime multipliers (5, 9)
+                        // for pseudo-random direction.
                         let dir_idx = ((my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9))
                             .wrapping_add(energy.0)) as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])

@@ -305,6 +305,12 @@ impl BloodMap {
 #[derive(Resource, Debug, Default)]
 pub struct RestartRequested(pub bool);
 
+/// When true, the player is dead but watching the game continue.
+/// Set by pressing "." on the death screen. The end_world_turn system
+/// transitions back to Dead state after each spectated world turn.
+#[derive(Resource, Debug, Default)]
+pub struct SpectatingAfterDeath(pub bool);
+
 /// Extra world ticks remaining after a player action. Physical movement sets
 /// this to 1 so that the world turn cycles twice (2 total ticks), making
 /// physical movement slower than cursor movement (1 tick). The `end_world_turn`

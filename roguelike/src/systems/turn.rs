@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{Health, Stamina, Player, Position};
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, ExtraWorldTicks, GameMapResource, SoundEvents, TurnCounter, TurnState};
+use crate::resources::{CombatLog, ExtraWorldTicks, GameMapResource, GameState, SoundEvents, SpectatingAfterDeath, TurnCounter, TurnState};
 use crate::typeenums::Floor;
 
 /// Stamina regenerated per world turn.
@@ -38,6 +38,8 @@ pub fn end_world_turn(
     mut player_query: Query<(&mut Stamina, &mut Health), With<Player>>,
     mut extra_ticks: ResMut<ExtraWorldTicks>,
     mut sound_events: ResMut<SoundEvents>,
+    mut spectating: ResMut<SpectatingAfterDeath>,
+    mut next_game_state: ResMut<NextState<GameState>>,
 ) {
     turn_counter.0 += 1;
     sound_events.tick();
@@ -50,6 +52,14 @@ pub fn end_world_turn(
         if turn_counter.0.is_multiple_of(HEALTH_REGEN_INTERVAL) {
             health.heal(HEALTH_REGEN_PER_TURN);
         }
+    }
+
+    // If spectating after death, transition back to Dead state after one world turn.
+    if spectating.0 {
+        spectating.0 = false;
+        extra_ticks.0 = 0;
+        next_game_state.set(GameState::Dead);
+        return;
     }
 
     if extra_ticks.0 > 0 {

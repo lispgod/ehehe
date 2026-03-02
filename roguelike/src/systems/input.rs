@@ -4,7 +4,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
 use crate::events::{DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
-use crate::resources::{CombatLog, CursorPosition, ExtraWorldTicks, GameState, InputMode, InputState, RestartRequested, TurnState};
+use crate::resources::{CombatLog, CursorPosition, ExtraWorldTicks, GameState, InputMode, InputState, RestartRequested, SpectatingAfterDeath, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
@@ -81,8 +81,9 @@ pub fn input_system(
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
     mut extra_world_ticks: ResMut<ExtraWorldTicks>,
+    mut spectating: ResMut<SpectatingAfterDeath>,
 ) {
-    // Handle Dead and Victory states: only Q/Esc to quit, R to restart.
+    // Handle Dead and Victory states: Q/Esc to quit, R to restart, . to spectate.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
         for message in messages.read() {
             match message.code {
@@ -91,6 +92,11 @@ pub fn input_system(
                 }
                 KeyCode::Char('r') => {
                     restart_requested.0 = true;
+                }
+                // Allow watching the game continue after death by pressing wait key.
+                KeyCode::Char('.') if *game_state.get() == GameState::Dead => {
+                    spectating.0 = true;
+                    next_game_state.set(GameState::Playing);
                 }
                 _ => {}
             }
@@ -111,6 +117,16 @@ pub fn input_system(
     let awaiting_input = turn_state
         .as_ref()
         .is_some_and(|s| *s.get() == TurnState::AwaitingInput);
+
+    // When spectating after death, automatically advance to WorldTurn
+    // without waiting for player input.
+    if spectating.0 && awaiting_input {
+        advance_turn(&mut next_turn_state);
+        // Consume any pending messages to avoid processing stale input.
+        for _message in messages.read() {}
+        return;
+    }
+
 
     // ── Inventory input mode ────────────────────────────────────
     if input_state.mode == InputMode::Inventory {

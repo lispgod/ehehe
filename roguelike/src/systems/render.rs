@@ -419,7 +419,7 @@ pub fn draw_system(
 
         // Show "YOU DIED" overlay when the player has fallen
         if *state.get() == GameState::Dead {
-            let label = " YOU DIED — Press Esc to quit, R to restart ";
+            let label = " YOU DIED — Press . to continue watching, Esc to quit, R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;

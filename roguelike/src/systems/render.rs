@@ -5,7 +5,7 @@ use bevy_ratatui::RatatuiContext;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
 use crate::components::{Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::graphic_trait::GraphicElement;
@@ -268,7 +268,7 @@ pub fn draw_system(
                 }
         }
 
-        // Render projectile entities on the map.
+        // Render projectile entities on the map with fast blinking effect.
         for (proj_pos, proj_render) in &projectiles {
             let screen = proj_pos.as_grid_vec() - bottom_left;
             if screen.x >= 0
@@ -281,8 +281,20 @@ pub fn draw_system(
                     .unwrap_or(true);
                 if visible {
                     let bg = render_packet[screen.y as usize][screen.x as usize].2;
+                    // Fast blink: alternate between bright and dim every 3 frames
+                    let blink_bright = (cursor.blink_frame() / 3) % 2 == 0;
+                    let fg = if blink_bright {
+                        proj_render.fg
+                    } else {
+                        // Dim version of the projectile color
+                        if let RatColor::Rgb(r, g, b) = proj_render.fg {
+                            RatColor::Rgb(r / 2, g / 2, b / 2)
+                        } else {
+                            proj_render.fg
+                        }
+                    };
                     render_packet[screen.y as usize][screen.x as usize] =
-                        (proj_render.symbol.clone(), proj_render.fg, bg);
+                        (proj_render.symbol.clone(), fg, bg);
                 }
             }
         }
@@ -384,7 +396,6 @@ pub fn draw_system(
             &turn_counter,
             &kill_count,
             &collectibles,
-            visible_tiles,
         );
 
         // ── Inventory Bar (wide, horizontal) ────────────────────
@@ -399,7 +410,7 @@ pub fn draw_system(
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! The Outlaw Hideout has been destroyed! Press Esc to quit, R to restart. ";
+            let label = " VICTORY! The Outlaw Hideout has been destroyed! Press Q to quit, R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -419,7 +430,7 @@ pub fn draw_system(
 
         // Show "YOU DIED" overlay when the player has fallen
         if *state.get() == GameState::Dead {
-            let label = " YOU DIED — Press . to continue watching, Esc to quit, R to restart ";
+            let label = " YOU DIED — Press T to continue watching, Q to quit, R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -446,11 +457,6 @@ pub fn draw_system(
         if input_state.welcome_visible {
             render_welcome_overlay(frame, game_area);
         }
-
-        // Show inventory overlay when in Inventory input mode
-        if input_state.mode == InputMode::Inventory {
-            render_inventory_overlay(frame, game_area, &inv_item_info, input_state.inv_selection);
-        }
     })?;
 
     Ok(())
@@ -471,7 +477,6 @@ fn render_bottom_panel(
     turn_counter: &TurnCounter,
     kill_count: &KillCount,
     collectibles: &Collectibles,
-    visible_tiles: Option<&HashSet<MyPoint>>,
 ) {
     // Split bottom panel into four horizontal columns: stats | log | furniture | visible
     let horiz_chunks = Layout::default()
@@ -493,12 +498,10 @@ fn render_bottom_panel(
     render_stats_column(frame, stats_area, player_hp, player_stamina, player_level, player_exp, collectibles);
 
     // ── Central Log (middle) ────────────────────────────────────
+    // Show all recent messages without visibility filtering to prevent
+    // the bug where logs flash and disappear when the FOV cone moves.
     let log_height = log_area.height.saturating_sub(2) as usize; // subtract border
-    let log_lines: Vec<Line> = if let Some(vt) = visible_tiles {
-        combat_log.recent_visible(log_height.max(1), vt)
-    } else {
-        combat_log.recent(log_height.max(1))
-    }
+    let log_lines: Vec<Line> = combat_log.recent(log_height.max(1))
     .into_iter()
     .map(|s| Line::from(format!(" {s}")).dark_gray())
     .collect();
@@ -538,7 +541,9 @@ fn render_stats_column(
             Constraint::Length(1), // HP gauge (compact, no border)
             Constraint::Length(1), // Stamina gauge
             Constraint::Length(1), // EXP gauge
-            Constraint::Length(1), // Collectibles line
+            Constraint::Length(1), // Collectibles row 1
+            Constraint::Length(1), // Collectibles row 2
+            Constraint::Length(1), // Collectibles row 3
             Constraint::Min(0),   // padding
         ])
         .split(Block::default().borders(Borders::ALL).title("Stats").inner(area));
@@ -578,16 +583,22 @@ fn render_stats_column(
         frame.render_widget(gauge, chunks[2]);
     }
 
-    // Collectibles
-    let coll_text = format!(
-        "Cap:{} Pdr:{} .31:{} .36:{} .44:{} | .50:{} .58:{} .577:{} .69:{}",
-        collectibles.caps, collectibles.powder, collectibles.bullets_31, collectibles.bullets_36, collectibles.bullets_44,
-        collectibles.bullets_50, collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69
+    // Collectibles — 3 entries per row
+    let row1 = format!(
+        "Cap:{} Pdr:{} .31:{}",
+        collectibles.caps, collectibles.powder, collectibles.bullets_31,
     );
-    frame.render_widget(
-        Paragraph::new(Line::from(coll_text).dark_gray()),
-        chunks[3],
+    let row2 = format!(
+        ".36:{} .44:{} .50:{}",
+        collectibles.bullets_36, collectibles.bullets_44, collectibles.bullets_50,
     );
+    let row3 = format!(
+        ".58:{} .577:{} .69:{}",
+        collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69,
+    );
+    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[3]);
+    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[4]);
+    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[5]);
 }
 
 /// Renders the visible entities column.
@@ -654,7 +665,7 @@ fn render_inventory_bar(
 ) {
     let mut spans: Vec<Span> = Vec::new();
     if inv_item_info.is_empty() {
-        spans.push(Span::from(" (empty) [B]").dark_gray());
+        spans.push(Span::from(" (empty)").dark_gray());
     } else {
         for (i, (name, desc)) in inv_item_info.iter().enumerate() {
             if i > 0 {
@@ -670,7 +681,7 @@ fn render_inventory_bar(
     let line = Line::from(spans);
     frame.render_widget(
         Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL).title("Inventory [B] 1-9:Use")),
+            .block(Block::default().borders(Borders::ALL).title("Inventory 1-6:Use | 7:Dual 8:Fan 9:Sand 0:Throw")),
         area,
     );
 }
@@ -781,89 +792,6 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     );
 }
 
-/// Renders the inventory overlay as a scrollable ratatui Table widget.
-fn render_inventory_overlay(
-    frame: &mut ratatui::Frame,
-    game_area: Rect,
-    items: &[(String, String)],
-    selected: usize,
-) {
-    let w = 52u16.min(game_area.width.saturating_sub(4));
-    let h = (items.len() as u16 + 6).min(game_area.height.saturating_sub(4)).max(8);
-
-    if w < 20 || h < 5 {
-        return;
-    }
-
-    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
-    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
-    let inv_area = Rect {
-        x: cx,
-        y: cy,
-        width: w,
-        height: h,
-    };
-
-    frame.render_widget(Clear, inv_area);
-
-    if items.is_empty() {
-        let lines = vec![
-            Line::from(""),
-            Line::from("  Inventory is empty.").dark_gray(),
-            Line::from(""),
-            Line::from("  Press B or Esc to close").dark_gray(),
-        ];
-        frame.render_widget(
-            Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Inventory [B] ")
-                        .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
-                )
-                .on_black(),
-            inv_area,
-        );
-        return;
-    }
-
-    let rows: Vec<Row> = items
-        .iter()
-        .enumerate()
-        .map(|(i, (name, desc))| {
-            let style = if i == selected {
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Black)
-                    .bg(ratatui::style::Color::Cyan)
-                    .bold()
-            } else {
-                ratatui::style::Style::default().fg(ratatui::style::Color::White)
-            };
-            Row::new(vec![format!("{}", i + 1), name.clone(), desc.clone()]).style(style)
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(3),
-        Constraint::Min(16),
-        Constraint::Min(18),
-    ];
-
-    let table = Table::new(rows, widths)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Inventory [B] — ↑↓ Navigate, Enter Use, D Drop, Esc Close ")
-                .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
-        )
-        .header(
-            Row::new(vec!["#", "Item", "Effect"])
-                .style(ratatui::style::Style::default().bold().fg(ratatui::style::Color::Yellow)),
-        );
-
-    frame.render_widget(table, inv_area);
-}
-
 /// Renders the ESC menu overlay with Resume, Restart, and Quit options.
 fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, quit_confirm: bool) {
     let w = 40u16.min(game_area.width.saturating_sub(4));
@@ -889,15 +817,15 @@ fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, quit_con
         Line::from(""),
         Line::from("  PAUSED").bold().yellow(),
         Line::from(""),
-        Line::from("  Esc — Resume").white(),
+        Line::from("  Q   — Resume").white(),
         Line::from("  R   — Restart").white(),
-        Line::from("  Q   — Quit").white(),
+        Line::from("  E   — Exit (then Y to confirm)").white(),
         Line::from(""),
     ];
 
     if quit_confirm {
-        lines.push(Line::from("  Would you really like to quit?").bold().red());
-        lines.push(Line::from("  Press Enter to confirm.").dark_gray());
+        lines.push(Line::from("  Would you really like to exit?").bold().red());
+        lines.push(Line::from("  Press Y to confirm.").dark_gray());
     }
 
     frame.render_widget(

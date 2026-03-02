@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Faction, Health, HellGate, Hostile, Inventory, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents};
+use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents};
 use crate::grid_vec::GridVec;
 use crate::typeenums::Furniture;
 use crate::typedefs::{CoordinateUnit, RatColor};
@@ -251,6 +251,9 @@ pub fn level_up_system(
     }
 }
 
+/// Small chance for a gun to misfire (ammo consumed but no bullet fires).
+const MISFIRE_CHANCE: f64 = 0.05;
+
 /// Resolves targeted ranged attack intents by spawning bullet projectile entities.
 ///
 /// The bullet path is computed using **Bresenham's line algorithm** from the
@@ -259,6 +262,7 @@ pub fn level_up_system(
 /// multiple ticks. Damage is applied when the projectile reaches a hostile.
 ///
 /// Consumes 1 ammo per shot from the gun item or global Ammo pool.
+/// There is a small chance for the gun to misfire.
 pub fn ranged_attack_system(
     mut commands: Commands,
     mut intents: MessageReader<RangedAttackIntent>,
@@ -266,6 +270,8 @@ pub fn ranged_attack_system(
     mut combat_log: ResMut<CombatLog>,
     mut item_kind_query: Query<&mut ItemKind>,
     mut sound_events: ResMut<SoundEvents>,
+    dynamic_rng: Res<DynamicRng>,
+    seed: Res<MapSeed>,
 ) {
     for intent in intents.read() {
         let Ok((caster_pos, mut ammo, caster_stats, caster_name)) = caster_query.get_mut(intent.attacker) else {
@@ -306,6 +312,14 @@ pub fn ranged_attack_system(
 
         if dx == 0 && dy == 0 {
             combat_log.push("Invalid aim direction!".into());
+            continue;
+        }
+
+        // Misfire check: small chance the gun misfires (ammo wasted, no bullet).
+        let misfire_roll = dynamic_rng.roll(seed.0, origin.x as u64 ^ origin.y as u64 ^ 0xDEAD);
+        if misfire_roll < MISFIRE_CHANCE {
+            combat_log.push(format!("{c_name}'s gun misfires! *click*"));
+            sound_events.add(origin);
             continue;
         }
 

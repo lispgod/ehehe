@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::components::{BlocksMovement, Health, Hostile, Player, Position, Viewshed};
+use crate::components::{BlocksMovement, Health, Hostile, Player, Position, Stamina, Viewshed};
 use crate::events::{AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, SpatialIndex, TurnCounter};
+use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, InputState, SpatialIndex, TurnCounter};
 use crate::typeenums::Furniture;
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
@@ -144,5 +144,20 @@ pub fn cactus_damage_system(
                 }
             }
         }
+    }
+}
+
+/// Consumes pending dive stamina after movement is processed.
+/// The input system sets `dive_stamina_pending` and the movement system
+/// processes the move intents. This system deducts the stamina.
+pub fn dive_stamina_system(
+    mut input_state: ResMut<InputState>,
+    mut player_query: Query<&mut Stamina, With<Player>>,
+) {
+    if input_state.dive_stamina_pending > 0 {
+        if let Ok(mut stamina) = player_query.single_mut() {
+            stamina.spend(input_state.dive_stamina_pending);
+        }
+        input_state.dive_stamina_pending = 0;
     }
 }

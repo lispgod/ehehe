@@ -3,8 +3,8 @@ use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
-use crate::events::{DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
-use crate::resources::{CombatLog, CursorPosition, ExtraWorldTicks, GameState, InputMode, InputState, RestartRequested, SpectatingAfterDeath, TurnState};
+use crate::events::{MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
@@ -17,7 +17,6 @@ pub struct IntentWriters<'w> {
     pickup_intents: MessageWriter<'w, PickupItemIntent>,
     ranged_intents: MessageWriter<'w, RangedAttackIntent>,
     melee_wide_intents: MessageWriter<'w, MeleeWideIntent>,
-    drop_item_intents: MessageWriter<'w, DropItemIntent>,
     throw_item_intents: MessageWriter<'w, ThrowItemIntent>,
 }
 
@@ -29,6 +28,15 @@ const SPELL_STAMINA_COST: i32 = 10;
 
 /// Range for the targeted ranged attack (bullet max travel distance).
 const RANGED_ATTACK_RANGE: i32 = 100;
+
+/// Maximum inventory slots for the player.
+pub const MAX_INVENTORY_SIZE: usize = 6;
+
+/// Stamina cost for the Dive ability (Z key).
+const DIVE_STAMINA_COST: i32 = 20;
+
+/// Number of tiles the Dive ability moves.
+const DIVE_DISTANCE: i32 = 3;
 
 /// A single command binding entry: the key(s) that trigger it, a short name, and documentation.
 pub struct CommandBinding {
@@ -49,12 +57,16 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "C", name: "Center cursor (1 tick)", docs: "Snap cursor onto your position. Costs 1 tick." },
     CommandBinding { key: "N", name: "Auto-aim (1 tick)", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
     CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Cap and ball is slow. Costs 6 ticks." },
-    CommandBinding { key: "E", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
-    CommandBinding { key: ".", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
+    CommandBinding { key: "F", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
+    CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
     CommandBinding { key: "G", name: "Pick up (1 tick)", docs: "Pick up item at your feet. Costs 1 tick." },
-    CommandBinding { key: "B", name: "Inventory", docs: "Open inventory. D:Drop R:Reload Enter:Use." },
-    CommandBinding { key: "1-9", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
-    CommandBinding { key: "Esc", name: "Menu", docs: "Pause menu (Resume / Restart / Quit)." },
+    CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
+    CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
+    CommandBinding { key: "7", name: "Dual wield", docs: "Fire two random revolvers at once." },
+    CommandBinding { key: "8", name: "Fan shot", docs: "Fire all rounds from a random revolver." },
+    CommandBinding { key: "9", name: "Throw sand", docs: "Create sand cloud blocking vision toward cursor." },
+    CommandBinding { key: "0", name: "Throw item", docs: "Throw a random inventory item toward cursor." },
+    CommandBinding { key: "Q", name: "Menu / Close", docs: "Close help, toggle pause menu, E then Y to quit." },
     CommandBinding { key: "? /", name: "Help", docs: "Toggle this help screen." },
 ];
 
@@ -63,8 +75,7 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
 /// which transitions the game into `PlayerTurn` so that the action is
 /// resolved before the next input is accepted.
 ///
-/// When the game is in `GameState::Dead`, only quit (Q/Esc) and restart (R) work.
-/// When `InputMode::Inventory` is active, keys navigate the inventory overlay.
+/// When the game is in `GameState::Dead`, only quit (Q) and restart (R) work.
 pub fn input_system(
     mut messages: MessageReader<KeyMessage>,
     mut intents: IntentWriters,
@@ -80,21 +91,20 @@ pub fn input_system(
     mut input_state: ResMut<InputState>,
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
-    mut extra_world_ticks: ResMut<ExtraWorldTicks>,
-    mut spectating: ResMut<SpectatingAfterDeath>,
+    (mut extra_world_ticks, mut spectating, dynamic_rng, seed): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>),
 ) {
-    // Handle Dead and Victory states: Q/Esc to quit, R to restart, . to spectate.
+    // Handle Dead and Victory states: Q to quit, R to restart, T to spectate.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
         for message in messages.read() {
             match message.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
+                KeyCode::Char('q') => {
                     intents.exit.write_default();
                 }
                 KeyCode::Char('r') => {
                     restart_requested.0 = true;
                 }
-                // Allow watching the game continue after death by pressing wait key.
-                KeyCode::Char('.') if *game_state.get() == GameState::Dead => {
+                // Allow watching the game continue after death by pressing wait key (T).
+                KeyCode::Char('t') if *game_state.get() == GameState::Dead => {
                     spectating.0 = true;
                     next_game_state.set(GameState::Playing);
                 }
@@ -107,7 +117,7 @@ pub fn input_system(
     let Ok((player_entity, player_pos, player_stamina, _player_ammo, player_inv)) = player_query.single() else {
         // Player entity is gone (should only happen transiently).
         for message in messages.read() {
-            if matches!(message.code, KeyCode::Char('q') | KeyCode::Esc) {
+            if matches!(message.code, KeyCode::Char('q')) {
                 intents.exit.write_default();
             }
         }
@@ -127,69 +137,13 @@ pub fn input_system(
         return;
     }
 
-
-    // ── Inventory input mode ────────────────────────────────────
-    if input_state.mode == InputMode::Inventory {
-        let item_count = player_inv.map_or(0, |inv| inv.items.len());
-        for message in messages.read() {
-            match message.code {
-                KeyCode::Char('b') | KeyCode::Esc => {
-                    input_state.mode = InputMode::Game;
-                }
-                KeyCode::Up | KeyCode::Char('w') => {
-                    if input_state.inv_selection > 0 {
-                        input_state.inv_selection -= 1;
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('s') => {
-                    if item_count > 0 && input_state.inv_selection < item_count - 1 {
-                        input_state.inv_selection += 1;
-                    }
-                }
-                KeyCode::Enter => {
-                    if item_count > 0 && input_state.inv_selection < item_count {
-                        intents.use_item_intents.write(UseItemIntent {
-                            user: player_entity,
-                            item_index: input_state.inv_selection,
-                        });
-                        advance_turn(&mut next_turn_state);
-                        input_state.mode = InputMode::Game;
-                        clamp_inv_selection(&mut input_state.inv_selection, item_count.saturating_sub(1));
-                    } else {
-                        combat_log.push("No item selected.".into());
-                    }
-                }
-                KeyCode::Char('d') | KeyCode::Char('D') => {
-                    // Drop the selected item. Intentionally keeps the inventory
-                    // open (no `mode = InputMode::Game`) so the player can drop
-                    // multiple items without reopening the menu each time.
-                    if item_count > 0 && input_state.inv_selection < item_count {
-                        intents.drop_item_intents.write(DropItemIntent {
-                            user: player_entity,
-                            item_index: input_state.inv_selection,
-                        });
-                        advance_turn(&mut next_turn_state);
-                        clamp_inv_selection(&mut input_state.inv_selection, item_count.saturating_sub(1));
-                    }
-                }
-                KeyCode::Char('r') | KeyCode::Char('R') => {
-                    // Reload from inside the inventory — inventory stays open.
-                    input_state.reload_pending = true;
-                    advance_turn(&mut next_turn_state);
-                }
-                _ => {}
-            }
-        }
-        return;
-    }
-
     // ── ESC menu input mode ─────────────────────────────────────
     if input_state.mode == InputMode::EscMenu {
         for message in messages.read() {
-            // Handle quit confirmation sub-mode within ESC menu.
+            // Handle exit confirmation sub-mode within ESC menu.
             if input_state.quit_confirm {
                 match message.code {
-                    KeyCode::Enter => {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
                         intents.exit.write_default();
                     }
                     _ => {
@@ -200,8 +154,8 @@ pub fn input_system(
             }
 
             match message.code {
-                KeyCode::Esc => {
-                    // Resume game
+                KeyCode::Char('q') => {
+                    // Resume game (Q toggles ESC menu)
                     input_state.mode = InputMode::Game;
                     if *game_state.get() == GameState::Paused {
                         next_game_state.set(GameState::Playing);
@@ -212,8 +166,8 @@ pub fn input_system(
                     input_state.mode = InputMode::Game;
                     restart_requested.0 = true;
                 }
-                KeyCode::Char('q') => {
-                    // Quit — requires Enter confirmation
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    // Exit — requires Y confirmation
                     input_state.quit_confirm = true;
                 }
                 _ => {}
@@ -230,10 +184,10 @@ pub fn input_system(
             continue; // consume the key that dismissed the welcome
         }
 
-        // Handle quit confirmation mode.
+        // Handle exit confirmation mode.
         if input_state.quit_confirm {
             match message.code {
-                KeyCode::Enter => {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
                     intents.exit.write_default();
                 }
                 _ => {
@@ -245,22 +199,22 @@ pub fn input_system(
 
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
-            // ── Global keys (always active) ─────────────────────
-            KeyCode::Esc => {
-                // Open ESC menu and pause the game.
-                input_state.mode = InputMode::EscMenu;
-                input_state.quit_confirm = false;
-                if *game_state.get() == GameState::Playing {
-                    next_game_state.set(GameState::Paused);
+            // ── Q key: close help, toggle ESC menu ──────────────
+            KeyCode::Char('q') => {
+                if input_state.help_visible {
+                    // Close help screen
+                    input_state.help_visible = false;
+                } else {
+                    // Open ESC menu and pause the game.
+                    input_state.mode = InputMode::EscMenu;
+                    input_state.quit_confirm = false;
+                    if *game_state.get() == GameState::Playing {
+                        next_game_state.set(GameState::Paused);
+                    }
                 }
             }
             KeyCode::Char('?') | KeyCode::Char('/') => {
                 input_state.help_visible = !input_state.help_visible;
-            }
-            // ── Open inventory ───────────────────────────────────
-            KeyCode::Char('b') if awaiting_input => {
-                input_state.mode = InputMode::Inventory;
-                input_state.inv_selection = 0;
             }
             // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
@@ -321,8 +275,8 @@ pub fn input_system(
                 extra_world_ticks.0 = 2;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 1, 0);
             }
-            // ── Wait / skip turn ────────────────────────────────
-            KeyCode::Char('.') if awaiting_input => {
+            // ── Wait / skip turn (T) ────────────────────────────
+            KeyCode::Char('t') if awaiting_input => {
                 combat_log.push("You wait...".into());
                 advance_turn(&mut next_turn_state);
             }
@@ -332,8 +286,8 @@ pub fn input_system(
                 input_state.reload_pending = true;
                 advance_turn(&mut next_turn_state);
             }
-            // ── Melee wide (cleave) attack — costs 2 ticks ────
-            KeyCode::Char('e') if awaiting_input => {
+            // ── Melee wide (roundhouse kick) attack — costs 2 ticks (F key) ────
+            KeyCode::Char('f') if awaiting_input => {
                 extra_world_ticks.0 = 1;
                 intents.melee_wide_intents.write(MeleeWideIntent {
                     attacker: player_entity,
@@ -347,9 +301,37 @@ pub fn input_system(
                 });
                 advance_turn(&mut next_turn_state);
             }
-            // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw / Grenade ──
+            // ── Dive (Z): move 3 tiles toward cursor, costs 20 stamina ──
+            KeyCode::Char('z') if awaiting_input => {
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= DIVE_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina to dive!".into());
+                } else {
+                    let delta = cursor.pos - player_pos.as_grid_vec();
+                    if delta == crate::grid_vec::GridVec::ZERO {
+                        combat_log.push("Cursor is on your position!".into());
+                    } else {
+                        let step = delta.king_step();
+                        // Emit 3 consecutive move intents in the dive direction
+                        for _ in 0..DIVE_DISTANCE {
+                            intents.move_intents.write(MoveIntent {
+                                entity: player_entity,
+                                dx: step.x,
+                                dy: step.y,
+                            });
+                        }
+                        input_state.dive_stamina_pending = DIVE_STAMINA_COST;
+                        extra_world_ticks.0 = 0;
+                        combat_log.push("You dive!".into());
+                        advance_turn(&mut next_turn_state);
+                    }
+                }
+            }
+            // ── Use inventory item by slot (1-6) / Fire gun toward cursor / Throw / Grenade ──
             // Combat actions cost 2 ticks.
-            KeyCode::Char(c @ '1'..='9') if awaiting_input => {
+            KeyCode::Char(c @ '1'..='6') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
                 let mut handled = false;
                 if let Some(inv) = player_inv
@@ -382,8 +364,8 @@ pub fn input_system(
                                 let delta = cursor.pos - player_pos.as_grid_vec();
                                 if delta != crate::grid_vec::GridVec::ZERO {
                                     let (range, damage) = match kind {
-                                        ItemKind::Knife { attack } => (8, *attack),
-                                        ItemKind::Tomahawk { attack } => (6, *attack),
+                                        ItemKind::Knife { attack } => (crate::systems::projectile::THROWN_RANGE, *attack),
+                                        ItemKind::Tomahawk { attack } => (crate::systems::projectile::THROWN_RANGE, *attack),
                                         _ => unreachable!(),
                                     };
                                     extra_world_ticks.0 = 1;
@@ -450,9 +432,238 @@ pub fn input_system(
                     advance_turn(&mut next_turn_state);
                 }
             }
+            // ── Special abilities (7-0) ─────────────────────────
+            // 7: Dual wield shot — shoot once using two random revolvers
+            KeyCode::Char('7') if awaiting_input => {
+                handle_dual_wield(
+                    player_entity, player_pos, player_inv, &item_kind_query,
+                    &cursor, &mut intents, &mut extra_world_ticks,
+                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                );
+            }
+            // 8: Fan shot — fire all rounds from a random revolver
+            KeyCode::Char('8') if awaiting_input => {
+                handle_fan_shot(
+                    player_entity, player_pos, player_inv, &item_kind_query,
+                    &cursor, &mut intents, &mut extra_world_ticks,
+                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                );
+            }
+            // 9: Throw sand — create sand cloud blocking vision
+            KeyCode::Char('9') if awaiting_input => {
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= 5)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina!".into());
+                } else {
+                    let delta = cursor.pos - player_pos.as_grid_vec();
+                    if delta == crate::grid_vec::GridVec::ZERO {
+                        combat_log.push("Cursor is on your position!".into());
+                    } else {
+                        let step = delta.king_step();
+                        let sand_center = player_pos.as_grid_vec() + step * 2;
+                        // Create sand cloud as spell particles (visual obstruction)
+                        intents.spell_intents.write(SpellCastIntent {
+                            caster: player_entity,
+                            radius: 2,
+                            target: sand_center,
+                            grenade_index: usize::MAX, // sentinel: no grenade consumed
+                        });
+                        combat_log.push("You throw a handful of sand!".into());
+                        extra_world_ticks.0 = 0;
+                        advance_turn(&mut next_turn_state);
+                    }
+                }
+            }
+            // 0: Throw random item from inventory toward cursor
+            KeyCode::Char('0') if awaiting_input => {
+                handle_throw_random(
+                    player_entity, player_pos, player_inv, &item_kind_query,
+                    &cursor, &mut intents, &mut extra_world_ticks,
+                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                );
+            }
             _ => {}
         }
     }
+}
+
+/// Special ability 7: Dual wield shot — fire two random revolvers at once.
+#[allow(clippy::too_many_arguments)]
+fn handle_dual_wield(
+    player_entity: Entity,
+    player_pos: &Position,
+    player_inv: Option<&Inventory>,
+    item_kind_query: &Query<&ItemKind>,
+    cursor: &CursorPosition,
+    intents: &mut IntentWriters,
+    extra_world_ticks: &mut ExtraWorldTicks,
+    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
+    combat_log: &mut CombatLog,
+    dynamic_rng: &DynamicRng,
+    seed: &MapSeed,
+) {
+    let delta = cursor.pos - player_pos.as_grid_vec();
+    if delta == crate::grid_vec::GridVec::ZERO {
+        combat_log.push("Cursor is on your position!".into());
+        return;
+    }
+
+    let Some(inv) = player_inv else {
+        combat_log.push("No inventory!".into());
+        return;
+    };
+
+    // Find all loaded revolvers in inventory
+    let loaded_guns: Vec<Entity> = inv.items.iter()
+        .filter(|&&ent| {
+            item_kind_query.get(ent).ok().is_some_and(|k| {
+                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
+            })
+        })
+        .copied()
+        .collect();
+
+    if loaded_guns.len() < 2 {
+        combat_log.push("Need at least 2 loaded revolvers for dual wield!".into());
+        return;
+    }
+
+    // Pick two random guns using dynamic RNG
+    let idx1 = (dynamic_rng.roll(seed.0, 0xDA01) * loaded_guns.len() as f64) as usize % loaded_guns.len();
+    let mut idx2 = (dynamic_rng.roll(seed.0, 0xDA02) * (loaded_guns.len() - 1) as f64) as usize;
+    if idx2 >= idx1 { idx2 += 1; }
+    idx2 = idx2.min(loaded_guns.len() - 1);
+
+    for &gun in &[loaded_guns[idx1], loaded_guns[idx2]] {
+        intents.ranged_intents.write(RangedAttackIntent {
+            attacker: player_entity,
+            range: RANGED_ATTACK_RANGE,
+            dx: delta.x,
+            dy: delta.y,
+            gun_item: Some(gun),
+        });
+    }
+    extra_world_ticks.0 = 1;
+    advance_turn(next_turn_state);
+    combat_log.push("Dual wield shot!".into());
+}
+
+/// Special ability 8: Fan shot — fire all rounds from a random revolver.
+#[allow(clippy::too_many_arguments)]
+fn handle_fan_shot(
+    player_entity: Entity,
+    player_pos: &Position,
+    player_inv: Option<&Inventory>,
+    item_kind_query: &Query<&ItemKind>,
+    cursor: &CursorPosition,
+    intents: &mut IntentWriters,
+    extra_world_ticks: &mut ExtraWorldTicks,
+    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
+    combat_log: &mut CombatLog,
+    dynamic_rng: &DynamicRng,
+    seed: &MapSeed,
+) {
+    let delta = cursor.pos - player_pos.as_grid_vec();
+    if delta == crate::grid_vec::GridVec::ZERO {
+        combat_log.push("Cursor is on your position!".into());
+        return;
+    }
+
+    let Some(inv) = player_inv else {
+        combat_log.push("No inventory!".into());
+        return;
+    };
+
+    // Find all loaded revolvers
+    let loaded_guns: Vec<(Entity, i32)> = inv.items.iter()
+        .filter_map(|&ent| {
+            item_kind_query.get(ent).ok().and_then(|k| {
+                if let ItemKind::Gun { loaded, .. } = k {
+                    if *loaded > 0 { Some((ent, *loaded)) } else { None }
+                } else { None }
+            })
+        })
+        .collect();
+
+    if loaded_guns.is_empty() {
+        combat_log.push("No loaded revolvers!".into());
+        return;
+    }
+
+    // Pick random gun
+    let idx = (dynamic_rng.roll(seed.0, 0xFA00) * loaded_guns.len() as f64) as usize % loaded_guns.len();
+    let (gun, rounds) = loaded_guns[idx];
+
+    // Fire all loaded rounds
+    for _ in 0..rounds {
+        intents.ranged_intents.write(RangedAttackIntent {
+            attacker: player_entity,
+            range: RANGED_ATTACK_RANGE,
+            dx: delta.x,
+            dy: delta.y,
+            gun_item: Some(gun),
+        });
+    }
+    extra_world_ticks.0 = 2;
+    advance_turn(next_turn_state);
+    combat_log.push(format!("Fan shot! {} rounds!", rounds));
+}
+
+/// Special ability 0: Throw random inventory item toward cursor.
+#[allow(clippy::too_many_arguments)]
+fn handle_throw_random(
+    player_entity: Entity,
+    player_pos: &Position,
+    player_inv: Option<&Inventory>,
+    item_kind_query: &Query<&ItemKind>,
+    cursor: &CursorPosition,
+    intents: &mut IntentWriters,
+    extra_world_ticks: &mut ExtraWorldTicks,
+    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
+    combat_log: &mut CombatLog,
+    dynamic_rng: &DynamicRng,
+    seed: &MapSeed,
+) {
+    let delta = cursor.pos - player_pos.as_grid_vec();
+    if delta == crate::grid_vec::GridVec::ZERO {
+        combat_log.push("Cursor is on your position!".into());
+        return;
+    }
+
+    let Some(inv) = player_inv else {
+        combat_log.push("No inventory!".into());
+        return;
+    };
+
+    if inv.items.is_empty() {
+        combat_log.push("Inventory is empty!".into());
+        return;
+    }
+
+    // Pick random item
+    let idx = (dynamic_rng.roll(seed.0, 0x7000) * inv.items.len() as f64) as usize % inv.items.len();
+    let item_entity = inv.items[idx];
+
+    // Determine damage based on item type
+    let damage = item_kind_query.get(item_entity).ok().map_or(2, |k| match k {
+        ItemKind::Knife { attack } | ItemKind::Tomahawk { attack } => *attack,
+        ItemKind::Gun { attack, .. } => *attack / 2,
+        _ => 2,
+    });
+
+    intents.throw_item_intents.write(ThrowItemIntent {
+        thrower: player_entity,
+        item_entity,
+        item_index: idx,
+        dx: delta.x,
+        dy: delta.y,
+        range: crate::systems::projectile::THROWN_RANGE,
+        damage,
+    });
+    extra_world_ticks.0 = 1;
+    advance_turn(next_turn_state);
 }
 
 /// Helper: emits a `MoveIntent` and advances the turn state to `PlayerTurn`.
@@ -496,15 +707,4 @@ fn move_cursor(
     cursor.pos.y += dy;
     mark_viewshed_dirty(player_viewshed);
     advance_turn(next_turn_state);
-}
-
-/// Helper: clamps the inventory selection index after an item is consumed/dropped.
-/// `new_count` is the inventory length *after* removal.
-#[inline]
-fn clamp_inv_selection(selection: &mut usize, new_count: usize) {
-    if new_count == 0 {
-        *selection = 0;
-    } else if *selection >= new_count {
-        *selection = new_count - 1;
-    }
 }

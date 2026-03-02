@@ -12,7 +12,7 @@ use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
-    BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, ExtraWorldTicks, GameMapResource, GameState, InputState,
+    BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameMapResource, GameState, InputState,
     KillCount, MapSeed, PendingExp, PendingNpcExp, RestartRequested, SoundEvents, SpectatingAfterDeath, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
@@ -99,6 +99,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<SoundEvents>()
             .init_resource::<BloodMap>()
             .init_resource::<SpectatingAfterDeath>()
+            .init_resource::<DynamicRng>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -129,6 +130,7 @@ impl Plugin for RoguelikePlugin {
                 (
                     movement::movement_system,
                     movement::cactus_damage_system,
+                    movement::dive_stamina_system,
                     inventory::pickup_system,
                     inventory::auto_pickup_system,
                     inventory::use_item_system,
@@ -406,7 +408,7 @@ fn restart_system(
     mut camera: ResMut<CameraPosition>,
     mut cursor: ResMut<CursorPosition>,
     mut collectibles: ResMut<Collectibles>,
-    (mut extra_ticks, mut blood_map, mut spectating): (ResMut<ExtraWorldTicks>, ResMut<BloodMap>, ResMut<SpectatingAfterDeath>),
+    (mut extra_ticks, mut blood_map, mut spectating, mut dynamic_rng): (ResMut<ExtraWorldTicks>, ResMut<BloodMap>, ResMut<SpectatingAfterDeath>, ResMut<DynamicRng>),
 ) {
     if !restart.0 {
         return;
@@ -429,6 +431,7 @@ fn restart_system(
     extra_ticks.0 = 0;
     blood_map.stains.clear();
     spectating.0 = false;
+    dynamic_rng.reset();
     *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
 
     next_game_state.set(GameState::Playing);

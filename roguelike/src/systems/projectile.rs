@@ -157,8 +157,8 @@ pub fn projectile_system(
 
             // Shrapnel self-damage: if the projectile's source is the player
             // and the projectile lands on the player's tile.
-            if let Some((player_entity, player_pos)) = &player_info {
-                if proj.source == *player_entity && tile == player_pos.as_grid_vec() {
+            if let Some((player_entity, player_pos)) = &player_info
+                && proj.source == *player_entity && tile == player_pos.as_grid_vec() {
                     let self_damage = (proj.damage / SELF_DAMAGE_DIVISOR).max(1);
                     damage_events.write(DamageEvent {
                         target: *player_entity,
@@ -168,7 +168,6 @@ pub fn projectile_system(
                     despawn = true;
                     break;
                 }
-            }
 
             // Advance to next tile.
             proj.path_index += 1;

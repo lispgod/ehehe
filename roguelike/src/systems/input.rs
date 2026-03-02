@@ -138,13 +138,7 @@ pub fn input_system(
                         });
                         advance_turn(&mut next_turn_state);
                         input_state.mode = InputMode::Game;
-                        // Adjust selection so it doesn't exceed the new last index.
-                        let new_count = item_count.saturating_sub(1);
-                        if new_count > 0 && input_state.inv_selection >= new_count {
-                            input_state.inv_selection = new_count - 1;
-                        } else if new_count == 0 {
-                            input_state.inv_selection = 0;
-                        }
+                        clamp_inv_selection(&mut input_state.inv_selection, item_count.saturating_sub(1));
                     } else {
                         combat_log.push("No item selected.".into());
                     }
@@ -157,12 +151,7 @@ pub fn input_system(
                         });
                         advance_turn(&mut next_turn_state);
                         input_state.mode = InputMode::Game;
-                        let new_count = item_count.saturating_sub(1);
-                        if new_count > 0 && input_state.inv_selection >= new_count {
-                            input_state.inv_selection = new_count - 1;
-                        } else if new_count == 0 {
-                            input_state.inv_selection = 0;
-                        }
+                        clamp_inv_selection(&mut input_state.inv_selection, item_count.saturating_sub(1));
                     }
                 }
                 _ => {}
@@ -252,29 +241,21 @@ pub fn input_system(
             }
             // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
-                cursor.pos.y += 1;
-                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                advance_turn(&mut next_turn_state);
+                move_cursor(&mut cursor, 0, 1, &mut player_viewshed, &mut next_turn_state);
             }
             KeyCode::Char('k') if awaiting_input => {
-                cursor.pos.y -= 1;
-                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                advance_turn(&mut next_turn_state);
+                move_cursor(&mut cursor, 0, -1, &mut player_viewshed, &mut next_turn_state);
             }
             KeyCode::Char('j') if awaiting_input => {
-                cursor.pos.x -= 1;
-                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                advance_turn(&mut next_turn_state);
+                move_cursor(&mut cursor, -1, 0, &mut player_viewshed, &mut next_turn_state);
             }
             KeyCode::Char('l') if awaiting_input => {
-                cursor.pos.x += 1;
-                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                advance_turn(&mut next_turn_state);
+                move_cursor(&mut cursor, 1, 0, &mut player_viewshed, &mut next_turn_state);
             }
             // ── Center cursor on player (C) — advances one tick ──
             KeyCode::Char('c') if awaiting_input => {
                 cursor.pos = player_pos.as_grid_vec();
-                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                mark_viewshed_dirty(&mut player_viewshed);
                 advance_turn(&mut next_turn_state);
             }
             // ── Auto-aim (N): move cursor one step toward nearest hostile — advances one tick ──
@@ -292,8 +273,8 @@ pub fn input_system(
                 }
                 if let Some(target) = best_pos {
                     let step = (target - cursor.pos).king_step();
-                    cursor.pos = cursor.pos + step;
-                    if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                    cursor.pos += step;
+                    mark_viewshed_dirty(&mut player_viewshed);
                     advance_turn(&mut next_turn_state);
                 } else {
                     combat_log.push("No enemies visible.".into());
@@ -341,9 +322,9 @@ pub fn input_system(
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
                 let mut handled = false;
-                if let Some(inv) = player_inv {
-                    if let Some(&item_entity) = inv.items.get(idx) {
-                        if let Ok(kind) = item_kind_query.get(item_entity) {
+                if let Some(inv) = player_inv
+                    && let Some(&item_entity) = inv.items.get(idx)
+                        && let Ok(kind) = item_kind_query.get(item_entity) {
                             if let ItemKind::Gun { loaded, .. } = kind {
                                 if *loaded > 0 {
                                     let delta = cursor.pos - player_pos.as_grid_vec();
@@ -407,8 +388,6 @@ pub fn input_system(
                                 handled = true;
                             }
                         }
-                    }
-                }
                 if !handled {
                     // Non-gun items: use normally.
                     intents.use_item_intents.write(UseItemIntent {
@@ -440,5 +419,39 @@ fn emit_move(
 fn advance_turn(next_turn_state: &mut Option<ResMut<NextState<TurnState>>>) {
     if let Some(next) = next_turn_state {
         next.set(TurnState::PlayerTurn);
+    }
+}
+
+/// Helper: marks the player's viewshed as dirty so FOV is recalculated.
+#[inline]
+fn mark_viewshed_dirty(player_viewshed: &mut Query<&mut Viewshed, With<Player>>) {
+    if let Ok(mut vs) = player_viewshed.single_mut() {
+        vs.dirty = true;
+    }
+}
+
+/// Helper: moves the cursor by `(dx, dy)`, marks viewshed dirty, and advances the turn.
+#[inline]
+fn move_cursor(
+    cursor: &mut ResMut<CursorPosition>,
+    dx: i32,
+    dy: i32,
+    player_viewshed: &mut Query<&mut Viewshed, With<Player>>,
+    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
+) {
+    cursor.pos.x += dx;
+    cursor.pos.y += dy;
+    mark_viewshed_dirty(player_viewshed);
+    advance_turn(next_turn_state);
+}
+
+/// Helper: clamps the inventory selection index after an item is consumed/dropped.
+/// `new_count` is the inventory length *after* removal.
+#[inline]
+fn clamp_inv_selection(selection: &mut usize, new_count: usize) {
+    if new_count == 0 {
+        *selection = 0;
+    } else if *selection >= new_count {
+        *selection = new_count - 1;
     }
 }

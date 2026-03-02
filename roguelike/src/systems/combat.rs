@@ -5,7 +5,18 @@ use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIn
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, GameState, KillCount, MapSeed, PendingExp};
 use crate::systems::inventory::spawn_loot;
-use crate::typedefs::RatColor;
+use crate::grid_vec::GridVec;
+use crate::typedefs::{CoordinateUnit, RatColor};
+
+/// Computes the bullet endpoint by scaling a direction vector so the
+/// Bresenham line extends approximately `range` tiles along the
+/// dominant axis, preserving the exact trajectory angle.
+#[inline]
+fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, range: CoordinateUnit) -> GridVec {
+    let max_comp = dx.abs().max(dy.abs());
+    let scale = range.div_euclid(max_comp).max(1);
+    origin + GridVec::new(dx * scale, dy * scale)
+}
 
 /// Resolves attack intents into damage events.
 ///
@@ -229,12 +240,8 @@ pub fn ranged_attack_system(
             continue;
         }
 
-        // Compute the bullet endpoint: scale the direction vector so the
-        // Bresenham line extends approximately `range` tiles along the
-        // dominant axis, preserving the exact trajectory angle.
-        let max_comp = dx.abs().max(dy.abs());
-        let scale = intent.range.div_euclid(max_comp).max(1);
-        let endpoint = origin + crate::grid_vec::GridVec::new(dx * scale, dy * scale);
+        // Compute the bullet endpoint.
+        let endpoint = bullet_endpoint(origin, dx, dy, intent.range);
 
         combat_log.push(format!("{c_name} fires!"));
 
@@ -280,9 +287,7 @@ pub fn ai_ranged_attack_system(
         let damage = attacker_stats.attack;
 
         // Compute bullet endpoint.
-        let max_comp = dx.abs().max(dy.abs());
-        let scale = intent.range.div_euclid(max_comp).max(1);
-        let endpoint = origin + crate::grid_vec::GridVec::new(dx * scale, dy * scale);
+        let endpoint = bullet_endpoint(origin, dx, dy, intent.range);
 
         combat_log.push(format!("{a_name} fires!"));
 

@@ -34,7 +34,7 @@ pub fn end_world_turn(
         stamina.recover(STAMINA_REGEN_PER_TURN);
 
         // Regenerate player health (slower than stamina — every N turns).
-        if turn_counter.0 % HEALTH_REGEN_INTERVAL == 0 {
+        if turn_counter.0.is_multiple_of(HEALTH_REGEN_INTERVAL) {
             health.heal(HEALTH_REGEN_PER_TURN);
         }
     }

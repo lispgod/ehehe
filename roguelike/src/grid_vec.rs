@@ -3,7 +3,7 @@
 /// This is the fundamental coordinate type for the roguelike grid. It provides:
 /// - **Algebraic structure**: `Add`, `Sub`, `Neg`, `AddAssign`, `SubAssign`
 ///   (the integers under addition form an Abelian group: associative,
-///    commutative, identity element `ZERO`, and every element has an inverse).
+///   commutative, identity element `ZERO`, and every element has an inverse).
 /// - **Distance metrics**: Manhattan (L₁), Chebyshev (L∞), squared Euclidean.
 /// - **Zero-cost abstraction**: `Copy` + `#[repr(C)]` + inline arithmetic.
 ///
@@ -445,7 +445,8 @@ mod tests {
     fn scalar_multiplication() {
         let v = GridVec::new(2, -3);
         assert_eq!(v * 3, GridVec::new(6, -9));
-        assert_eq!(v * 0, GridVec::ZERO);
+        let zero = 0;
+        assert_eq!(v * zero, GridVec::ZERO);
     }
 
     #[test]

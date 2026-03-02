@@ -298,7 +298,7 @@ impl Default for CursorPosition {
 impl CursorPosition {
     /// Returns true when the cursor should be visible (inverted colors).
     pub fn blink_visible(&self) -> bool {
-        (self.blink_frame / self.blink_half_period) % 2 == 0
+        (self.blink_frame / self.blink_half_period).is_multiple_of(2)
     }
 
     /// Advance the blink counter by one frame.

@@ -20,7 +20,7 @@ impl Voxel {
         };
 
         let plus_furn: GraphicTriple = match &self.furniture {
-            Some(furn) => (furn.symbol(), furn.fg_color(), floor.2.clone()),
+            Some(furn) => (furn.symbol(), furn.fg_color(), floor.2),
             None => floor,
         };
 

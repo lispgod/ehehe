@@ -3,7 +3,7 @@
 /// Uses a hash-based value noise with fractal Brownian motion (fBm) layering.
 /// No external dependencies — the hash function is a variant of the
 /// Squirrel3 noise hash (GDC 2017), which produces excellent distribution.
-
+///
 /// Seed type for reproducible generation.
 pub type NoiseSeed = u64;
 
@@ -114,7 +114,7 @@ mod tests {
         for x in -10..10 {
             for y in -10..10 {
                 let v = value_noise(x, y, 42);
-                assert!(v >= 0.0 && v < 1.0, "value_noise({x},{y}) = {v} out of range");
+                assert!((0.0..1.0).contains(&v), "value_noise({x},{y}) = {v} out of range");
             }
         }
     }
@@ -138,7 +138,7 @@ mod tests {
         for i in 0..20 {
             let v = smooth_noise(i as f64 * 0.5, i as f64 * 0.3, 42);
             assert!(
-                v >= 0.0 && v <= 1.0,
+                (0.0..=1.0).contains(&v),
                 "smooth_noise out of range: {v}"
             );
         }
@@ -148,7 +148,7 @@ mod tests {
     fn fbm_in_range() {
         for i in 0..20 {
             let v = fbm(i as f64, i as f64, 4, 0.1, 0.5, 42);
-            assert!(v >= 0.0 && v <= 1.0, "fbm out of range: {v}");
+            assert!((0.0..=1.0).contains(&v), "fbm out of range: {v}");
         }
     }
 

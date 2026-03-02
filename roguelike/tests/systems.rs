@@ -617,10 +617,10 @@ fn spell_damages_nearby_enemies() {
     app.update(); // projectile_system advances shrapnel and applies damage
 
     // Monster should be damaged or killed by shrapnel.
-    match app.world().get::<Health>(monster) {
-        Some(hp) => assert!(hp.current < 10, "Monster should take shrapnel damage"),
-        None => {} // Monster was killed by shrapnel — also valid
+    if let Some(hp) = app.world().get::<Health>(monster) {
+        assert!(hp.current < 10, "Monster should take shrapnel damage");
     }
+    // Monster was killed by shrapnel — also valid
 }
 
 #[test]

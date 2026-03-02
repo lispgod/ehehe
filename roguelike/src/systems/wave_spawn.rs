@@ -61,7 +61,7 @@ pub fn wave_spawn_system(
     let turn = turn_counter.0;
 
     // Only spawn on wave intervals (and not on turn 0).
-    if turn == 0 || turn % WAVE_INTERVAL != 0 {
+    if turn == 0 || !turn.is_multiple_of(WAVE_INTERVAL) {
         return;
     }
 
@@ -108,7 +108,7 @@ pub fn wave_spawn_system(
 
         // Check distance constraints from gate.
         let dist_sq = candidate.distance_squared(gate_vec);
-        if dist_sq < MIN_WAVE_SPAWN_DIST_SQ || dist_sq > MAX_WAVE_SPAWN_DIST_SQ {
+        if !(MIN_WAVE_SPAWN_DIST_SQ..=MAX_WAVE_SPAWN_DIST_SQ).contains(&dist_sq) {
             continue;
         }
 

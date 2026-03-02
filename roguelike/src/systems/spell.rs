@@ -22,7 +22,7 @@ pub fn spell_system(
     mut commands: Commands,
     mut intents: MessageReader<SpellCastIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
-    mut caster_query: Query<(&Position, &CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>), With<Player>>,
+    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>), With<Player>>,
     targets: Query<(Entity, &Position, Option<&Name>), With<Hostile>>,
     player_entities: Query<(Entity, &Position), With<Player>>,
     mut combat_log: ResMut<CombatLog>,
@@ -30,7 +30,7 @@ pub fn spell_system(
     mut game_map: ResMut<GameMapResource>,
 ) {
     for intent in intents.read() {
-        let Ok((caster_pos, caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
+        let Ok((caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
             continue;
         };
 
@@ -53,7 +53,6 @@ pub fn spell_system(
 
         let origin = intent.target;
         let c_name = caster_name.map_or("???", |n| &n.0);
-        let _ = caster_pos; // grenade detonates at target, not caster
         let mut hit_count = 0;
 
         // Grenade shrapnel damages all hostile entities within radius.

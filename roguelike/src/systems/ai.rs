@@ -533,13 +533,13 @@ pub fn ai_system(
                                     used_gun = true;
                                 }
                         } else {
-                            // No loaded gun found — try to reload an empty gun.
-                            let empty_gun = inv.items.iter().copied().find(|&ent| {
+                            // No loaded gun found — try to reload a gun that needs reloading.
+                            let reloadable_gun = inv.items.iter().copied().find(|&ent| {
                                 item_kinds.get(ent).ok().is_some_and(|k|
                                     matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
                                 )
                             });
-                            if let Some(gun_entity) = empty_gun {
+                            if let Some(gun_entity) = reloadable_gun {
                                 if let Ok(mut kind) = item_kinds.get_mut(gun_entity)
                                     && let ItemKind::Gun { ref mut loaded, capacity, .. } = *kind {
                                         // NPCs reload their gun fully in one action.

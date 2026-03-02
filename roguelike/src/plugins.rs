@@ -173,9 +173,15 @@ impl Plugin for RoguelikePlugin {
             // ── Render (always runs — shows PAUSED overlay when paused) ──
             .add_systems(
                 Update,
-                (render::particle_tick_system, render::draw_system)
-                    .chain()
+                (render::cursor_blink_system, render::particle_tick_system)
                     .in_set(RoguelikeSet::Render),
+            )
+            .add_systems(
+                Update,
+                render::draw_system
+                    .in_set(RoguelikeSet::Render)
+                    .after(render::cursor_blink_system)
+                    .after(render::particle_tick_system),
             );
     }
 }

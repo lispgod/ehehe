@@ -284,12 +284,35 @@ impl Default for Collectibles {
 /// The cursor position in world coordinates.
 /// Moved with IJKL keys. Used for aiming and directional actions.
 /// Always visible on the map.
+/// Also tracks blink state for cursor rendering.
 #[derive(Resource, Debug, Clone)]
-pub struct CursorPosition(pub MyPoint);
+pub struct CursorPosition {
+    pub pos: MyPoint,
+    /// Frame counter for cursor blink animation.
+    blink_frame: u32,
+    /// Number of frames per half-blink cycle.
+    blink_half_period: u32,
+}
 
 impl Default for CursorPosition {
     fn default() -> Self {
-        Self(GridVec::new(SPAWN_X, SPAWN_Y))
+        Self {
+            pos: GridVec::new(SPAWN_X, SPAWN_Y),
+            blink_frame: 0,
+            blink_half_period: 15, // At 60 FPS: toggles every 15 frames → 2 blinks/sec
+        }
+    }
+}
+
+impl CursorPosition {
+    /// Returns true when the cursor should be visible (inverted colors).
+    pub fn blink_visible(&self) -> bool {
+        (self.blink_frame / self.blink_half_period) % 2 == 0
+    }
+
+    /// Advance the blink counter by one frame.
+    pub fn tick_blink(&mut self) {
+        self.blink_frame = self.blink_frame.wrapping_add(1);
     }
 }
 
@@ -483,7 +506,26 @@ mod tests {
     #[test]
     fn cursor_default_at_spawn() {
         let cursor = CursorPosition::default();
-        assert_eq!(cursor.0.x, SPAWN_X);
-        assert_eq!(cursor.0.y, SPAWN_Y);
+        assert_eq!(cursor.pos.x, SPAWN_X);
+        assert_eq!(cursor.pos.y, SPAWN_Y);
+    }
+
+    #[test]
+    fn cursor_blink_visible_toggles() {
+        let mut cursor = CursorPosition::default();
+        // Initially visible (frame 0)
+        assert!(cursor.blink_visible());
+        // Advance past half_period (15 frames)
+        for _ in 0..15 {
+            cursor.tick_blink();
+        }
+        // Should now be invisible
+        assert!(!cursor.blink_visible());
+        // Advance another half_period
+        for _ in 0..15 {
+            cursor.tick_blink();
+        }
+        // Should be visible again (full cycle)
+        assert!(cursor.blink_visible());
     }
 }

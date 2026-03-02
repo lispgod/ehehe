@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use bevy_ratatui::RatatuiContext;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
@@ -24,6 +24,11 @@ const PARTICLE_LIFETIME: f32 = 8.0;
 /// Ticks and renders combat particles each frame.
 pub fn particle_tick_system(mut particles: ResMut<SpellParticles>) {
     particles.tick();
+}
+
+/// Advances the cursor blink timer each frame.
+pub fn cursor_blink_system(mut cursor: ResMut<CursorPosition>) {
+    cursor.tick_blink();
 }
 
 /// Renders the game map and all `Renderable` entities to the terminal.
@@ -199,21 +204,23 @@ pub fn draw_system(
             }
         }
 
-        // Overlay cursor position with SLOW_BLINK modifier.
-        let mut cursor_screen_pos: Option<(usize, usize)> = None;
+        // Overlay cursor position with blinking color inversion.
+        // The cursor does not draw a character — it inverts fg/bg colors when visible.
+        let cursor_blink_visible = cursor.blink_visible();
         {
-            let cursor_screen = cursor.0 - bottom_left;
+            let cursor_screen = cursor.pos - bottom_left;
             if cursor_screen.x >= 0
                 && cursor_screen.x < render_width as CoordinateUnit
                 && cursor_screen.y >= 0
                 && cursor_screen.y < render_height as CoordinateUnit
             {
-                let sx = cursor_screen.x as usize;
-                let sy = cursor_screen.y as usize;
-                let bg = render_packet[sy][sx].2;
-                render_packet[sy][sx] =
-                    ("X".into(), RatColor::Rgb(255, 255, 0), bg);
-                cursor_screen_pos = Some((sx, sy));
+                if cursor_blink_visible {
+                    let sx = cursor_screen.x as usize;
+                    let sy = cursor_screen.y as usize;
+                    // Invert fg and bg colors for the cursor cell.
+                    let (sym, fg, bg) = &render_packet[sy][sx];
+                    render_packet[sy][sx] = (sym.clone(), *bg, *fg);
+                }
             }
         }
 
@@ -238,25 +245,12 @@ pub fn draw_system(
 
         let mut render_lines = Vec::new();
 
-        // Map cursor position from game-space Y to screen-space Y.
-        // The render_packet is built bottom-to-top (Y=0 at bottom) but
-        // render_lines are reversed so Y=0 displays at the top of the
-        // terminal. Convert: screen_y = (height - 1) - game_y.
-        let cursor_render_y = cursor_screen_pos.map(|(cx, cy)| (cx, (render_height as usize).saturating_sub(1).saturating_sub(cy)));
-
         for y in 0..render_height as usize {
             if y < render_packet.len() {
                 let spans: Vec<Span> = render_packet[y]
                     .iter()
-                    .enumerate()
-                    .map(|(x, gt)| {
-                        let span = Span::from(gt.0.clone()).fg(gt.1).bg(gt.2);
-                        // Apply SLOW_BLINK to the cursor cell.
-                        if cursor_render_y == Some((x, y)) {
-                            span.add_modifier(Modifier::SLOW_BLINK)
-                        } else {
-                            span
-                        }
+                    .map(|gt| {
+                        Span::from(gt.0.clone()).fg(gt.1).bg(gt.2)
                     })
                     .collect();
                 render_lines.push(Line::from(spans));

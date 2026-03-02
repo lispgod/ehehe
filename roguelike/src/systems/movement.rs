@@ -92,7 +92,7 @@ pub fn movement_system(
             // When the player moves, the cursor moves by the same delta
             // so the player keeps looking in the same relative direction.
             if is_player {
-                cursor.0 = cursor.0 + delta;
+                cursor.pos = cursor.pos + delta;
             }
 
             // Mark viewshed dirty so visibility is recalculated.

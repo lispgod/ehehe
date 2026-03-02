@@ -49,14 +49,12 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (costs 1 tick). Used for aiming." },
     CommandBinding { key: "C", name: "Center cursor", docs: "Set the cursor onto the player's position (costs 1 tick)." },
     CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy (costs 1 tick)." },
-    CommandBinding { key: "F / Space", name: "Throw grenade", docs: "Throw a grenade from inventory toward the cursor. Warning: can damage you too!" },
-    CommandBinding { key: "T", name: "Reload", docs: "Reload weapon from a magazine in your inventory. Current partial magazine is saved to inventory." },
+    CommandBinding { key: "R", name: "Reload", docs: "Reload weapon from a magazine in your inventory. Current partial magazine is saved to inventory." },
     CommandBinding { key: "E", name: "Roundhouse kick", docs: "Roundhouse kick hitting all adjacent enemies in melee range." },
-    CommandBinding { key: "Shift+WASD", name: "Sprint", docs: "Hold Shift while moving to sprint (move 2 tiles per turn)." },
-    CommandBinding { key: ". / 5", name: "Wait", docs: "Skip the current turn without acting." },
+    CommandBinding { key: ".", name: "Wait", docs: "Skip the current turn without acting." },
     CommandBinding { key: "G", name: "Pick up item", docs: "Pick up an item on the ground at your position. Magazines and grenades are auto-picked up on contact." },
     CommandBinding { key: "Tab", name: "Open inventory", docs: "Open the inventory screen to view and use items. Magazines can be used to reload." },
-    CommandBinding { key: "1-9", name: "Use/Fire item", docs: "Quickly use an inventory item by slot number. Guns fire toward the cursor." },
+    CommandBinding { key: "1-9", name: "Use/Fire item", docs: "Quickly use an inventory item by slot number. Guns fire toward the cursor. Grenades throw toward the cursor." },
     CommandBinding { key: "P", name: "Pause / Resume", docs: "Toggle pause state." },
     CommandBinding { key: "? / /", name: "Help", docs: "Toggle this help screen." },
     CommandBinding { key: "Q / Esc", name: "Quit", docs: "Open the quit confirmation prompt." },
@@ -223,28 +221,28 @@ pub fn input_system(
             }
             // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
-                cursor.0.y += 1;
+                cursor.pos.y += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
                 }
             }
             KeyCode::Char('k') if awaiting_input => {
-                cursor.0.y -= 1;
+                cursor.pos.y -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
                 }
             }
             KeyCode::Char('j') if awaiting_input => {
-                cursor.0.x -= 1;
+                cursor.pos.x -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
                 }
             }
             KeyCode::Char('l') if awaiting_input => {
-                cursor.0.x += 1;
+                cursor.pos.x += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
@@ -252,7 +250,7 @@ pub fn input_system(
             }
             // ── Center cursor on player (C) — advances one tick ──
             KeyCode::Char('c') if awaiting_input => {
-                cursor.0 = player_pos.as_grid_vec();
+                cursor.pos = player_pos.as_grid_vec();
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
@@ -272,8 +270,8 @@ pub fn input_system(
                     }
                 }
                 if let Some(target) = best_pos {
-                    let step = (target - cursor.0).king_step();
-                    cursor.0 = cursor.0 + step;
+                    let step = (target - cursor.pos).king_step();
+                    cursor.pos = cursor.pos + step;
                     if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
                     if let Some(next) = &mut next_turn_state {
                         next.set(TurnState::PlayerTurn);
@@ -283,20 +281,6 @@ pub fn input_system(
                 }
             }
             // ── Movement keys (only while awaiting input) ───────
-            // Shift+direction = sprint (move 2 tiles at once).
-            // Crossterm sends uppercase chars when Shift is held.
-            KeyCode::Char('W') if awaiting_input => {
-                emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, 2);
-            }
-            KeyCode::Char('S') if awaiting_input => {
-                emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, -2);
-            }
-            KeyCode::Char('A') if awaiting_input => {
-                emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, -2, 0);
-            }
-            KeyCode::Char('D') if awaiting_input => {
-                emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 2, 0);
-            }
             // Normal movement
             KeyCode::Char('w') | KeyCode::Up if awaiting_input => {
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, 1);
@@ -311,49 +295,14 @@ pub fn input_system(
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 1, 0);
             }
             // ── Wait / skip turn ────────────────────────────────
-            KeyCode::Char('.') | KeyCode::Char('5') if awaiting_input => {
+            KeyCode::Char('.') if awaiting_input => {
                 combat_log.push("You wait...".into());
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
                 }
             }
-            // ── Grenade throw: throw a grenade from inventory toward the cursor ──
-            KeyCode::Char('f') | KeyCode::Char(' ') if awaiting_input => {
-                // Check stamina before throwing grenade.
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= SPELL_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina!".into());
-                } else {
-                    // Find a grenade in inventory.
-                    let grenade_idx = player_inv.and_then(|inv| {
-                        inv.items.iter().enumerate().find_map(|(i, &ent)| {
-                            if let Ok(kind) = item_kind_query.get(ent) {
-                                if matches!(kind, ItemKind::Grenade { .. }) {
-                                    return Some(i);
-                                }
-                            }
-                            None
-                        })
-                    });
-                    if let Some(idx) = grenade_idx {
-                        intents.spell_intents.write(SpellCastIntent {
-                            caster: player_entity,
-                            radius: SPELL_RADIUS,
-                            target: cursor.0,
-                            grenade_index: idx,
-                        });
-                        if let Some(next) = &mut next_turn_state {
-                            next.set(TurnState::PlayerTurn);
-                        }
-                    } else {
-                        combat_log.push("No grenades in inventory!".into());
-                    }
-                }
-            }
             // ── Reload weapon from inventory magazine ───────────
-            KeyCode::Char('t') if awaiting_input => {
+            KeyCode::Char('r') if awaiting_input => {
                 input_state.reload_pending = true;
                 if let Some(next) = &mut next_turn_state {
                     next.set(TurnState::PlayerTurn);
@@ -377,7 +326,7 @@ pub fn input_system(
                     next.set(TurnState::PlayerTurn);
                 }
             }
-            // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw ──
+            // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw / Grenade ──
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
                 let idx = (c as usize) - ('1' as usize);
                 let mut handled = false;
@@ -386,7 +335,7 @@ pub fn input_system(
                         if let Ok(kind) = item_kind_query.get(item_entity) {
                             if let ItemKind::Gun { loaded, .. } = kind {
                                 if *loaded > 0 {
-                                    let delta = cursor.0 - player_pos.as_grid_vec();
+                                    let delta = cursor.pos - player_pos.as_grid_vec();
                                     if delta != crate::grid_vec::GridVec::ZERO {
                                         intents.ranged_intents.write(RangedAttackIntent {
                                             attacker: player_entity,
@@ -404,11 +353,11 @@ pub fn input_system(
                                         handled = true;
                                     }
                                 } else {
-                                    combat_log.push("Gun is empty! Reload in inventory mode.".into());
+                                    combat_log.push("Gun is empty! Press R to reload.".into());
                                     handled = true;
                                 }
                             } else if matches!(kind, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. }) {
-                                let delta = cursor.0 - player_pos.as_grid_vec();
+                                let delta = cursor.pos - player_pos.as_grid_vec();
                                 if delta != crate::grid_vec::GridVec::ZERO {
                                     let (range, damage) = match kind {
                                         ItemKind::Knife { attack } => (8, *attack),
@@ -432,6 +381,25 @@ pub fn input_system(
                                     combat_log.push("Cursor is on your position!".into());
                                     handled = true;
                                 }
+                            } else if matches!(kind, ItemKind::Grenade { .. }) {
+                                // Throw grenade from this inventory slot toward the cursor.
+                                let has_stamina = player_stamina
+                                    .map(|m| m.current >= SPELL_STAMINA_COST)
+                                    .unwrap_or(false);
+                                if !has_stamina {
+                                    combat_log.push("Not enough stamina!".into());
+                                } else {
+                                    intents.spell_intents.write(SpellCastIntent {
+                                        caster: player_entity,
+                                        radius: SPELL_RADIUS,
+                                        target: cursor.pos,
+                                        grenade_index: idx,
+                                    });
+                                    if let Some(next) = &mut next_turn_state {
+                                        next.set(TurnState::PlayerTurn);
+                                    }
+                                }
+                                handled = true;
                             }
                         }
                     }

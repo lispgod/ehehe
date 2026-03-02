@@ -161,6 +161,9 @@ pub fn use_item_system(
             ItemKind::Tomahawk { .. } => {
                 combat_log.push("Readied tomahawk".into());
             }
+            ItemKind::Molotov { .. } => {
+                combat_log.push("Readied molotov — aim and press slot key to throw".into());
+            }
         }
     }
 }
@@ -180,35 +183,42 @@ const LOOT_TABLE: &[LootEntry] = &[
         symbol: "w",
         fg: RatColor::Rgb(180, 120, 60),
         kind: ItemKind::Whiskey { heal: 10 },
-        weight: 0.15,
+        weight: 0.13,
     },
     LootEntry {
         name: "Dynamite Stick",
         symbol: "*",
         fg: RatColor::Rgb(255, 165, 0),
         kind: ItemKind::Grenade { damage: 8, radius: 2 },
-        weight: 0.12,
+        weight: 0.10,
+    },
+    LootEntry {
+        name: "Molotov Cocktail",
+        symbol: "m",
+        fg: RatColor::Rgb(255, 100, 0),
+        kind: ItemKind::Molotov { damage: 6, radius: 4 },
+        weight: 0.10,
     },
     LootEntry {
         name: "Bowie Knife",
         symbol: "/",
         fg: RatColor::Rgb(192, 192, 210),
         kind: ItemKind::Knife { attack: 4 },
-        weight: 0.13,
+        weight: 0.11,
     },
     LootEntry {
         name: "Tomahawk",
         symbol: "t",
         fg: RatColor::Rgb(160, 120, 80),
         kind: ItemKind::Tomahawk { attack: 5 },
-        weight: 0.12,
+        weight: 0.11,
     },
     LootEntry {
         name: "Cowboy Hat",
         symbol: "^",
         fg: RatColor::Rgb(210, 180, 140),
         kind: ItemKind::Hat { defense: 1 },
-        weight: 0.13,
+        weight: 0.10,
     },
 ];
 

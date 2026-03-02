@@ -3,8 +3,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Player, Position, Speed, Viewshed};
-use crate::events::{AiRangedAttackIntent, MoveIntent};
+use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, PatrolOrigin, Player, Position, Speed, Viewshed};
+use crate::events::{AiRangedAttackIntent, AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex};
 
@@ -121,67 +121,120 @@ fn a_star_first_step(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
+/// Returns `true` if two factions are hostile to each other.
+/// - Outlaws and Lawmen fight each other.
+/// - Wildlife attacks everyone.
+/// - Vaqueros fight Outlaws and Wildlife.
+pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
+    if a == b {
+        return false;
+    }
+    matches!(
+        (a, b),
+        (Faction::Outlaws, Faction::Lawmen)
+        | (Faction::Lawmen, Faction::Outlaws)
+        | (Faction::Wildlife, _)
+        | (_, Faction::Wildlife)
+        | (Faction::Vaqueros, Faction::Outlaws)
+        | (Faction::Outlaws, Faction::Vaqueros)
+    )
+}
+
+/// Patrol radius: how far an NPC will wander from its spawn point.
+const PATROL_RADIUS: i32 = 8;
+
 /// AI system: runs during `WorldTurn` for every entity with an `AiState`.
 ///
 /// **Behaviour**:
 /// - **Idle**: if the player is within the entity's Viewshed, switch to `Chasing`.
-/// - **Chasing**: use **A\* pathfinding** (Chebyshev heuristic) to find the
-///   optimal route to the player, navigating around walls and other blocking
-///   entities. Falls back to greedy best-first (king-step toward player) when
-///   A* cannot find a path within its exploration budget.
-///   Military faction entities with ammo will attempt ranged attacks when they
-///   can see the player but are not adjacent.
+/// - **Patrolling**: wander around patrol origin. If player or enemy faction
+///   entity is spotted, switch to `Chasing`.
+///   - Lawmen: patrol in a structured pattern around their origin.
+///   - Wildlife: random wandering.
+///   - Outlaws: skulk (move slowly, stay near buildings).
+/// - **Chasing**: use **A\* pathfinding** to pursue the player or nearest
+///   hostile faction entity.
 ///
-/// Emits `MoveIntent` just like the player's input system, so the same
-/// movement/collision/bump-to-attack pipeline resolves NPC actions. This is
-/// the core ECS composability guarantee: AI and player share identical
-/// intent→action→consequence data flow.
+/// NPCs also fight entities of hostile factions (outlaws vs lawmen vs wildlife).
 pub fn ai_system(
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position), With<Player>>,
+    // Query all NPCs with position + faction for inter-faction combat targeting
+    npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
     blockers: Query<(), With<BlocksMovement>>,
     mut move_intents: MessageWriter<MoveIntent>,
     mut ranged_intents: MessageWriter<AiRangedAttackIntent>,
+    mut attack_intents: MessageWriter<AttackIntent>,
 ) {
-    let Ok((player_entity, player_pos)) = player_query.single() else {
-        return;
-    };
-    let player_vec = player_pos.as_grid_vec();
+    let player_info = player_query.single().ok();
+    let player_vec = player_info.map(|(_, p)| p.as_grid_vec());
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin) in &mut ai_query {
         // Only act if enough energy has accumulated.
         if !energy.can_act() {
             continue;
         }
 
         let my_pos = pos.as_grid_vec();
+        let my_faction = faction.copied();
+
+        // Find the nearest hostile faction entity visible to this NPC.
+        let faction_target: Option<(Entity, GridVec)> = if let Some(my_f) = my_faction {
+            let mut best_dist = i32::MAX;
+            let mut best = None;
+            for (other_ent, other_pos, other_faction) in &npc_positions {
+                if other_ent == entity { continue; }
+                if let Some(&of) = other_faction {
+                    if factions_are_hostile(my_f, of) {
+                        let ov = other_pos.as_grid_vec();
+                        let dist = my_pos.chebyshev_distance(ov);
+                        if dist < best_dist {
+                            // Only target if visible
+                            if viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ov)) {
+                                best_dist = dist;
+                                best = Some((other_ent, ov));
+                            }
+                        }
+                    }
+                }
+            }
+            best
+        } else {
+            None
+        };
+
+        // Determine chase target: prefer player if visible, else faction target
+        let player_visible = player_vec.is_some_and(|pv|
+            viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
+        );
+
+        let chase_target: Option<(Entity, GridVec)> = if player_visible {
+            player_info.map(|(e, p)| (e, p.as_grid_vec()))
+        } else {
+            faction_target
+        };
 
         match *ai {
             AiState::Idle => {
-                // Check if player is visible — no energy cost for looking.
-                // Idle enemies periodically scan by rotating their look direction.
-                let player_visible = viewshed.as_ref()
-                    .is_some_and(|vs| vs.visible_tiles.contains(&player_vec));
-                if player_visible {
+                // Check if any target is visible — transition to Chasing.
+                if chase_target.is_some() {
                     *ai = AiState::Chasing;
-                    // Point look direction at the player immediately.
-                    if let Some(ref mut look) = ai_look_dir {
-                        let toward = (player_vec - my_pos).king_step();
-                        if !toward.is_zero() {
-                            look.0 = toward;
+                    if let Some((_, tv)) = chase_target {
+                        if let Some(ref mut look) = ai_look_dir {
+                            let toward = (tv - my_pos).king_step();
+                            if !toward.is_zero() {
+                                look.0 = toward;
+                            }
                         }
                     }
                 } else {
-                    // Idle enemies slowly scan: rotate look direction each tick.
-                    // This costs energy so they don't act for free forever.
+                    // Idle: slowly rotate look direction.
                     if let Some(ref mut look) = ai_look_dir {
-                        // Rotate 45° clockwise by cycling through DIRECTIONS_8.
-                        // If current direction isn't in the array, normalize via king_step first.
                         let current_normalized = look.0.king_step();
                         let idx = GridVec::DIRECTIONS_8.iter()
                             .position(|&d| d == current_normalized)
@@ -195,16 +248,100 @@ pub fn ai_system(
                     energy.spend_action();
                 }
             }
+            AiState::Patrolling => {
+                // If we spot a target, transition to Chasing.
+                if chase_target.is_some() {
+                    *ai = AiState::Chasing;
+                    continue;
+                }
+
+                // Patrol behavior depends on faction.
+                let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
+
+                let patrol_step = match my_faction {
+                    Some(Faction::Lawmen) => {
+                        // Sheriff/Lawmen: structured patrol around origin
+                        // Walk toward the origin if too far, else circle around it.
+                        if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
+                            Some((origin - my_pos).king_step())
+                        } else {
+                            // Rotate clockwise around origin
+                            let offset = my_pos - origin;
+                            let rotated = offset.rotate_45_cw();
+                            let target = origin + rotated;
+                            Some((target - my_pos).king_step())
+                        }
+                    }
+                    Some(Faction::Wildlife) => {
+                        // Animals: random wandering
+                        let dir_idx = ((my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13))
+                            .wrapping_add(energy.0)) as usize % 8;
+                        Some(GridVec::DIRECTIONS_8[dir_idx])
+                    }
+                    Some(Faction::Outlaws) => {
+                        // Outlaws: skulk — stay near origin, move slowly and randomly
+                        if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
+                            Some((origin - my_pos).king_step())
+                        } else {
+                            let dir_idx = ((my_pos.x.wrapping_mul(3) ^ my_pos.y.wrapping_mul(11))
+                                .wrapping_add(energy.0)) as usize % 8;
+                            Some(GridVec::DIRECTIONS_8[dir_idx])
+                        }
+                    }
+                    _ => {
+                        // Vaqueros and others: wander
+                        let dir_idx = ((my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9))
+                            .wrapping_add(energy.0)) as usize % 8;
+                        Some(GridVec::DIRECTIONS_8[dir_idx])
+                    }
+                };
+
+                if let Some(step) = patrol_step {
+                    if !step.is_zero() {
+                        let target = my_pos + step;
+                        if game_map.0.is_passable(&target)
+                            && !spatial.entities_at(&target).iter().any(|&e| e != entity && blockers.contains(e))
+                        {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            if let Some(ref mut look) = ai_look_dir {
+                                look.0 = step.king_step();
+                                if let Some(ref mut vs) = viewshed {
+                                    vs.dirty = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                energy.spend_action();
+            }
             AiState::Chasing => {
+                // Determine the target to chase.
+                let target_info = if player_visible {
+                    player_info.map(|(e, p)| (e, p.as_grid_vec()))
+                } else if let Some(ft) = faction_target {
+                    Some(ft)
+                } else {
+                    // Lost sight of all targets — return to patrolling.
+                    *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
+                    energy.spend_action();
+                    continue;
+                };
+
+                let Some((target_entity, target_vec)) = target_info else {
+                    energy.spend_action();
+                    continue;
+                };
+
                 // If the enemy has an AiLookDir, check if they need to rotate
-                // toward the player first (costs a tick).
-                let toward_player = (player_vec - my_pos).king_step();
-                let needs_rotation = !toward_player.is_zero()
-                    && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_player);
+                // toward the target first (costs a tick).
+                let toward_target = (target_vec - my_pos).king_step();
+                let needs_rotation = !toward_target.is_zero()
+                    && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_target);
 
                 if needs_rotation {
                     if let Some(ref mut look) = ai_look_dir {
-                        look.0 = toward_player;
+                        look.0 = toward_target;
                         if let Some(ref mut vs) = viewshed {
                             vs.dirty = true;
                         }
@@ -213,39 +350,47 @@ pub fn ai_system(
                     continue;
                 }
 
-                let dist = my_pos.chebyshev_distance(player_vec);
+                let dist = my_pos.chebyshev_distance(target_vec);
 
-                // Military faction entities attempt ranged attacks when they can see
-                // the player, have ammo, and are not adjacent.
-                let is_military = faction.is_some_and(|f| *f == Faction::Lawmen);
-                let can_shoot = is_military
+                // Ranged attack for Lawmen/Outlaws with ammo.
+                let is_ranged = my_faction.is_some_and(|f| f == Faction::Lawmen || f == Faction::Outlaws);
+                let can_shoot = is_ranged
                     && ammo.is_some()
                     && dist > 1
                     && dist <= AI_RANGED_ATTACK_RANGE
-                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&player_vec));
+                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec));
 
                 if can_shoot
                     && let Some(mut ammo_pool) = ammo
                         && ammo_pool.spend_one() {
                             ranged_intents.write(AiRangedAttackIntent {
                                 attacker: entity,
-                                target: player_entity,
+                                target: target_entity,
                                 range: AI_RANGED_ATTACK_RANGE,
                             });
                             energy.spend_action();
                             continue;
                         }
 
-                // A* pathfinding: find optimal route around obstacles.
-                // Falls back to greedy king-step if no path is found.
-                let step = a_star_first_step(my_pos, player_vec, |pos| {
+                // Adjacent to target? Attack directly (faction fight or player).
+                if dist == 1 {
+                    attack_intents.write(AttackIntent {
+                        attacker: entity,
+                        target: target_entity,
+                    });
+                    energy.spend_action();
+                    continue;
+                }
+
+                // A* pathfinding toward target.
+                let step = a_star_first_step(my_pos, target_vec, |pos| {
                     game_map.0.is_passable(&pos)
                         && !spatial
                             .entities_at(&pos)
                             .iter()
                             .any(|&e| e != entity && blockers.contains(e))
                 })
-                .unwrap_or_else(|| (player_vec - my_pos).king_step());
+                .unwrap_or_else(|| (target_vec - my_pos).king_step());
 
                 if !step.is_zero() {
                     move_intents.write(MoveIntent {
@@ -253,14 +398,12 @@ pub fn ai_system(
                         dx: step.x,
                         dy: step.y,
                     });
-                    // Update look direction to match movement.
                     if let Some(ref mut look) = ai_look_dir {
                         look.0 = step.king_step();
                         if let Some(ref mut vs) = viewshed {
                             vs.dirty = true;
                         }
                     }
-                    // Only deduct energy when an action is actually emitted.
                     energy.spend_action();
                 }
             }

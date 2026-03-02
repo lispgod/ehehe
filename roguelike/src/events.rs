@@ -94,3 +94,16 @@ pub struct ThrowItemIntent {
     pub range: CoordinateUnit,
     pub damage: CoordinateUnit,
 }
+
+/// Fired when the player throws a molotov cocktail.
+/// Ignites all flammable furniture within `radius` tiles of the target.
+#[derive(Message, Debug, Clone)]
+pub struct MolotovCastIntent {
+    pub caster: Entity,
+    pub radius: CoordinateUnit,
+    pub damage: CoordinateUnit,
+    /// World position where the molotov detonates.
+    pub target: crate::grid_vec::GridVec,
+    /// Inventory index of the molotov item to consume.
+    pub item_index: usize,
+}

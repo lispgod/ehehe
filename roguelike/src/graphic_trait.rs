@@ -26,6 +26,7 @@ impl GraphicElement for Floor {
             Floor::Lava => "~".into(),
             Floor::ScorchedEarth => ".".into(),
             Floor::WoodPlanks => " ".into(),
+            Floor::Fire => "^".into(),
         }
     }
 
@@ -41,6 +42,7 @@ impl GraphicElement for Floor {
             Floor::Lava => RatColor::Rgb(255, 80, 0),
             Floor::ScorchedEarth => RatColor::Rgb(90, 40, 20),
             Floor::WoodPlanks => RatColor::Rgb(130, 95, 50),
+            Floor::Fire => RatColor::Rgb(255, 140, 0),
         }
     }
 
@@ -56,6 +58,7 @@ impl GraphicElement for Floor {
             Floor::Lava => RatColor::Rgb(180, 50, 0),
             Floor::ScorchedEarth => RatColor::Rgb(55, 30, 15),
             Floor::WoodPlanks => RatColor::Rgb(95, 70, 38),
+            Floor::Fire => RatColor::Rgb(200, 60, 0),
         }
     }
 }
@@ -80,6 +83,7 @@ impl GraphicElement for Furniture {
             Furniture::Chair => "h".into(),
             Furniture::Piano => "M".into(),
             Furniture::Sign => "]".into(),
+            Furniture::HayBale => "&".into(),
         }
     }
 
@@ -102,6 +106,7 @@ impl GraphicElement for Furniture {
             Furniture::Chair => RatColor::Rgb(105, 75, 38),
             Furniture::Piano => RatColor::Rgb(50, 45, 40),
             Furniture::Sign => RatColor::Rgb(150, 125, 70),
+            Furniture::HayBale => RatColor::Rgb(200, 180, 80),
         }
     }
 

@@ -7,7 +7,7 @@ use crate::components::{
     Health, Inventory, Item, ItemKind, Level, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
-use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
@@ -73,6 +73,7 @@ impl Plugin for RoguelikePlugin {
             .add_message::<AiRangedAttackIntent>()
             .add_message::<DropItemIntent>()
             .add_message::<ThrowItemIntent>()
+            .add_message::<MolotovCastIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
             .insert_resource(GameMapResource(GameMap::new(120, 80, seed)))
@@ -123,6 +124,7 @@ impl Plugin for RoguelikePlugin {
                     inventory::throw_system,
                     inventory::reload_system,
                     spell::spell_system,
+                    spell::molotov_system,
                     combat::ranged_attack_system,
                     combat::melee_wide_system,
                     combat::combat_system,
@@ -219,6 +221,18 @@ fn do_spawn_player(commands: &mut Commands) {
         },
     )).id();
 
+    // Spawn starting molotov cocktail
+    let molotov = commands.spawn((
+        Item,
+        Name("Molotov Cocktail".into()),
+        Renderable {
+            symbol: "m".into(),
+            fg: RatColor::Rgb(255, 100, 0),
+            bg: RatColor::Black,
+        },
+        ItemKind::Molotov { damage: 6, radius: 4 },
+    )).id();
+
     commands.spawn((
         Position {
             x: SPAWN_X,
@@ -252,7 +266,7 @@ fn do_spawn_player(commands: &mut Commands) {
         Speed(ACTION_COST),
         Energy(0),
     )).insert((
-        Inventory { items: vec![colt_navy] },
+        Inventory { items: vec![colt_navy, molotov] },
         Level(1),
         Experience {
             current: 0,

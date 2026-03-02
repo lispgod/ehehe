@@ -11,6 +11,8 @@ pub enum Floor {
     Lava,
     ScorchedEarth,
     WoodPlanks,
+    /// Ground that is actively burning.
+    Fire,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.
@@ -33,6 +35,43 @@ pub enum Furniture {
     Chair,
     Piano,
     Sign,
+    /// A bale of hay — blocks movement but not vision, and is flammable.
+    HayBale,
+}
+
+impl Furniture {
+    /// Returns `true` if this furniture blocks entity movement.
+    /// Most solid objects block movement; low/open objects like fences and
+    /// water troughs allow passage.
+    pub fn blocks_movement(&self) -> bool {
+        match self {
+            Furniture::Fence | Furniture::WaterTrough => false,
+            _ => true,
+        }
+    }
+
+    /// Returns `true` if this furniture blocks line-of-sight.
+    /// Tall opaque objects block vision; short or transparent objects do not.
+    pub fn blocks_vision(&self) -> bool {
+        match self {
+            // Short/open objects: you can see over/through them
+            Furniture::Fence | Furniture::WaterTrough | Furniture::Bush
+            | Furniture::Bench | Furniture::Chair | Furniture::HayBale
+            | Furniture::Sign => false,
+            _ => true,
+        }
+    }
+
+    /// Returns `true` if this furniture can be set on fire (destroyed by fire).
+    pub fn is_flammable(&self) -> bool {
+        matches!(
+            self,
+            Furniture::Tree | Furniture::DeadTree | Furniture::Bush
+            | Furniture::Barrel | Furniture::Crate | Furniture::Table
+            | Furniture::Chair | Furniture::Piano | Furniture::Bench
+            | Furniture::HayBale | Furniture::Sign | Furniture::Fence
+        )
+    }
 }
 
 impl std::fmt::Display for Furniture {
@@ -55,6 +94,7 @@ impl std::fmt::Display for Furniture {
             Furniture::Chair => write!(f, "Chair"),
             Furniture::Piano => write!(f, "Piano"),
             Furniture::Sign => write!(f, "Sign"),
+            Furniture::HayBale => write!(f, "Hay Bale"),
         }
     }
 }

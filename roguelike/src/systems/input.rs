@@ -3,7 +3,7 @@ use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Ammo, Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
-use crate::events::{DropItemIntent, MeleeWideIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::events::{DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::resources::{CombatLog, CursorPosition, ExtraWorldTicks, GameState, InputMode, InputState, RestartRequested, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
@@ -12,6 +12,7 @@ pub struct IntentWriters<'w> {
     exit: MessageWriter<'w, AppExit>,
     move_intents: MessageWriter<'w, MoveIntent>,
     spell_intents: MessageWriter<'w, SpellCastIntent>,
+    molotov_intents: MessageWriter<'w, MolotovCastIntent>,
     use_item_intents: MessageWriter<'w, UseItemIntent>,
     pickup_intents: MessageWriter<'w, PickupItemIntent>,
     ranged_intents: MessageWriter<'w, RangedAttackIntent>,
@@ -397,6 +398,25 @@ pub fn input_system(
                                         radius: SPELL_RADIUS,
                                         target: cursor.pos,
                                         grenade_index: idx,
+                                    });
+                                    advance_turn(&mut next_turn_state);
+                                }
+                                handled = true;
+                            } else if let ItemKind::Molotov { damage, radius } = kind {
+                                // Throw molotov from this inventory slot toward the cursor.
+                                let has_stamina = player_stamina
+                                    .map(|m| m.current >= SPELL_STAMINA_COST)
+                                    .unwrap_or(false);
+                                if !has_stamina {
+                                    combat_log.push("Not enough stamina!".into());
+                                } else {
+                                    extra_world_ticks.0 = 1;
+                                    intents.molotov_intents.write(MolotovCastIntent {
+                                        caster: player_entity,
+                                        radius: *radius,
+                                        damage: *damage,
+                                        target: cursor.pos,
+                                        item_index: idx,
                                     });
                                     advance_turn(&mut next_turn_state);
                                 }

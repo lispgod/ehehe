@@ -124,10 +124,13 @@ impl GameMap {
         }
     }
 
-    /// Returns `true` if the tile at `point` is passable (no furniture blocking).
+    /// Returns `true` if the tile at `point` is passable (no blocking furniture).
     pub fn is_passable(&self, point: &MyPoint) -> bool {
         self.get_voxel_at(point)
-            .is_some_and(|v| v.furniture.is_none())
+            .is_some_and(|v| match &v.furniture {
+                Some(f) => !f.blocks_movement(),
+                None => true,
+            })
     }
 
     /// Creates a RenderPacket (2D grid of GraphicTriples) for display,
@@ -346,13 +349,17 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             }
         }
         2 => {
-            // Stable: hitching posts, water trough, some crates
+            // Stable: hitching posts, water trough, hay bales, some crates
             if iw >= 3 && ih >= 2 {
                 set_furniture(map, interior_x, interior_y, Furniture::HitchingPost);
                 set_furniture(map, interior_x + 2, interior_y, Furniture::HitchingPost);
                 set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::WaterTrough);
                 if iw >= 4 {
                     set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Crate);
+                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::HayBale);
+                }
+                if iw >= 5 {
+                    set_furniture(map, interior_x + iw - 2, interior_y, Furniture::HayBale);
                 }
             }
         }
@@ -490,14 +497,16 @@ fn place_desert_decorations(
             }
 
             let pick = value_noise(y, x, deco_seed.wrapping_add(44444));
-            let furn = if pick < 0.35 {
+            let furn = if pick < 0.30 {
                 Furniture::Cactus
-            } else if pick < 0.55 {
+            } else if pick < 0.50 {
                 Furniture::DeadTree
-            } else if pick < 0.75 {
+            } else if pick < 0.65 {
                 Furniture::Rock
-            } else {
+            } else if pick < 0.80 {
                 Furniture::Bush
+            } else {
+                Furniture::HayBale
             };
             set_furniture(map, x, y, furn);
         }

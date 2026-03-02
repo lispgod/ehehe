@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     AiLookDir, AiState, Ammo, BlocksMovement, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
-    LootTable, Name, Position, Renderable, Speed, Viewshed,
+    LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
@@ -90,8 +90,9 @@ pub fn spawn_monster(
         Speed(template.speed),
         Energy(0),
     )).insert((
-        AiState::Idle,
+        AiState::Patrolling,
         AiLookDir(GridVec::new(0, -1)), // default: looking south
+        PatrolOrigin(GridVec::new(x, y)),
         LootTable { drop_chance },
         ExpReward(template.exp_reward + exp_bonus),
         Viewshed {

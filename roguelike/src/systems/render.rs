@@ -282,6 +282,7 @@ pub fn draw_system(
                                 ItemKind::Grenade { damage, radius } => format!("{damage} dmg r{radius}"),
                                 ItemKind::Whiskey { heal } => format!("Heal {heal} HP"),
                                 ItemKind::Hat { defense } => format!("+{defense} def"),
+                                ItemKind::Molotov { damage, radius } => format!("{damage} dmg r{radius} 🔥"),
                             });
                         (name, desc)
                     })

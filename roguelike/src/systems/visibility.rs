@@ -107,7 +107,7 @@ impl Slope {
 /// Returns `true` if the tile at `point` blocks line-of-sight.
 fn is_opaque(game_map: &GameMapResource, point: MyPoint) -> bool {
     match game_map.0.get_voxel_at(&point) {
-        Some(v) => v.furniture.is_some(),
+        Some(v) => v.furniture.as_ref().is_some_and(|f| f.blocks_vision()),
         None => true, // off-map ⇒ opaque
     }
 }

@@ -210,6 +210,19 @@ impl GridVec {
         }
     }
 
+    /// Approximate 45° clockwise rotation on the ℤ² lattice for king-step vectors.
+    /// Maps each direction to the next clockwise direction in `DIRECTIONS_8`.
+    /// For non-unit vectors, normalizes first via `king_step`.
+    #[inline]
+    pub fn rotate_45_cw(self) -> Self {
+        let n = self.king_step();
+        let idx = Self::DIRECTIONS_8.iter()
+            .position(|&d| d == n)
+            .map(|i| (i + 1) % 8)
+            .unwrap_or(0);
+        Self::DIRECTIONS_8[idx]
+    }
+
     /// Bresenham line from `self` to `other`, inclusive of both endpoints.
     ///
     /// Returns the sequence of integer grid points that best approximates

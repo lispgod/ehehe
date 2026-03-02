@@ -233,12 +233,15 @@ pub const ACTION_COST: CoordinateUnit = 100;
 /// The AI system reads this to decide what action to emit:
 /// - `Idle`: stand still, wait for the player to enter sight range.
 /// - `Chasing`: move toward the last known player position.
+/// - `Patrolling`: move along a patrol route or wander randomly.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum AiState {
     /// Entity is stationary — has not seen the player yet.
     Idle,
     /// Entity is actively pursuing the player.
     Chasing,
+    /// Entity is patrolling — moving along a route or wandering.
+    Patrolling,
 }
 
 /// Directional cursor for enemy entities. Defines which direction the enemy is
@@ -247,6 +250,11 @@ pub enum AiState {
 /// spend ticks to rotate their look direction, making awareness directional.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct AiLookDir(pub GridVec);
+
+/// Patrol origin: the position this NPC considers "home". It will patrol
+/// around this position when not chasing the player.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct PatrolOrigin(pub GridVec);
 
 /// Marker component: tags entities hostile to the player.
 /// Used by bump-to-attack: moving into a hostile entity's tile triggers combat.
@@ -398,6 +406,8 @@ pub enum ItemKind {
     Whiskey { heal: i32 },
     /// A hat. Provides defense when equipped.
     Hat { defense: i32 },
+    /// A molotov cocktail. Thrown toward cursor; sets a large area on fire.
+    Molotov { damage: i32, radius: i32 },
 }
 
 /// Marker component for a thrown item (knife/tomahawk) that has landed

@@ -11,7 +11,7 @@ use roguelike::events::*;
 use roguelike::gamemap::GameMap;
 use roguelike::grid_vec::GridVec;
 use roguelike::resources::*;
-use roguelike::systems::{combat, movement, projectile, spatial_index, spell};
+use roguelike::systems::{combat, movement, projectile, spatial_index, spell, visibility};
 
 // ─── Helper ──────────────────────────────────────────────────────
 
@@ -1346,4 +1346,201 @@ fn roundhouse_kick_misses_distant_enemies() {
 
     let monster_hp = app.world().get::<Health>(monster).unwrap();
     assert_eq!(monster_hp.current, 10, "Distant enemy should not be hit by roundhouse kick");
+}
+
+// ─── FOV integration tests ──────────────────────────────────────
+
+/// Creates a minimal App wired for FOV testing (visibility system).
+fn test_app_with_fov() -> App {
+    let mut app = App::new();
+    app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
+    app.add_plugins(bevy::state::app::StatesPlugin);
+    app.init_resource::<SpatialIndex>();
+    app.init_resource::<CursorPosition>();
+    app.init_resource::<InputState>();
+    app.init_state::<GameState>();
+    app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
+    app.insert_resource(MapSeed(42));
+    app.add_systems(
+        Update,
+        visibility::visibility_system,
+    );
+    app
+}
+
+#[test]
+fn fov_cursor_centered_produces_circle() {
+    let mut app = test_app_with_fov();
+    // Place player at center of map (clear area)
+    let player_pos = Position { x: 60, y: 40 };
+    app.world_mut().spawn((
+        player_pos,
+        Player,
+        Viewshed {
+            range: 40,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    // Set cursor on player position (centered)
+    app.world_mut().resource_mut::<CursorPosition>().pos = GridVec::new(60, 40);
+
+    app.update();
+
+    let viewshed = app.world_mut().query::<&Viewshed>().single(app.world()).unwrap();
+
+    // When cursor is centered, should see in all directions (full circle).
+    // Check origin is always visible
+    let origin = GridVec::new(60, 40);
+    assert!(viewshed.visible_tiles.contains(&origin),
+        "Origin should always be visible");
+
+    // Check a tile 2 away in each cardinal direction (very close, should be visible unless blocked)
+    let check_dist = 2;
+    assert!(viewshed.visible_tiles.contains(&(origin + GridVec::new(check_dist, 0))),
+        "Should see east when cursor centered");
+    assert!(viewshed.visible_tiles.contains(&(origin + GridVec::new(-check_dist, 0))),
+        "Should see west when cursor centered");
+    assert!(viewshed.visible_tiles.contains(&(origin + GridVec::new(0, check_dist))),
+        "Should see north when cursor centered");
+    assert!(viewshed.visible_tiles.contains(&(origin + GridVec::new(0, -check_dist))),
+        "Should see south when cursor centered");
+}
+
+#[test]
+fn fov_far_cursor_has_narrow_cone() {
+    let mut app = test_app_with_fov();
+    let player_pos = Position { x: 60, y: 40 };
+    app.world_mut().spawn((
+        player_pos,
+        Player,
+        Viewshed {
+            range: 40,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    // Set cursor far to the east (40+ tiles away for max narrowing)
+    app.world_mut().resource_mut::<CursorPosition>().pos = GridVec::new(110, 40);
+
+    app.update();
+
+    let viewshed = app.world_mut().query::<&Viewshed>().single(app.world()).unwrap();
+
+    let origin = GridVec::new(60, 40);
+    // Very close east tile should always be visible
+    let close_east = origin + GridVec::new(3, 0);
+    assert!(viewshed.visible_tiles.contains(&close_east),
+        "Close tiles in cone direction should be visible");
+
+    // Far perpendicular tile (north at distance 30) should NOT be visible
+    // When aiming far east with narrow cone, tiles directly north at far distance are outside
+    let far_north = origin + GridVec::new(0, 30);
+    assert!(!viewshed.visible_tiles.contains(&far_north),
+        "Should NOT see far north when aiming east with narrow cone");
+}
+
+#[test]
+fn fov_min_radius_always_visible() {
+    let mut app = test_app_with_fov();
+    let player_pos = Position { x: 60, y: 40 };
+    app.world_mut().spawn((
+        player_pos,
+        Player,
+        Viewshed {
+            range: 40,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    // Set cursor far to the north
+    app.world_mut().resource_mut::<CursorPosition>().pos = GridVec::new(60, 80);
+
+    app.update();
+
+    let viewshed = app.world_mut().query::<&Viewshed>().single(app.world()).unwrap();
+
+    // Within FOV_MIN_RADIUS, tiles should be visible regardless of cone direction
+    let origin = GridVec::new(60, 40);
+    // Very close tiles (distance 2) should always be visible
+    let close_east = origin + GridVec::new(2, 0);
+    let close_south = origin + GridVec::new(0, -2); // opposite of aiming direction but very close
+    assert!(viewshed.visible_tiles.contains(&close_east),
+        "Close tiles should be visible regardless of cone direction");
+    assert!(viewshed.visible_tiles.contains(&close_south),
+        "Close tiles in opposite direction should be visible within min radius");
+}
+
+#[test]
+fn fov_npc_uses_ai_look_dir() {
+    let mut app = test_app_with_fov();
+    // Spawn NPC with AiLookDir pointing east
+    let npc_pos = Position { x: 60, y: 40 };
+    app.world_mut().spawn((
+        npc_pos,
+        Hostile,
+        AiLookDir(GridVec::new(10, 0)),
+        Viewshed {
+            range: 40,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    app.update();
+
+    let viewshed = app.world_mut().query::<&Viewshed>().single(app.world()).unwrap();
+
+    let origin = GridVec::new(60, 40);
+    // NPC looking east should see east tiles
+    let near_east = origin + GridVec::new(5, 0);
+    assert!(viewshed.visible_tiles.contains(&near_east),
+        "NPC should see tiles in look direction");
+}
+
+#[test]
+fn fov_range_increases_with_cursor_distance() {
+    // When cursor is very close: range should be close to FOV_MIN_RADIUS
+    let (range_close, _) = visibility::compute_fov_params(Some(GridVec::new(1, 0)));
+    assert!(range_close <= visibility::FOV_MIN_RADIUS + 5,
+        "Very close cursor should give near minimum range, got {}", range_close);
+
+    // When cursor is far: range should be much larger
+    let (range_far, _) = visibility::compute_fov_params(Some(GridVec::new(50, 0)));
+    assert!(range_far >= visibility::FOV_MAX_RANGE - 5,
+        "Far cursor should give approximately maximum range, got {}", range_far);
+
+    // Far range should be significantly larger than close range
+    assert!(range_far > range_close * 2,
+        "Far range ({}) should be significantly larger than close range ({})", range_far, range_close);
+}
+
+#[test]
+fn fov_cone_narrows_with_distance() {
+    // Close cursor: wide angle (cos_threshold close to -1)
+    let (_, cos_close) = visibility::compute_fov_params(Some(GridVec::new(1, 0)));
+
+    // Far cursor: narrow angle (cos_threshold close to 1)
+    let (_, cos_far) = visibility::compute_fov_params(Some(GridVec::new(50, 0)));
+
+    assert!(cos_far > cos_close,
+        "Far cursor should have higher cos threshold (narrower cone): far={}, close={}", cos_far, cos_close);
+    assert!(cos_close < 0.0,
+        "Close cursor should have negative cos threshold (wide angle): {}", cos_close);
+    assert!(cos_far > 0.5,
+        "Far cursor should have cos threshold > 0.5 (narrow cone): {}", cos_far);
+}
+
+#[test]
+fn fov_centered_cursor_gives_full_circle() {
+    let (range, cos) = visibility::compute_fov_params(None);
+    assert_eq!(range, visibility::FOV_MIN_RADIUS, "Centered cursor should give min radius");
+    assert_eq!(cos, -1.0, "Centered cursor should give full circle (cos = -1)");
 }

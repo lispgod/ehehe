@@ -42,12 +42,13 @@ pub struct CommandBinding {
 /// All keybindings, generated from the exhaustive match arms below.
 /// Used by the `?` help overlay to display available commands.
 pub const KEYBINDINGS: &[CommandBinding] = &[
-    CommandBinding { key: "W / ↑", name: "Move north", docs: "Move the player one tile north (up on the map)." },
-    CommandBinding { key: "S / ↓", name: "Move south", docs: "Move the player one tile south (down on the map)." },
-    CommandBinding { key: "A / ←", name: "Move west", docs: "Move the player one tile west (left on the map)." },
-    CommandBinding { key: "D / →", name: "Move east", docs: "Move the player one tile east (right on the map)." },
-    CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (used for aiming guns with 1-9)." },
-    CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy." },
+    CommandBinding { key: "W / ↑", name: "Move north", docs: "Move the player one tile north (up on the map). Cursor follows." },
+    CommandBinding { key: "S / ↓", name: "Move south", docs: "Move the player one tile south (down on the map). Cursor follows." },
+    CommandBinding { key: "A / ←", name: "Move west", docs: "Move the player one tile west (left on the map). Cursor follows." },
+    CommandBinding { key: "D / →", name: "Move east", docs: "Move the player one tile east (right on the map). Cursor follows." },
+    CommandBinding { key: "I/K/J/L", name: "Cursor ↑↓←→", docs: "Move the cursor one tile (costs 1 tick). Used for aiming." },
+    CommandBinding { key: "C", name: "Center cursor", docs: "Set the cursor onto the player's position (costs 1 tick)." },
+    CommandBinding { key: "N", name: "Auto-aim", docs: "Move cursor one step toward the nearest enemy (costs 1 tick)." },
     CommandBinding { key: "F / Space", name: "Throw grenade", docs: "Throw a grenade from inventory toward the cursor. Warning: can damage you too!" },
     CommandBinding { key: "T", name: "Reload", docs: "Reload weapon from a magazine in your inventory. Current partial magazine is saved to inventory." },
     CommandBinding { key: "E", name: "Roundhouse kick", docs: "Roundhouse kick hitting all adjacent enemies in melee range." },
@@ -220,24 +221,44 @@ pub fn input_system(
                 input_state.mode = InputMode::Inventory;
                 input_state.inv_selection = 0;
             }
-            // ── Cursor movement (IJKL) ──────────────────────────
+            // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
                 cursor.0.y += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
             }
             KeyCode::Char('k') if awaiting_input => {
                 cursor.0.y -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
             }
             KeyCode::Char('j') if awaiting_input => {
                 cursor.0.x -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
             }
             KeyCode::Char('l') if awaiting_input => {
                 cursor.0.x += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
             }
-            // ── Auto-aim (N): move cursor one step toward nearest hostile ──
+            // ── Center cursor on player (C) — advances one tick ──
+            KeyCode::Char('c') if awaiting_input => {
+                cursor.0 = player_pos.as_grid_vec();
+                if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                if let Some(next) = &mut next_turn_state {
+                    next.set(TurnState::PlayerTurn);
+                }
+            }
+            // ── Auto-aim (N): move cursor one step toward nearest hostile — advances one tick ──
             KeyCode::Char('n') if awaiting_input => {
                 let player_vec = player_pos.as_grid_vec();
                 let mut best_dist = i32::MAX;
@@ -254,6 +275,9 @@ pub fn input_system(
                     let step = (target - cursor.0).king_step();
                     cursor.0 = cursor.0 + step;
                     if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
+                    if let Some(next) = &mut next_turn_state {
+                        next.set(TurnState::PlayerTurn);
+                    }
                 } else {
                     combat_log.push("No enemies visible.".into());
                 }

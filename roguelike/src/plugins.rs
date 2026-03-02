@@ -15,7 +15,7 @@ use crate::resources::{
     KillCount, MapSeed, PendingExp, RestartRequested, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
-use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, render, spatial_index, spell, turn, visibility, wave_spawn};
+use crate::systems::{ai, camera, combat, corruption, input, inventory, movement, projectile, render, spatial_index, spell, turn, visibility, wave_spawn};
 use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y, GATE_POINT, GATE_X, GATE_Y};
 
 // ─────────────────────────── System Sets ───────────────────────────
@@ -123,6 +123,7 @@ impl Plugin for RoguelikePlugin {
                     combat::ranged_attack_system,
                     combat::melee_wide_system,
                     combat::combat_system,
+                    projectile::projectile_system,
                     combat::apply_damage_system,
                     combat::death_system,
                     combat::level_up_system,

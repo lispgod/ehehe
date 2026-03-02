@@ -5,6 +5,7 @@ pub mod corruption;
 pub mod input;
 pub mod inventory;
 pub mod movement;
+pub mod projectile;
 pub mod render;
 pub mod spatial_index;
 pub mod spell;

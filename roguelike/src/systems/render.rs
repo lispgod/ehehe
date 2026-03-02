@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use bevy_ratatui::RatatuiContext;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Stylize;
+use ratatui::style::{Modifier, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use crate::components::{Ammo, Experience, Health, Hostile, Inventory, ItemKind, Level, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Ammo, Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{
     CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
@@ -42,13 +42,14 @@ pub fn draw_system(
     mut context: ResMut<RatatuiContext>,
     game_map: Res<GameMapResource>,
     camera: Res<CameraPosition>,
-    renderables: Query<(&Position, &Renderable, Option<&Name>)>,
+    renderables: Query<(&Position, &Renderable, Option<&Name>), Without<Projectile>>,
     player_query: Query<
         (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Ammo>, Option<&Inventory>, Option<&Level>, Option<&Experience>),
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
     hostile_viewsheds: Query<&Viewshed, With<Hostile>>,
+    projectiles: Query<(&Position, &Renderable), With<Projectile>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
     turn_counter: Res<TurnCounter>,
@@ -61,15 +62,21 @@ pub fn draw_system(
     context.draw(|frame| {
         let area = frame.area();
 
-        // ── Top-level layout: game area + bottom panel ──────────
+        // ── Top-level layout: game area + inventory bar + bottom panel ──
         let bottom_panel_height = 10u16;
+        let inv_bar_height = 3u16; // 1 line + 2 for border
         let vert_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(bottom_panel_height)])
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(inv_bar_height),
+                Constraint::Length(bottom_panel_height),
+            ])
             .split(area);
 
         let game_area = vert_chunks[0];
-        let bottom_area = vert_chunks[1];
+        let inv_bar_area = vert_chunks[1];
+        let bottom_area = vert_chunks[2];
 
         let render_width = game_area.width;
         let render_height = game_area.height;
@@ -192,7 +199,8 @@ pub fn draw_system(
             }
         }
 
-        // Overlay cursor position with blink effect.
+        // Overlay cursor position with SLOW_BLINK modifier.
+        let mut cursor_screen_pos: Option<(usize, usize)> = None;
         {
             let cursor_screen = cursor.0 - bottom_left;
             if cursor_screen.x >= 0
@@ -200,26 +208,53 @@ pub fn draw_system(
                 && cursor_screen.y >= 0
                 && cursor_screen.y < render_height as CoordinateUnit
             {
-                let bg = render_packet[cursor_screen.y as usize][cursor_screen.x as usize].2;
-                // Blink: alternate symbol/color every 2 ticks.
-                let blink_on = (turn_counter.0 / 2) % 2 == 0;
-                let (sym, fg) = if blink_on {
-                    ("X", RatColor::Rgb(255, 255, 0))
-                } else {
-                    ("+", RatColor::Rgb(180, 180, 0))
-                };
-                render_packet[cursor_screen.y as usize][cursor_screen.x as usize] =
-                    (sym.into(), fg, bg);
+                let sx = cursor_screen.x as usize;
+                let sy = cursor_screen.y as usize;
+                let bg = render_packet[sy][sx].2;
+                render_packet[sy][sx] =
+                    ("X".into(), RatColor::Rgb(255, 255, 0), bg);
+                cursor_screen_pos = Some((sx, sy));
+            }
+        }
+
+        // Render projectile entities on the map.
+        for (proj_pos, proj_render) in &projectiles {
+            let screen = proj_pos.as_grid_vec() - bottom_left;
+            if screen.x >= 0
+                && screen.x < render_width as CoordinateUnit
+                && screen.y >= 0
+                && screen.y < render_height as CoordinateUnit
+            {
+                let visible = visible_tiles
+                    .map(|vt| vt.contains(&proj_pos.as_grid_vec()))
+                    .unwrap_or(true);
+                if visible {
+                    let bg = render_packet[screen.y as usize][screen.x as usize].2;
+                    render_packet[screen.y as usize][screen.x as usize] =
+                        (proj_render.symbol.clone(), proj_render.fg, bg);
+                }
             }
         }
 
         let mut render_lines = Vec::new();
 
+        // Reverse the cursor screen Y to match the reversed render order.
+        let cursor_render_y = cursor_screen_pos.map(|(cx, cy)| (cx, (render_height as usize).saturating_sub(1).saturating_sub(cy)));
+
         for y in 0..render_height as usize {
             if y < render_packet.len() {
                 let spans: Vec<Span> = render_packet[y]
                     .iter()
-                    .map(|gt| Span::from(gt.0.clone()).fg(gt.1).bg(gt.2))
+                    .enumerate()
+                    .map(|(x, gt)| {
+                        let span = Span::from(gt.0.clone()).fg(gt.1).bg(gt.2);
+                        // Apply SLOW_BLINK to the cursor cell.
+                        if cursor_render_y == Some((x, y)) {
+                            span.add_modifier(Modifier::SLOW_BLINK)
+                        } else {
+                            span
+                        }
+                    })
                     .collect();
                 render_lines.push(Line::from(spans));
             }
@@ -258,7 +293,6 @@ pub fn draw_system(
                     .collect()
             })
             .unwrap_or_default();
-        let inv_item_names: Vec<String> = inv_item_info.iter().map(|(n, _)| n.clone()).collect();
 
         // ── Bottom Panel ────────────────────────────────────────
         render_bottom_panel(
@@ -267,8 +301,6 @@ pub fn draw_system(
             player_hp,
             player_stamina,
             player_ammo,
-            player_inv,
-            &inv_item_names,
             &visible_entity_infos,
             &combat_log,
             player_level,
@@ -277,6 +309,9 @@ pub fn draw_system(
             &kill_count,
             &collectibles,
         );
+
+        // ── Inventory Bar (wide, horizontal) ────────────────────
+        render_inventory_bar(frame, inv_bar_area, &inv_item_info);
 
         // ── Overlays ────────────────────────────────────────────
 
@@ -379,16 +414,14 @@ pub fn draw_system(
     Ok(())
 }
 
-/// Renders the bottom panel with stats, central combat log, and info.
-/// Layout: [Stats | Central Log | Info]
+/// Renders the bottom panel with stats, central combat log, and visible entities.
+/// Layout: [Stats | Central Log | Visible]
 fn render_bottom_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
     player_ammo: Option<&Ammo>,
-    player_inv: Option<&Inventory>,
-    inv_item_names: &[String],
     visible_entities: &[(String, RatColor, RatColor, String)],
     combat_log: &CombatLog,
     player_level: Option<&Level>,
@@ -397,19 +430,19 @@ fn render_bottom_panel(
     kill_count: &KillCount,
     collectibles: &Collectibles,
 ) {
-    // Split bottom panel into three horizontal columns: stats | log | info
+    // Split bottom panel into three horizontal columns: stats | log | visible
     let horiz_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(22),   // Stats column (HP, Stamina, Ammo, Level)
             Constraint::Min(1),       // Central log (wide, fills remaining space)
-            Constraint::Length(22),   // Info column (Inventory, Visible entities)
+            Constraint::Length(22),   // Visible entities column
         ])
         .split(area);
 
     let stats_area = horiz_chunks[0];
     let log_area = horiz_chunks[1];
-    let info_area = horiz_chunks[2];
+    let visible_area = horiz_chunks[2];
 
     // ── Stats Column (left) ─────────────────────────────────────
     render_stats_column(frame, stats_area, player_hp, player_stamina, player_ammo, player_level, player_exp, collectibles);
@@ -434,8 +467,8 @@ fn render_bottom_panel(
         log_area,
     );
 
-    // ── Info Column (right) ─────────────────────────────────────
-    render_info_column(frame, info_area, player_inv, inv_item_names, visible_entities);
+    // ── Visible Entities Column (right) ────────────────────────
+    render_visible_column(frame, visible_area, visible_entities);
 }
 
 /// Renders the stats column (HP, Stamina, Ammo, Level gauges stacked vertically).
@@ -517,53 +550,13 @@ fn render_stats_column(
     );
 }
 
-/// Maximum number of inventory items shown in the compact bottom panel.
-const MAX_DISPLAYED_INVENTORY_ITEMS: usize = 4;
-
-/// Renders the info column (Inventory + Visible entities stacked vertically).
-fn render_info_column(
+/// Renders the visible entities column.
+fn render_visible_column(
     frame: &mut ratatui::Frame,
     area: Rect,
-    player_inv: Option<&Inventory>,
-    inv_item_names: &[String],
     visible_entities: &[(String, RatColor, RatColor, String)],
 ) {
-    let inv_item_count = player_inv.map_or(0, |inv| inv.items.len());
-    let inv_display_count = inv_item_count.max(1).min(MAX_DISPLAYED_INVENTORY_ITEMS);
-    let inv_height = (inv_display_count as u16) + 2; // +2 for borders
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(inv_height), // Inventory
-            Constraint::Min(1),            // Visible entities
-        ])
-        .split(area);
-
-    // ── Inventory ───────────────────────────────────────────────
-    let mut inv_lines: Vec<Line> = Vec::new();
-    if let Some(inv) = player_inv {
-        if inv.items.is_empty() {
-            inv_lines.push(Line::from(" (empty)".dark_gray()));
-        } else {
-            for (i, name) in inv_item_names.iter().enumerate().take(MAX_DISPLAYED_INVENTORY_ITEMS) {
-                inv_lines.push(Line::from(format!(" {}: {name}", i + 1)));
-            }
-            if inv_item_names.len() > MAX_DISPLAYED_INVENTORY_ITEMS {
-                inv_lines.push(Line::from(format!(" +{} more [Tab]", inv_item_names.len() - MAX_DISPLAYED_INVENTORY_ITEMS)).dark_gray());
-            }
-        }
-    } else {
-        inv_lines.push(Line::from(" (none)".dark_gray()));
-    }
-    frame.render_widget(
-        Paragraph::new(inv_lines)
-            .block(Block::default().borders(Borders::ALL).title("Bag [Tab]")),
-        chunks[0],
-    );
-
-    // ── Visible Entities ────────────────────────────────────────
-    let max_visible = (chunks[1].height.saturating_sub(2)) as usize;
+    let max_visible = (area.height.saturating_sub(2)) as usize;
     let mut vis_lines: Vec<Line> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
     for (sym, fg, _bg, name) in visible_entities {
@@ -584,7 +577,36 @@ fn render_info_column(
     frame.render_widget(
         Paragraph::new(vis_lines)
             .block(Block::default().borders(Borders::ALL).title("Visible")),
-        chunks[1],
+        area,
+    );
+}
+
+/// Renders the inventory bar as a wide horizontal bar showing usable items.
+fn render_inventory_bar(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    inv_item_info: &[(String, String)],
+) {
+    let mut spans: Vec<Span> = Vec::new();
+    if inv_item_info.is_empty() {
+        spans.push(Span::from(" (empty) [Tab]").dark_gray());
+    } else {
+        for (i, (name, desc)) in inv_item_info.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::from("  ").dark_gray());
+            }
+            spans.push(Span::from(format!("{}:", i + 1)).bold().yellow());
+            spans.push(Span::from(format!("{name}")).white());
+            if !desc.is_empty() {
+                spans.push(Span::from(format!("({desc})")).dark_gray());
+            }
+        }
+    }
+    let line = Line::from(spans);
+    frame.render_widget(
+        Paragraph::new(line)
+            .block(Block::default().borders(Borders::ALL).title("Inventory [Tab] 1-9:Use")),
+        area,
     );
 }
 

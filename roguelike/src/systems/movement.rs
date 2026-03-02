@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{BlocksMovement, Hostile, Player, Position, Viewshed};
 use crate::events::{AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{GameMapResource, SpatialIndex};
+use crate::resources::{CursorPosition, GameMapResource, SpatialIndex};
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability *and* the `SpatialIndex` for entities that block movement.
@@ -26,6 +26,7 @@ pub fn movement_system(
     mut intents: MessageReader<MoveIntent>,
     game_map: Res<GameMapResource>,
     mut spatial: ResMut<SpatialIndex>,
+    mut cursor: ResMut<CursorPosition>,
     blockers: Query<(), With<BlocksMovement>>,
     hostiles: Query<(), With<Hostile>>,
     players: Query<(), With<Player>>,
@@ -74,8 +75,11 @@ pub fn movement_system(
             e != intent.entity && blockers.contains(e)
         });
 
+        let is_player = players.contains(intent.entity);
+
         if tile_passable && !entity_blocked {
             let old_pos = pos.as_grid_vec();
+            let delta = GridVec::new(intent.dx, intent.dy);
             pos.x = target.x;
             pos.y = target.y;
 
@@ -83,6 +87,13 @@ pub fn movement_system(
             // Atomically move the entity in the index so subsequent
             // intents in this frame see accurate occupancy.
             spatial.move_entity(&old_pos, target, intent.entity);
+
+            // ── Cursor follows player movement ──────────────────
+            // When the player moves, the cursor moves by the same delta
+            // so the player keeps looking in the same relative direction.
+            if is_player {
+                cursor.0 = cursor.0 + delta;
+            }
 
             // Mark viewshed dirty so visibility is recalculated.
             if let Some(mut vs) = viewshed {

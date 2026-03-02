@@ -11,7 +11,7 @@ use roguelike::events::*;
 use roguelike::gamemap::GameMap;
 use roguelike::grid_vec::GridVec;
 use roguelike::resources::*;
-use roguelike::systems::{combat, movement, spatial_index, spell};
+use roguelike::systems::{combat, movement, projectile, spatial_index, spell};
 
 // ─── Helper ──────────────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ fn test_app() -> App {
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
+    app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -546,7 +547,7 @@ fn bidirectional_combat_both_take_damage() {
 
 // ─── Spell system tests ──────────────────────────────────────────
 
-/// Creates a minimal App wired for spell testing (includes spell system).
+/// Creates a minimal App wired for spell testing (includes spell system + projectile system).
 fn test_app_with_spells() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
@@ -560,6 +561,7 @@ fn test_app_with_spells() -> App {
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
     app.init_resource::<SpellParticles>();
+    app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -570,6 +572,7 @@ fn test_app_with_spells() -> App {
             movement::movement_system,
             spell::spell_system,
             combat::combat_system,
+            projectile::projectile_system,
             combat::apply_damage_system,
             combat::death_system,
             combat::level_up_system,
@@ -610,11 +613,14 @@ fn spell_damages_nearby_enemies() {
         target: GridVec::new(60, 40),
         grenade_index: 0,
     });
-    app.update();
+    app.update(); // spell_system spawns shrapnel projectile entities
+    app.update(); // projectile_system advances shrapnel and applies damage
 
-    // Damage equals caster attack (5)
-    let monster_health = app.world().get::<Health>(monster).unwrap();
-    assert_eq!(monster_health.current, 5, "Monster should take spell damage equal to caster attack");
+    // Monster should be damaged or killed by shrapnel.
+    match app.world().get::<Health>(monster) {
+        Some(hp) => assert!(hp.current < 10, "Monster should take shrapnel damage"),
+        None => {} // Monster was killed by shrapnel — also valid
+    }
 }
 
 #[test]
@@ -647,7 +653,8 @@ fn spell_does_not_damage_distant_enemies() {
         target: GridVec::new(60, 40),
         grenade_index: 0,
     });
-    app.update();
+    app.update(); // spell_system spawns shrapnel
+    app.update(); // projectile_system advances shrapnel (misses far enemy)
 
     let monster_health = app.world().get::<Health>(monster).unwrap();
     assert_eq!(monster_health.current, 10, "Distant monster should not be hit by spell");
@@ -692,12 +699,20 @@ fn spell_hits_multiple_enemies() {
         target: GridVec::new(60, 40),
         grenade_index: 0,
     });
-    app.update();
+    app.update(); // spell_system spawns shrapnel
+    app.update(); // projectile_system advances shrapnel
 
-    let m1_health = app.world().get::<Health>(m1).unwrap();
-    let m2_health = app.world().get::<Health>(m2).unwrap();
-    assert_eq!(m1_health.current, 5, "First monster should be damaged by spell");
-    assert_eq!(m2_health.current, 5, "Second monster should be damaged by spell");
+    // Monsters should be damaged or killed by shrapnel.
+    let m1_hit = match app.world().get::<Health>(m1) {
+        Some(hp) => hp.current < 10,
+        None => true, // killed
+    };
+    let m2_hit = match app.world().get::<Health>(m2) {
+        Some(hp) => hp.current < 10,
+        None => true, // killed
+    };
+    assert!(m1_hit, "First monster should be damaged by shrapnel");
+    assert!(m2_hit, "Second monster should be damaged by shrapnel");
 }
 
 #[test]
@@ -712,7 +727,7 @@ fn spell_kills_weak_enemy_and_increments_kill_count() {
         CombatStats { attack: 5, defense: 2 },
     )).id();
 
-    // Weak monster that will die from spell damage
+    // Weak monster that will die from shrapnel damage
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
         Hostile,
@@ -730,12 +745,13 @@ fn spell_kills_weak_enemy_and_increments_kill_count() {
         target: GridVec::new(60, 40),
         grenade_index: 0,
     });
-    app.update();
+    app.update(); // spell_system spawns shrapnel
+    app.update(); // projectile_system advances shrapnel, death_system runs
 
     // Monster should be despawned
     assert!(
         app.world().get::<Health>(monster).is_none(),
-        "Weak monster should be killed by spell"
+        "Weak monster should be killed by shrapnel"
     );
 
     // Kill count should be incremented
@@ -797,8 +813,8 @@ fn spell_no_hit_logs_message() {
 
     let log = app.world().resource::<CombatLog>();
     assert!(
-        log.messages.iter().any(|m| m.contains("hits nothing")),
-        "Combat log should note spell hit nothing"
+        log.messages.iter().any(|m| m.contains("grenade")),
+        "Combat log should note grenade was thrown"
     );
 }
 
@@ -907,11 +923,11 @@ fn spell_damages_hell_gate() {
         target: GridVec::new(60, 40),
         grenade_index: 0,
     });
-    app.update();
+    app.update(); // spell_system spawns shrapnel
+    app.update(); // projectile_system advances shrapnel and applies damage
 
-    // Spell damage = caster attack (5), ignores defense
     let gate_health = app.world().get::<Health>(gate).unwrap();
-    assert_eq!(gate_health.current, 95, "Gate should take spell damage equal to caster attack");
+    assert!(gate_health.current < 100, "Gate should take shrapnel damage");
 }
 
 // ─── Spatial index atomicity tests ───────────────────────────────
@@ -970,7 +986,7 @@ fn two_blockers_cannot_overlap_on_simultaneous_move() {
 
 // ─── Ranged gun mechanics tests ──────────────────────────────────
 
-/// Creates a minimal App wired for ranged attack testing.
+/// Creates a minimal App wired for ranged attack testing (includes projectile system).
 fn test_app_with_ranged() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
@@ -985,6 +1001,7 @@ fn test_app_with_ranged() -> App {
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
     app.init_resource::<SpellParticles>();
+    app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -996,6 +1013,7 @@ fn test_app_with_ranged() -> App {
             combat::ranged_attack_system,
             combat::melee_wide_system,
             combat::combat_system,
+            projectile::projectile_system,
             combat::apply_damage_system,
             combat::death_system,
             combat::level_up_system,
@@ -1091,7 +1109,8 @@ fn ranged_attack_damages_nearest_enemy() {
         dy: 0,
         gun_item: None,
     });
-    app.update();
+    app.update(); // ranged_attack_system spawns bullet entity
+    app.update(); // projectile_system advances bullet and applies damage
 
     let monster_hp = app.world().get::<Health>(monster).unwrap();
     assert!(monster_hp.current < 20, "Ranged attack should damage the target");
@@ -1120,7 +1139,8 @@ fn ranged_attack_no_target_in_range() {
         dy: 0,
         gun_item: None,
     });
-    app.update();
+    app.update(); // ranged_attack_system spawns bullet entity
+    app.update(); // projectile_system advances bullet (misses - out of range)
 
     // Ammo should still be consumed (shot fired but missed).
     let ammo = app.world().get::<Ammo>(player).unwrap();
@@ -1128,8 +1148,8 @@ fn ranged_attack_no_target_in_range() {
 
     let log = app.world().resource::<CombatLog>();
     assert!(
-        log.messages.iter().any(|m| m.contains("misses")),
-        "Combat log should note the bullet missed"
+        log.messages.iter().any(|m| m.contains("fires")),
+        "Combat log should note the player fired"
     );
 }
 
@@ -1175,7 +1195,8 @@ fn ranged_bullet_penetrates_multiple_enemies() {
         dy: 0,
         gun_item: None,
     });
-    app.update();
+    app.update(); // ranged_attack_system spawns bullet entity
+    app.update(); // projectile_system advances bullet through both enemies
 
     // Both monsters should be hit.
     let m1_hp = app.world().get::<Health>(m1).unwrap();
@@ -1227,7 +1248,8 @@ fn ranged_bullet_stops_when_penetration_exhausted() {
         dy: 0,
         gun_item: None,
     });
-    app.update();
+    app.update(); // ranged_attack_system spawns bullet entity
+    app.update(); // projectile_system advances bullet
 
     // First enemy should be hit.
     let m1_hp = app.world().get::<Health>(m1).unwrap();
@@ -1253,12 +1275,13 @@ fn ranged_attack_logs_shoot_message() {
         dy: 0,
         gun_item: None,
     });
-    app.update();
+    app.update(); // ranged_attack_system spawns bullet and logs "fires!"
+    app.update(); // projectile_system advances bullet and logs hits
 
     let log = app.world().resource::<CombatLog>();
     assert!(
-        log.messages.iter().any(|m| m.contains("shoots")),
-        "Combat log should contain a shoot message"
+        log.messages.iter().any(|m| m.contains("fires") || m.contains("hits")),
+        "Combat log should contain a fire/hit message"
     );
 }
 

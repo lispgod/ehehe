@@ -189,6 +189,26 @@ pub struct Particle {
     pub lifetime: u32,
 }
 
+/// A projectile entity (bullet or shrapnel) that travels along a path over ticks.
+/// Each tick the projectile advances `tiles_per_tick` steps along its precomputed
+/// Bresenham path. When it reaches a hostile entity, it applies damage and despawns.
+/// Bullets and shrapnel can move multiple tiles in one tick.
+#[derive(Component, Debug)]
+pub struct Projectile {
+    /// Precomputed path tiles (Bresenham line from origin to endpoint).
+    pub path: Vec<GridVec>,
+    /// Current index along the path (how far the projectile has traveled).
+    pub path_index: usize,
+    /// Number of tiles the projectile advances per tick.
+    pub tiles_per_tick: usize,
+    /// Damage to apply on hit.
+    pub damage: i32,
+    /// Remaining penetration power. Decreases by target defense on each hit.
+    pub penetration: i32,
+    /// Entity that fired the projectile (to avoid self-damage for bullets).
+    pub source: Entity,
+}
+
 // ─── Inventory & Item system ─────────────────────────────────────
 
 /// Marker component: tags an entity as an item that can be picked up.

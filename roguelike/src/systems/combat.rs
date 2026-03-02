@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Health, HellGate, Hostile, Item, ItemKind, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, GameMapResource, GameState, KillCount, MapSeed, PendingExp};
+use crate::resources::{CombatLog, GameState, KillCount, MapSeed, PendingExp};
 use crate::systems::inventory::spawn_loot;
 use crate::typedefs::RatColor;
 
@@ -171,25 +171,19 @@ pub fn level_up_system(
     }
 }
 
-/// Resolves targeted ranged attack intents using player-chosen trajectory.
+/// Resolves targeted ranged attack intents by spawning bullet projectile entities.
 ///
 /// The bullet path is computed using **Bresenham's line algorithm** from the
-/// caster's position to the maximum range endpoint. This provides a
-/// mathematically correct, integer-only trajectory that visits each tile
-/// exactly once. Targets are hit if and only if the Bresenham line passes
-/// through their tile, eliminating the previous fuzzy directional heuristic.
+/// caster's position to the maximum range endpoint. Instead of applying damage
+/// instantly, a bullet entity is spawned that travels along the path over
+/// multiple ticks. Damage is applied when the projectile reaches a hostile.
 ///
-/// The bullet penetrates through multiple enemies: remaining penetration
-/// decreases by each target's defense value. Consumes 1 ammo per shot.
-/// Also spawns bullet travel particles for visual feedback.
+/// Consumes 1 ammo per shot from the gun item or global Ammo pool.
 pub fn ranged_attack_system(
+    mut commands: Commands,
     mut intents: MessageReader<RangedAttackIntent>,
-    mut damage_events: MessageWriter<DamageEvent>,
     mut caster_query: Query<(&Position, &mut Ammo, &CombatStats, Option<&Name>), With<Player>>,
-    targets: Query<(Entity, &Position, &CombatStats, Option<&Name>), With<Hostile>>,
     mut combat_log: ResMut<CombatLog>,
-    mut spell_particles: ResMut<crate::resources::SpellParticles>,
-    game_map: Res<GameMapResource>,
     mut item_kind_query: Query<&mut ItemKind>,
 ) {
     for intent in intents.read() {
@@ -234,9 +228,6 @@ pub fn ranged_attack_system(
             continue;
         }
 
-        let mut penetration = damage;
-        let mut hit_count = 0;
-
         // Compute the bullet endpoint: scale the direction vector so the
         // Bresenham line extends approximately `range` tiles along the
         // dominant axis, preserving the exact trajectory angle.
@@ -244,76 +235,39 @@ pub fn ranged_attack_system(
         let scale = intent.range.div_euclid(max_comp).max(1);
         let endpoint = origin + crate::grid_vec::GridVec::new(dx * scale, dy * scale);
 
-        // Generate the bullet path using Bresenham's line algorithm.
-        // This produces the mathematically correct sequence of tiles the
-        // bullet traverses — integer-only, no floating-point, O(range).
-        let bullet_path = origin.bresenham_line(endpoint);
+        combat_log.push(format!("{c_name} fires!"));
 
-        // Build a lookup of hostile entities by position for O(1) hit detection.
-        let mut target_by_pos: std::collections::HashMap<crate::grid_vec::GridVec, (Entity, i32, String)> =
-            std::collections::HashMap::new();
-        for (target_entity, target_pos, target_stats, target_name) in &targets {
-            let target_vec = target_pos.as_grid_vec();
-            let t_name = target_name.map_or("???".to_string(), |n| n.0.clone());
-            target_by_pos.insert(target_vec, (target_entity, target_stats.defense, t_name));
-        }
-
-        // Walk the bullet path (skip index 0 which is the caster's tile).
-        for (step_idx, &tile) in bullet_path.iter().enumerate().skip(1) {
-            // Spawn particle for visual feedback.
-            spell_particles.particles.push((tile, 3, (step_idx as u32).saturating_sub(1)));
-
-            // Stop the bullet if it hits an impassable wall.
-            if !game_map.0.is_passable(&tile) {
-                break;
-            }
-
-            // Check if a hostile entity is at this tile.
-            if let Some((target_entity, target_def, t_name)) = target_by_pos.get(&tile) {
-                if penetration <= 0 {
-                    break;
-                }
-                let hit_damage = penetration;
-                damage_events.write(DamageEvent {
-                    target: *target_entity,
-                    amount: hit_damage,
-                });
-                combat_log.push(format!("{c_name} shoots {t_name} for {hit_damage} damage!"));
-                hit_count += 1;
-                penetration -= target_def;
-            }
-        }
-
-        if hit_count == 0 {
-            combat_log.push(format!("{c_name} fires but the bullet misses!"));
-        } else if hit_count > 1 {
-            combat_log.push(format!("Bullet penetrated through {hit_count} targets!"));
-        }
+        // Spawn a bullet projectile entity that will travel along the path.
+        crate::systems::projectile::spawn_bullet(
+            &mut commands,
+            origin,
+            endpoint,
+            damage,
+            intent.attacker,
+        );
     }
 }
 
-/// Resolves AI ranged attack intents (used by soldier enemies).
+/// Resolves AI ranged attack intents by spawning bullet projectile entities.
 /// Fires a bullet from the attacker toward the target entity.
 pub fn ai_ranged_attack_system(
+    mut commands: Commands,
     mut intents: MessageReader<AiRangedAttackIntent>,
-    mut damage_events: MessageWriter<DamageEvent>,
     attacker_query: Query<(&Position, &CombatStats, Option<&Name>)>,
     target_query: Query<(&Position, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
-    mut spell_particles: ResMut<crate::resources::SpellParticles>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
             continue;
         };
-        let Ok((target_pos, target_name)) = target_query.get(intent.target) else {
+        let Ok((target_pos, _target_name)) = target_query.get(intent.target) else {
             continue;
         };
 
         let origin = attacker_pos.as_grid_vec();
         let target_vec = target_pos.as_grid_vec();
         let a_name = attacker_name.map_or("???", |n| &n.0);
-        let t_name = target_name.map_or("???", |n| &n.0);
 
         let dx = (target_vec.x - origin.x).signum();
         let dy = (target_vec.y - origin.y).signum();
@@ -324,21 +278,21 @@ pub fn ai_ranged_attack_system(
 
         let damage = attacker_stats.attack;
 
-        // Spawn bullet travel particles.
-        let dist = origin.chebyshev_distance(target_vec);
-        let travel = dist.min(intent.range);
-        for step in 1..=travel {
-            let bullet_pos = origin + crate::grid_vec::GridVec::new(dx * step, dy * step);
-            spell_particles.particles.push((bullet_pos, 3, (step as u32).saturating_sub(1)));
-        }
+        // Compute bullet endpoint.
+        let max_comp = dx.abs().max(dy.abs());
+        let scale = intent.range.div_euclid(max_comp).max(1);
+        let endpoint = origin + crate::grid_vec::GridVec::new(dx * scale, dy * scale);
 
-        if damage > 0 {
-            damage_events.write(DamageEvent {
-                target: intent.target,
-                amount: damage,
-            });
-            combat_log.push(format!("{a_name} shoots {t_name} for {damage} damage!"));
-        }
+        combat_log.push(format!("{a_name} fires!"));
+
+        // Spawn a bullet projectile entity.
+        crate::systems::projectile::spawn_bullet(
+            &mut commands,
+            origin,
+            endpoint,
+            damage,
+            intent.attacker,
+        );
     }
 }
 

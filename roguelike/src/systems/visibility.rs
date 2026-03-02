@@ -54,7 +54,7 @@ pub fn visibility_system(
         // Directional FOV: filter player's visible tiles to a cone toward the cursor.
         if player_entity == Some(entity) {
             let cursor_dir = cursor.pos - origin;
-            if cursor_dir != GridVec::ZERO {
+            if !cursor_dir.is_zero() {
                 let (cdx, cdy) = (cursor_dir.x as f64, cursor_dir.y as f64);
                 let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
                 // cos(60°) ≈ 0.5 gives a 120° cone (half-angle 60°)

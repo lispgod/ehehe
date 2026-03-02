@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiState, Ammo, BlocksMovement, Energy, Faction, Player, Position, Speed, Viewshed, ACTION_COST};
+use crate::components::{AiState, Ammo, BlocksMovement, Energy, Faction, Player, Position, Speed, Viewshed};
 use crate::events::{AiRangedAttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex};
@@ -155,7 +155,7 @@ pub fn ai_system(
 
     for (entity, pos, mut ai, viewshed, mut energy, faction, ammo) in &mut ai_query {
         // Only act if enough energy has accumulated.
-        if energy.0 < ACTION_COST {
+        if !energy.can_act() {
             continue;
         }
 
@@ -184,14 +184,13 @@ pub fn ai_system(
 
                 if can_shoot {
                     if let Some(mut ammo_pool) = ammo {
-                        if ammo_pool.current > 0 {
-                            ammo_pool.current -= 1;
+                        if ammo_pool.spend_one() {
                             ranged_intents.write(AiRangedAttackIntent {
                                 attacker: entity,
                                 target: player_entity,
                                 range: AI_RANGED_ATTACK_RANGE,
                             });
-                            energy.0 -= ACTION_COST;
+                            energy.spend_action();
                             continue;
                         }
                     }
@@ -208,14 +207,14 @@ pub fn ai_system(
                 })
                 .unwrap_or_else(|| (player_vec - my_pos).king_step());
 
-                if step != GridVec::ZERO {
+                if !step.is_zero() {
                     move_intents.write(MoveIntent {
                         entity,
                         dx: step.x,
                         dy: step.y,
                     });
                     // Only deduct energy when an action is actually emitted.
-                    energy.0 -= ACTION_COST;
+                    energy.spend_action();
                 }
             }
         }
@@ -235,7 +234,7 @@ pub fn ai_system(
 ///   actions_over_N_ticks = ⌊N × speed / ACTION_COST⌋
 pub fn energy_accumulate_system(mut query: Query<(&Speed, &mut Energy)>) {
     for (speed, mut energy) in &mut query {
-        energy.0 += speed.0;
+        energy.accumulate(speed);
     }
 }
 

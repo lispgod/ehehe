@@ -71,10 +71,60 @@ pub struct Viewshed {
 }
 
 /// Health pool for any entity that can take damage or be healed.
+///
+/// **Invariant**: `0 ≤ current ≤ max` is maintained by all mutating methods.
+/// Direct field mutation is allowed for compatibility but callers should
+/// prefer the provided methods to guarantee correctness.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Health {
     pub current: CoordinateUnit,
     pub max: CoordinateUnit,
+}
+
+impl Health {
+    /// Applies `amount` damage, clamping `current` to `[0, max]`.
+    /// Returns the *actual* damage dealt (may be less if current < amount).
+    ///
+    /// **Post-condition**: `0 ≤ self.current ≤ self.max`.
+    #[inline]
+    pub fn apply_damage(&mut self, amount: CoordinateUnit) -> CoordinateUnit {
+        let actual = amount.min(self.current).max(0);
+        self.current -= actual;
+        actual
+    }
+
+    /// Heals by `amount`, clamping `current` to `[0, max]`.
+    /// Returns the *actual* HP restored (may be less if near max).
+    ///
+    /// **Post-condition**: `0 ≤ self.current ≤ self.max`.
+    #[inline]
+    pub fn heal(&mut self, amount: CoordinateUnit) -> CoordinateUnit {
+        let actual = amount.min(self.max - self.current).max(0);
+        self.current += actual;
+        actual
+    }
+
+    /// Returns `true` when the entity should be considered dead.
+    #[inline]
+    pub fn is_dead(&self) -> bool {
+        self.current <= 0
+    }
+
+    /// Returns `true` when health is at maximum.
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.current >= self.max
+    }
+
+    /// Returns the health fraction in `[0.0, 1.0]`.
+    /// Returns `0.0` if `max` is zero (avoids division by zero).
+    #[inline]
+    pub fn fraction(&self) -> f64 {
+        if self.max <= 0 {
+            return 0.0;
+        }
+        (self.current as f64 / self.max as f64).clamp(0.0, 1.0)
+    }
 }
 
 /// Combat statistics used by the combat system to resolve attacks.
@@ -83,6 +133,42 @@ pub struct Health {
 pub struct CombatStats {
     pub attack: CoordinateUnit,
     pub defense: CoordinateUnit,
+}
+
+impl CombatStats {
+    /// Computes the raw damage this attacker deals against `defender`.
+    ///
+    /// **Damage model**: `max(0, self.attack − defender.defense)`.
+    ///
+    /// Mathematical properties:
+    /// - **Non-negative**: result ∈ ℤ≥0 (clamped by `max(0, …)`).
+    /// - **Monotone in attack**: higher attack → equal or more damage.
+    /// - **Monotone in defense**: higher defense → equal or less damage.
+    /// - **Idempotent clamping**: `max(0, max(0, x)) = max(0, x)`.
+    #[inline]
+    pub fn damage_against(&self, defender: &CombatStats) -> CoordinateUnit {
+        compute_damage(self.attack, defender.defense)
+    }
+}
+
+/// Pure function: computes melee/combat damage from attack and defense values.
+///
+/// `damage(atk, def) = max(0, atk − def)`
+///
+/// This is the universal damage formula used by:
+/// - Melee bump attacks (combat_system)
+/// - Roundhouse kick / cleave (melee_wide_system)
+/// - Thrown weapons (throw_system)
+///
+/// **Mathematical properties**:
+/// - **Non-negative**: ∀ atk, def: `damage(atk, def) ≥ 0`.
+/// - **Monotone increasing in atk**: `atk₁ ≤ atk₂ ⟹ damage(atk₁, def) ≤ damage(atk₂, def)`.
+/// - **Monotone decreasing in def**: `def₁ ≤ def₂ ⟹ damage(atk, def₁) ≥ damage(atk, def₂)`.
+/// - **Zero threshold**: `damage(atk, def) = 0 ⟺ atk ≤ def`.
+/// - **Linearity above threshold**: for `atk > def`, `damage(atk, def) = atk − def`.
+#[inline]
+pub fn compute_damage(attack: CoordinateUnit, defense: CoordinateUnit) -> CoordinateUnit {
+    (attack - defense).max(0)
 }
 
 /// Display name for any entity. Used in combat messages, UI, and logs.
@@ -110,6 +196,32 @@ pub struct Speed(pub CoordinateUnit);
 /// takes exactly ⌊N × S / ACTION_COST⌋ actions.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Energy(pub CoordinateUnit);
+
+impl Energy {
+    /// Returns `true` when this entity has accumulated enough energy to act.
+    #[inline]
+    pub fn can_act(&self) -> bool {
+        self.0 >= ACTION_COST
+    }
+
+    /// Deducts `ACTION_COST`, leaving any excess for the next tick.
+    ///
+    /// **Pre-condition**: `self.can_act()` should be true.
+    /// **Post-condition**: `self.0 = old − ACTION_COST`.
+    #[inline]
+    pub fn spend_action(&mut self) {
+        self.0 -= ACTION_COST;
+    }
+
+    /// Accumulates energy from the entity's speed.
+    ///
+    /// This is one tick of the discrete energy scheduler:
+    ///   `energy += speed`
+    #[inline]
+    pub fn accumulate(&mut self, speed: &Speed) {
+        self.0 += speed.0;
+    }
+}
 
 /// The energy threshold required to perform one action.
 /// Entities accumulate energy each tick equal to their `Speed` value.
@@ -168,18 +280,65 @@ impl std::fmt::Display for Caliber {
 
 /// Stamina pool for entities that can perform special actions.
 /// Special actions consume stamina; stamina regenerates slowly each turn.
+///
+/// **Invariant**: `0 ≤ current ≤ max`.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Stamina {
     pub current: CoordinateUnit,
     pub max: CoordinateUnit,
 }
 
+impl Stamina {
+    /// Attempts to spend `cost` stamina. Returns `true` and deducts if
+    /// sufficient stamina is available, `false` otherwise (no mutation).
+    ///
+    /// **Post-condition**: if `true`, `self.current` decreased by `cost`.
+    #[inline]
+    pub fn spend(&mut self, cost: CoordinateUnit) -> bool {
+        if self.current >= cost {
+            self.current -= cost;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Recovers `amount` stamina, clamped to `max`.
+    ///
+    /// **Post-condition**: `self.current ≤ self.max`.
+    #[inline]
+    pub fn recover(&mut self, amount: CoordinateUnit) {
+        self.current = (self.current + amount).min(self.max);
+    }
+}
+
 /// Ammo supply for AI ranged attacks (enemies only).
 /// Player weapons use per-gun `ItemKind::Gun { loaded, .. }` instead.
+///
+/// **Invariant**: `0 ≤ current ≤ max`.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Ammo {
     pub current: CoordinateUnit,
     pub max: CoordinateUnit,
+}
+
+impl Ammo {
+    /// Attempts to spend one round. Returns `true` on success.
+    #[inline]
+    pub fn spend_one(&mut self) -> bool {
+        if self.current > 0 {
+            self.current -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` when no ammo remains.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.current <= 0
+    }
 }
 
 /// A visual particle used for combat animations (grenade shrapnel, bullet trails).
@@ -347,7 +506,8 @@ mod tests {
             current: 30,
             max: 30,
         };
-        h.current = (h.current - 5).max(0);
+        let actual = h.apply_damage(5);
+        assert_eq!(actual, 5);
         assert_eq!(h.current, 25);
         assert_eq!(h.max, 30);
     }
@@ -358,52 +518,142 @@ mod tests {
             current: 3,
             max: 30,
         };
-        h.current = (h.current - 10).max(0);
+        let actual = h.apply_damage(10);
+        assert_eq!(actual, 3, "Actual damage should be clamped to current HP");
         assert_eq!(h.current, 0);
+    }
+
+    #[test]
+    fn health_apply_damage_returns_actual() {
+        let mut h = Health { current: 5, max: 30 };
+        assert_eq!(h.apply_damage(3), 3);
+        assert_eq!(h.current, 2);
+        assert_eq!(h.apply_damage(10), 2);
+        assert_eq!(h.current, 0);
+    }
+
+    #[test]
+    fn health_heal_clamps_to_max() {
+        let mut h = Health { current: 25, max: 30 };
+        let healed = h.heal(10);
+        assert_eq!(healed, 5, "Should only heal the deficit");
+        assert_eq!(h.current, 30);
+    }
+
+    #[test]
+    fn health_heal_returns_actual() {
+        let mut h = Health { current: 20, max: 30 };
+        assert_eq!(h.heal(5), 5);
+        assert_eq!(h.current, 25);
+    }
+
+    #[test]
+    fn health_heal_at_full_returns_zero() {
+        let mut h = Health { current: 30, max: 30 };
+        assert_eq!(h.heal(5), 0);
+        assert_eq!(h.current, 30);
+    }
+
+    #[test]
+    fn health_is_dead() {
+        assert!(Health { current: 0, max: 30 }.is_dead());
+        assert!(!Health { current: 1, max: 30 }.is_dead());
+    }
+
+    #[test]
+    fn health_is_full() {
+        assert!(Health { current: 30, max: 30 }.is_full());
+        assert!(!Health { current: 29, max: 30 }.is_full());
+    }
+
+    #[test]
+    fn health_fraction() {
+        let h = Health { current: 15, max: 30 };
+        assert!((h.fraction() - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn health_fraction_zero_max() {
+        let h = Health { current: 0, max: 0 };
+        assert_eq!(h.fraction(), 0.0);
+    }
+
+    #[test]
+    fn health_invariant_maintained() {
+        let mut h = Health { current: 10, max: 30 };
+        h.apply_damage(100);
+        assert!(h.current >= 0 && h.current <= h.max);
+        h.heal(100);
+        assert!(h.current >= 0 && h.current <= h.max);
     }
 
     // ─── CombatStats damage formula tests ────────────────────────
 
     #[test]
     fn damage_formula_positive() {
-        let attacker = CombatStats {
-            attack: 5,
-            defense: 0,
-        };
-        let defender = CombatStats {
-            attack: 0,
-            defense: 2,
-        };
-        let damage = (attacker.attack - defender.defense).max(0);
-        assert_eq!(damage, 3);
+        let attacker = CombatStats { attack: 5, defense: 0 };
+        let defender = CombatStats { attack: 0, defense: 2 };
+        assert_eq!(attacker.damage_against(&defender), 3);
+        assert_eq!(compute_damage(5, 2), 3);
     }
 
     #[test]
     fn damage_formula_zero_when_defense_equals_attack() {
-        let attacker = CombatStats {
-            attack: 3,
-            defense: 0,
-        };
-        let defender = CombatStats {
-            attack: 0,
-            defense: 3,
-        };
-        let damage = (attacker.attack - defender.defense).max(0);
-        assert_eq!(damage, 0);
+        let attacker = CombatStats { attack: 3, defense: 0 };
+        let defender = CombatStats { attack: 0, defense: 3 };
+        assert_eq!(attacker.damage_against(&defender), 0);
+        assert_eq!(compute_damage(3, 3), 0);
     }
 
     #[test]
     fn damage_formula_zero_when_defense_exceeds_attack() {
-        let attacker = CombatStats {
-            attack: 2,
-            defense: 0,
-        };
-        let defender = CombatStats {
-            attack: 0,
-            defense: 10,
-        };
-        let damage = (attacker.attack - defender.defense).max(0);
-        assert_eq!(damage, 0);
+        let attacker = CombatStats { attack: 2, defense: 0 };
+        let defender = CombatStats { attack: 0, defense: 10 };
+        assert_eq!(attacker.damage_against(&defender), 0);
+        assert_eq!(compute_damage(2, 10), 0);
+    }
+
+    #[test]
+    fn compute_damage_non_negative() {
+        // Property: ∀ atk, def: compute_damage(atk, def) ≥ 0
+        for atk in 0..20 {
+            for def in 0..20 {
+                assert!(compute_damage(atk, def) >= 0);
+            }
+        }
+    }
+
+    #[test]
+    fn compute_damage_monotone_in_attack() {
+        // Property: atk₁ ≤ atk₂ ⟹ damage(atk₁, def) ≤ damage(atk₂, def)
+        let def = 3;
+        for atk in 0..19 {
+            assert!(compute_damage(atk, def) <= compute_damage(atk + 1, def));
+        }
+    }
+
+    #[test]
+    fn compute_damage_monotone_in_defense() {
+        // Property: def₁ ≤ def₂ ⟹ damage(atk, def₁) ≥ damage(atk, def₂)
+        let atk = 10;
+        for def in 0..19 {
+            assert!(compute_damage(atk, def) >= compute_damage(atk, def + 1));
+        }
+    }
+
+    #[test]
+    fn compute_damage_zero_threshold() {
+        // Property: damage(atk, def) = 0 ⟺ atk ≤ def
+        for atk in 0..15 {
+            for def in 0..15 {
+                let d = compute_damage(atk, def);
+                if atk <= def {
+                    assert_eq!(d, 0);
+                } else {
+                    assert!(d > 0);
+                }
+            }
+        }
     }
 
     // ─── Energy / Speed tests ────────────────────────────────────
@@ -417,9 +667,9 @@ mod tests {
     fn energy_accumulation_normal_speed() {
         let speed = Speed(100);
         let mut energy = Energy(0);
-        energy.0 += speed.0;
+        energy.accumulate(&speed);
         assert_eq!(energy.0, 100);
-        assert!(energy.0 >= ACTION_COST);
+        assert!(energy.can_act());
     }
 
     #[test]
@@ -427,34 +677,58 @@ mod tests {
         let speed = Speed(50);
         let mut energy = Energy(0);
         // After 1 tick: not enough to act
-        energy.0 += speed.0;
+        energy.accumulate(&speed);
         assert_eq!(energy.0, 50);
-        assert!(energy.0 < ACTION_COST);
+        assert!(!energy.can_act());
         // After 2 ticks: enough to act
-        energy.0 += speed.0;
+        energy.accumulate(&speed);
         assert_eq!(energy.0, 100);
-        assert!(energy.0 >= ACTION_COST);
+        assert!(energy.can_act());
     }
 
     #[test]
     fn energy_accumulation_fast_speed() {
         let speed = Speed(200);
         let mut energy = Energy(0);
-        energy.0 += speed.0;
+        energy.accumulate(&speed);
         assert_eq!(energy.0, 200);
         // Fast entity can act twice
-        assert!(energy.0 >= ACTION_COST);
-        energy.0 -= ACTION_COST;
-        assert!(energy.0 >= ACTION_COST);
+        assert!(energy.can_act());
+        energy.spend_action();
+        assert!(energy.can_act());
     }
 
     #[test]
     fn energy_deduction_leaves_excess() {
         let speed = Speed(120);
         let mut energy = Energy(0);
-        energy.0 += speed.0;
-        energy.0 -= ACTION_COST;
+        energy.accumulate(&speed);
+        energy.spend_action();
         assert_eq!(energy.0, 20); // Excess carries over
+    }
+
+    #[test]
+    fn energy_scheduling_fairness() {
+        // Property: over N ticks, entity with speed S takes
+        // exactly ⌊N × S / ACTION_COST⌋ actions.
+        for &spd in &[50, 75, 100, 120, 150, 200] {
+            let speed = Speed(spd);
+            let mut energy = Energy(0);
+            let mut actions = 0i64;
+            let n = 100;
+            for _ in 0..n {
+                energy.accumulate(&speed);
+                while energy.can_act() {
+                    energy.spend_action();
+                    actions += 1;
+                }
+            }
+            let expected = (n as i64 * spd as i64) / ACTION_COST as i64;
+            assert_eq!(
+                actions, expected,
+                "Speed {spd}: expected {expected} actions over {n} ticks, got {actions}"
+            );
+        }
     }
 
     // ─── AiState tests ──────────────────────────────────────────
@@ -557,5 +831,73 @@ mod tests {
             assert_eq!(loaded, 0);
             assert!(loaded <= 0, "Gun should not be able to fire");
         }
+    }
+
+    // ─── Stamina pool tests ─────────────────────────────────────────
+
+    #[test]
+    fn stamina_spend_success() {
+        let mut s = Stamina { current: 50, max: 50 };
+        assert!(s.spend(10));
+        assert_eq!(s.current, 40);
+    }
+
+    #[test]
+    fn stamina_spend_insufficient() {
+        let mut s = Stamina { current: 5, max: 50 };
+        assert!(!s.spend(10));
+        assert_eq!(s.current, 5, "Should not mutate on failed spend");
+    }
+
+    #[test]
+    fn stamina_spend_exact() {
+        let mut s = Stamina { current: 10, max: 50 };
+        assert!(s.spend(10));
+        assert_eq!(s.current, 0);
+    }
+
+    #[test]
+    fn stamina_recover_clamps_to_max() {
+        let mut s = Stamina { current: 45, max: 50 };
+        s.recover(10);
+        assert_eq!(s.current, 50);
+    }
+
+    #[test]
+    fn stamina_recover_partial() {
+        let mut s = Stamina { current: 30, max: 50 };
+        s.recover(5);
+        assert_eq!(s.current, 35);
+    }
+
+    #[test]
+    fn stamina_invariant_maintained() {
+        let mut s = Stamina { current: 25, max: 50 };
+        s.spend(100); // Should fail (not enough), no mutation
+        assert!(s.current >= 0 && s.current <= s.max);
+        s.recover(100);
+        assert!(s.current >= 0 && s.current <= s.max);
+    }
+
+    // ─── Ammo pool tests ────────────────────────────────────────────
+
+    #[test]
+    fn ammo_spend_one_success() {
+        let mut a = Ammo { current: 5, max: 10 };
+        assert!(a.spend_one());
+        assert_eq!(a.current, 4);
+    }
+
+    #[test]
+    fn ammo_spend_one_empty() {
+        let mut a = Ammo { current: 0, max: 10 };
+        assert!(!a.spend_one());
+        assert_eq!(a.current, 0);
+    }
+
+    #[test]
+    fn ammo_is_empty() {
+        assert!(Ammo { current: 0, max: 10 }.is_empty());
+        assert!(!Ammo { current: 1, max: 10 }.is_empty());
     }
 }

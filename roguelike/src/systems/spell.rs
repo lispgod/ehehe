@@ -29,11 +29,10 @@ pub fn spell_system(
 
         // Consume stamina.
         if let Some(mut stamina) = stamina {
-            if stamina.current < SPELL_STAMINA_COST {
+            if !stamina.spend(SPELL_STAMINA_COST) {
                 combat_log.push("Not enough stamina!".into());
                 continue;
             }
-            stamina.current -= SPELL_STAMINA_COST;
         }
 
         // Consume the grenade item from inventory.

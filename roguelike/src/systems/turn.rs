@@ -30,12 +30,12 @@ pub fn end_world_turn(
     turn_counter.0 += 1;
 
     if let Ok((mut stamina, mut health)) = player_query.single_mut() {
-        // Regenerate player stamina.
-        stamina.current = (stamina.current + STAMINA_REGEN_PER_TURN).min(stamina.max);
+        // Regenerate player stamina using the pool's recover method.
+        stamina.recover(STAMINA_REGEN_PER_TURN);
 
         // Regenerate player health (slower than stamina — every N turns).
         if turn_counter.0 % HEALTH_REGEN_INTERVAL == 0 {
-            health.current = (health.current + HEALTH_REGEN_PER_TURN).min(health.max);
+            health.heal(HEALTH_REGEN_PER_TURN);
         }
     }
 

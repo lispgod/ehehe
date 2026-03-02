@@ -312,29 +312,14 @@ pub fn draw_system(
 
         // ── Overlays ────────────────────────────────────────────
 
-        // Show "PAUSED" overlay centered on game area when paused
-        if *state.get() == GameState::Paused {
-            let label = " PAUSED — press P to resume ";
-            let label_width = label.len() as u16;
-            if render_width >= label_width && render_height >= 1 {
-                let cx = game_area.x + (render_width - label_width) / 2;
-                let cy = game_area.y + render_height / 2;
-                let pause_area = Rect {
-                    x: cx,
-                    y: cy,
-                    width: label_width,
-                    height: 1,
-                };
-                frame.render_widget(
-                    Paragraph::new(Line::from(label).bold()).on_dark_gray(),
-                    pause_area,
-                );
-            }
+        // Show ESC menu overlay when in EscMenu mode (replaces old PAUSED overlay)
+        if input_state.mode == InputMode::EscMenu {
+            render_esc_menu_overlay(frame, game_area, input_state.quit_confirm);
         }
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! The Outlaw Hideout has been destroyed! Press Q to quit, R to restart. ";
+            let label = " VICTORY! The Outlaw Hideout has been destroyed! Press Esc to quit, R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -354,7 +339,7 @@ pub fn draw_system(
 
         // Show "YOU DIED" overlay when the player has fallen
         if *state.get() == GameState::Dead {
-            let label = " YOU DIED — Press Q to quit, R to restart ";
+            let label = " YOU DIED — Press Esc to quit, R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -368,26 +353,6 @@ pub fn draw_system(
                 frame.render_widget(
                     Paragraph::new(Line::from(label).bold()).on_red(),
                     death_area,
-                );
-            }
-        }
-
-        // Show quit confirmation overlay
-        if input_state.quit_confirm {
-            let label = " Quit? Press Enter to confirm, any other key to cancel ";
-            let label_width = label.len() as u16;
-            if render_width >= label_width && render_height >= 1 {
-                let cx = game_area.x + (render_width - label_width) / 2;
-                let cy = game_area.y + render_height / 2;
-                let quit_area = Rect {
-                    x: cx,
-                    y: cy,
-                    width: label_width,
-                    height: 1,
-                };
-                frame.render_widget(
-                    Paragraph::new(Line::from(label).bold()).on_dark_gray(),
-                    quit_area,
                 );
             }
         }
@@ -538,8 +503,8 @@ fn render_stats_column(
 
     // Collectibles
     let coll_text = format!(
-        "Cap:{} Pdr:{} .36:{} .44:{}",
-        collectibles.caps, collectibles.powder, collectibles.bullets_36, collectibles.bullets_44
+        "Cap:{} Pdr:{} .31:{} .36:{} .44:{}",
+        collectibles.caps, collectibles.powder, collectibles.bullets_31, collectibles.bullets_36, collectibles.bullets_44
     );
     frame.render_widget(
         Paragraph::new(Line::from(coll_text).dark_gray()),
@@ -586,7 +551,7 @@ fn render_inventory_bar(
 ) {
     let mut spans: Vec<Span> = Vec::new();
     if inv_item_info.is_empty() {
-        spans.push(Span::from(" (empty) [Tab]").dark_gray());
+        spans.push(Span::from(" (empty) [B]").dark_gray());
     } else {
         for (i, (name, desc)) in inv_item_info.iter().enumerate() {
             if i > 0 {
@@ -602,7 +567,7 @@ fn render_inventory_bar(
     let line = Line::from(spans);
     frame.render_widget(
         Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL).title("Inventory [Tab] 1-9:Use")),
+            .block(Block::default().borders(Borders::ALL).title("Inventory [B] 1-9:Use")),
         area,
     );
 }
@@ -743,14 +708,14 @@ fn render_inventory_overlay(
             Line::from(""),
             Line::from("  Inventory is empty.").dark_gray(),
             Line::from(""),
-            Line::from("  Press Tab or Esc to close").dark_gray(),
+            Line::from("  Press B or Esc to close").dark_gray(),
         ];
         frame.render_widget(
             Paragraph::new(lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Inventory [Tab] ")
+                        .title(" Inventory [B] ")
                         .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
                 )
                 .on_black(),
@@ -785,7 +750,7 @@ fn render_inventory_overlay(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Inventory [Tab] — ↑↓ Navigate, Enter Use, Esc Close ")
+                .title(" Inventory [B] — ↑↓ Navigate, Enter Use, D Drop, Esc Close ")
                 .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)),
         )
         .header(
@@ -794,4 +759,54 @@ fn render_inventory_overlay(
         );
 
     frame.render_widget(table, inv_area);
+}
+
+/// Renders the ESC menu overlay with Resume, Restart, and Quit options.
+fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, quit_confirm: bool) {
+    let w = 40u16.min(game_area.width.saturating_sub(4));
+    let h = if quit_confirm { 12u16 } else { 10u16 };
+    let h = h.min(game_area.height.saturating_sub(4));
+
+    if w < 20 || h < 5 {
+        return;
+    }
+
+    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
+    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
+    let menu_area = Rect {
+        x: cx,
+        y: cy,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, menu_area);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from("  PAUSED").bold().yellow(),
+        Line::from(""),
+        Line::from("  Esc — Resume").white(),
+        Line::from("  R   — Restart").white(),
+        Line::from("  Q   — Quit").white(),
+        Line::from(""),
+    ];
+
+    if quit_confirm {
+        lines.push(Line::from("  Would you really like to quit?").bold().red());
+        lines.push(Line::from("  Press Enter to confirm.").dark_gray());
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Menu ")
+                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
+            )
+            .wrap(Wrap { trim: false })
+            .on_black(),
+        menu_area,
+    );
 }

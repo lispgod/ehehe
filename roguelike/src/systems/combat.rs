@@ -76,7 +76,7 @@ pub fn death_system(
 
             // If the player died, transition to Dead state (don't despawn so UI can read stats).
             if is_player.is_some() {
-                combat_log.push("You have fallen... Press Q to quit or R to restart.".into());
+                combat_log.push("You have fallen... Press Esc to quit or R to restart.".into());
                 next_game_state.set(GameState::Dead);
                 continue; // don't despawn the player
             }

@@ -77,6 +77,8 @@ pub fn spawn_monster(
 
     // NPCs with ammo get a gun in their inventory (same structure as player).
     if template.ammo > 0 {
+        // Gun stats match faction theme: Lawmen carry .36 Colt Sheriffs (moderate),
+        // Outlaws carry .44 Colt Armys (heavy), others carry .31 Colt Pockets (light).
         let (gun_name, caliber, capacity, gun_attack) = match template.faction {
             Faction::Lawmen => ("Colt Sheriff", Caliber::Cal36, 5, 4),
             Faction::Outlaws => ("Colt Army", Caliber::Cal44, 6, 6),

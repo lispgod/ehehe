@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Faction, Inventory, ItemKind, PatrolOrigin, Player, Position, Speed, Viewshed};
 use crate::events::{AiRangedAttackIntent, AttackIntent, MolotovCastIntent, MoveIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{GameMapResource, SpatialIndex};
+use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
 
 // ───────────────────────── A* Pathfinding ──────────────────────────
 
@@ -167,8 +167,9 @@ pub fn ai_system(
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
+    turn_counter: Res<TurnCounter>,
     blockers: Query<(), With<BlocksMovement>>,
-    item_kinds: Query<&ItemKind>,
+    mut item_kinds: Query<&mut ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
     mut ranged_intents: MessageWriter<AiRangedAttackIntent>,
     mut attack_intents: MessageWriter<AttackIntent>,
@@ -262,10 +263,11 @@ pub fn ai_system(
                 // Patrol behavior depends on faction.
                 let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
 
-                // Natural movement: occasional idle pauses based on position hash.
+                // Natural movement: occasional idle pauses based on position + turn.
+                // Using turn counter creates less frequent, more natural pauses.
                 let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
-                    .wrapping_add(energy.0) as u32;
-                if pause_hash % 5 == 0 {
+                    .wrapping_add(turn_counter.0 as i32) as u32;
+                if pause_hash % 7 == 0 {
                     // Skip this turn (idle pause for natural movement).
                     if let Some(ref mut look) = ai_look_dir {
                         // Slowly look around during pause.
@@ -388,17 +390,17 @@ pub fn ai_system(
                         // Find a throwable item in inventory.
                         let throwable_idx = inv.items.iter().position(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(k, ItemKind::Grenade { .. } | ItemKind::Molotov { .. })
+                                matches!(*k, ItemKind::Grenade { .. } | ItemKind::Molotov { .. })
                             )
                         });
                         if let Some(idx) = throwable_idx {
                             let item_ent = inv.items[idx];
                             if let Ok(kind) = item_kinds.get(item_ent) {
-                                match kind {
+                                match *kind {
                                     ItemKind::Grenade { damage: _, radius } => {
                                         spell_intents.write(SpellCastIntent {
                                             caster: entity,
-                                            radius: *radius,
+                                            radius,
                                             target: target_vec,
                                             grenade_index: idx,
                                         });
@@ -407,8 +409,8 @@ pub fn ai_system(
                                     ItemKind::Molotov { damage, radius } => {
                                         molotov_intents.write(MolotovCastIntent {
                                             caster: entity,
-                                            radius: *radius,
-                                            damage: *damage,
+                                            radius,
+                                            damage,
                                             target: target_vec,
                                             item_index: idx,
                                         });
@@ -425,22 +427,22 @@ pub fn ai_system(
                     continue;
                 }
 
-                // Check inventory for a loaded gun to fire.
+                // Check inventory for a loaded gun to fire. Decrements the gun's
+                // loaded rounds directly, keeping inventory-based ammo in sync.
                 let mut used_gun = false;
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec))
                 {
                     if let Some(ref mut inv) = inventory {
-                        let gun_idx = inv.items.iter().position(|&ent| {
+                        let gun_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
                             )
                         });
-                        if gun_idx.is_some() {
-                            // Fire using the legacy ammo system for AI (compatible with
-                            // ai_ranged_attack_system which spawns the bullet).
-                            if let Some(mut ammo_pool) = ammo
-                                && ammo_pool.spend_one() {
+                        if let Some(gun_entity) = gun_ent {
+                            if let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                && let ItemKind::Gun { ref mut loaded, .. } = *kind {
+                                    *loaded -= 1;
                                     ranged_intents.write(AiRangedAttackIntent {
                                         attacker: entity,
                                         target: target_entity,
@@ -449,18 +451,16 @@ pub fn ai_system(
                                     used_gun = true;
                                 }
                         }
-                    } else {
-                        // Fallback: NPCs without inventory but with ammo (legacy path).
-                        if let Some(mut ammo_pool) = ammo
-                            && ammo_pool.spend_one() {
-                                ranged_intents.write(AiRangedAttackIntent {
-                                    attacker: entity,
-                                    target: target_entity,
-                                    range: AI_RANGED_ATTACK_RANGE,
-                                });
-                                used_gun = true;
-                            }
-                    }
+                    } else if let Some(mut ammo_pool) = ammo
+                        && ammo_pool.spend_one() {
+                            // Fallback for NPCs without inventory but with Ammo component.
+                            ranged_intents.write(AiRangedAttackIntent {
+                                attacker: entity,
+                                target: target_entity,
+                                range: AI_RANGED_ATTACK_RANGE,
+                            });
+                            used_gun = true;
+                        }
                 }
                 if used_gun {
                     energy.spend_action();

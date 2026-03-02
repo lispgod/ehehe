@@ -104,10 +104,13 @@ pub fn fire_system(
                     continue;
                 }
 
-                // Check for burnout (based on position hash + turn for deterministic timing).
-                let age_hash = (x.wrapping_mul(37) ^ y.wrapping_mul(53))
+                // Probabilistic burnout: each spread interval, each fire tile has
+                // a 1/FIRE_BURNOUT_TURNS chance of burning out. Over time this
+                // guarantees all fires eventually expire with an expected lifetime
+                // of ~FIRE_BURNOUT_TURNS * FIRE_SPREAD_INTERVAL turns.
+                let burnout_hash = (x.wrapping_mul(37) ^ y.wrapping_mul(53))
                     .wrapping_add(turn_counter.0 as i32);
-                if age_hash.unsigned_abs() % (FIRE_BURNOUT_TURNS + 1) == 0 {
+                if burnout_hash.unsigned_abs() % FIRE_BURNOUT_TURNS == 0 {
                     burnout_tiles.push(pos);
                 }
 

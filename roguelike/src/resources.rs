@@ -164,20 +164,6 @@ pub struct CombatLog {
 /// Maximum number of messages retained in the combat log.
 const MAX_COMBAT_LOG_MESSAGES: usize = 50;
 
-/// Whether the help overlay is currently shown (toggled by `?` or `/`).
-#[derive(Resource, Debug, Default)]
-pub struct HelpVisible(pub bool);
-
-/// Whether the welcome screen is currently shown (visible at game start).
-#[derive(Resource, Debug)]
-pub struct WelcomeVisible(pub bool);
-
-impl Default for WelcomeVisible {
-    fn default() -> Self {
-        Self(true) // shown on first launch
-    }
-}
-
 /// Active combat particles for rendering grenade/bullet animations.
 /// Each entry is (position, remaining_lifetime_frames, delay_before_visible).
 /// Particles with delay > 0 are not yet visible; they count down each tick.

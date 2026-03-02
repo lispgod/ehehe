@@ -344,13 +344,6 @@ impl Ammo {
     }
 }
 
-/// A visual particle used for combat animations (grenade shrapnel, bullet trails).
-/// The particle has a limited lifetime (in frames) before despawning.
-#[derive(Component, Debug)]
-pub struct Particle {
-    pub lifetime: u32,
-}
-
 /// A projectile entity (bullet or shrapnel) that travels along a path over ticks.
 /// Each tick the projectile advances `tiles_per_tick` steps along its precomputed
 /// Bresenham path. When it reaches a hostile entity, it applies damage and despawns.
@@ -377,12 +370,6 @@ pub struct Projectile {
 #[derive(Component, Debug)]
 pub struct Item;
 
-/// Links an item entity to the entity carrying it.
-#[derive(Component, Debug)]
-pub struct InBackpack {
-    pub owner: Entity,
-}
-
 /// The kind of item and its associated effect.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub enum ItemKind {
@@ -405,10 +392,6 @@ pub enum ItemKind {
     /// A hat. Provides defense when equipped.
     Hat { defense: i32 },
 }
-
-/// Marker component indicating the item is currently equipped.
-#[derive(Component, Debug)]
-pub struct Equipped;
 
 /// Marker component for a thrown item (knife/tomahawk) that has landed
 /// and can be recovered by walking over it.

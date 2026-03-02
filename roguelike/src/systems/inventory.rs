@@ -285,7 +285,6 @@ pub fn spawn_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
 /// and reloads one round using collectibles (1 matching bullet + 1 cap + 1 powder).
 /// If all guns are full or no guns exist, reload fails.
 pub fn reload_system(
-    _commands: Commands,
     player_query: Query<&Inventory, With<Player>>,
     mut item_kind_query: Query<(&mut ItemKind, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,

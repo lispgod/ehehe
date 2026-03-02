@@ -2,46 +2,15 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::components::{
-    AiState, Ammo, BlocksMovement, CombatStats, Energy, ExpReward, Faction, Health, HellGate, Hostile, LootTable, Name,
-    Position, Renderable, Speed, Viewshed,
-};
+use crate::components::{HellGate, Position};
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{GameMapResource, MapSeed, TurnCounter};
-use crate::typedefs::{RatColor, GATE_POINT};
-
-/// Monster archetypes for wave spawning (modern setting, same tiers as initial spawning).
-struct WaveMonsterTemplate {
-    name: &'static str,
-    symbol: &'static str,
-    fg: RatColor,
-    health: i32,
-    attack: i32,
-    defense: i32,
-    speed: i32,
-    sight_range: i32,
-    exp_reward: i32,
-    faction: Faction,
-    /// Ammo supply for ranged attacks. 0 means melee only.
-    ammo: i32,
-}
-
-const WAVE_TEMPLATES: &[WaveMonsterTemplate] = &[
-    // Tier 1: Wildlife
-    WaveMonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(160, 120, 80), health: 4, attack: 2, defense: 0, speed: 110, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
-    WaveMonsterTemplate { name: "Rattlesnake", symbol: "~", fg: RatColor::Rgb(60, 100, 40), health: 8, attack: 3, defense: 1, speed: 120, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
-    // Tier 2: Outlaws
-    WaveMonsterTemplate { name: "Outlaw", symbol: "o", fg: RatColor::Rgb(194, 178, 128), health: 12, attack: 4, defense: 1, speed: 90, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
-    // Tier 3: Vaqueros
-    WaveMonsterTemplate { name: "Vaquero", symbol: "v", fg: RatColor::Rgb(107, 112, 60), health: 15, attack: 5, defense: 2, speed: 85, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
-    // Tier 4: Cowboys (has ranged attacks)
-    WaveMonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(160, 130, 90), health: 20, attack: 6, defense: 3, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
-    WaveMonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(60, 60, 60), health: 28, attack: 8, defense: 4, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
-];
+use crate::systems::spawn::{spawn_monster, MONSTER_TEMPLATES};
+use crate::typedefs::GATE_POINT;
 
 /// Determines which faction tier to spawn based on wave number.
-/// Returns (start_index, end_index_exclusive) into WAVE_TEMPLATES.
+/// Returns (start_index, end_index_exclusive) into MONSTER_TEMPLATES.
 fn wave_faction(wave_number: u32) -> (usize, usize) {
     match wave_number {
         0..=3 => (0, 2),    // Wildlife: Rat, Feral Dog
@@ -158,50 +127,19 @@ pub fn wave_spawn_system(
         let faction_len = faction_end - faction_start;
         let template_noise = value_noise(candidate.x, candidate.y, wave_seed.wrapping_add(TEMPLATE_SEED_OFFSET));
         let idx = faction_start + (template_noise * faction_len as f64) as usize;
-        let template = &WAVE_TEMPLATES[idx.min(faction_end - 1)];
+        let template = &MONSTER_TEMPLATES[idx.min(faction_end - 1)];
 
-        let scaled_health = template.health + health_bonus;
-        let scaled_attack = template.attack + attack_bonus;
-        let scaled_defense = template.defense + defense_bonus;
-
-        commands.spawn((
-            Position {
-                x: candidate.x,
-                y: candidate.y,
-            },
-            Name(template.name.into()),
-            Renderable {
-                symbol: template.symbol.into(),
-                fg: template.fg,
-                bg: RatColor::Black,
-            },
-            BlocksMovement,
-            Hostile,
-            template.faction,
-            Health {
-                current: scaled_health,
-                max: scaled_health,
-            },
-            CombatStats {
-                attack: scaled_attack,
-                defense: scaled_defense,
-            },
-            Speed(template.speed),
-            Energy(0),
-            AiState::Idle,
-            LootTable { drop_chance: 0.30 },
-            ExpReward(template.exp_reward + (wave_number as i32)),
-            Viewshed {
-                range: template.sight_range,
-                visible_tiles: HashSet::new(),
-                revealed_tiles: HashSet::new(),
-                dirty: true,
-            },
-            Ammo {
-                current: template.ammo,
-                max: template.ammo,
-            },
-        ));
+        spawn_monster(
+            &mut commands,
+            template,
+            candidate.x,
+            candidate.y,
+            health_bonus,
+            attack_bonus,
+            defense_bonus,
+            wave_number as i32,
+            0.30,
+        );
 
         spawned += 1;
     }

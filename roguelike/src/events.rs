@@ -62,12 +62,6 @@ pub struct RangedAttackIntent {
     pub gun_item: Option<Entity>,
 }
 
-/// Fired when the player reloads their weapon from a magazine in inventory.
-#[derive(Message, Debug, Clone)]
-pub struct ReloadIntent {
-    pub entity: Entity,
-}
-
 /// Fired when an AI entity performs a ranged attack toward a target position.
 #[derive(Message, Debug, Clone)]
 pub struct AiRangedAttackIntent {

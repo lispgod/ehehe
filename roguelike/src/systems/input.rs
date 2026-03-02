@@ -136,9 +136,7 @@ pub fn input_system(
                             user: player_entity,
                             item_index: input_state.inv_selection,
                         });
-                        if let Some(next) = &mut next_turn_state {
-                            next.set(TurnState::PlayerTurn);
-                        }
+                        advance_turn(&mut next_turn_state);
                         input_state.mode = InputMode::Game;
                         // Adjust selection so it doesn't exceed the new last index.
                         let new_count = item_count.saturating_sub(1);
@@ -157,9 +155,7 @@ pub fn input_system(
                             user: player_entity,
                             item_index: input_state.inv_selection,
                         });
-                        if let Some(next) = &mut next_turn_state {
-                            next.set(TurnState::PlayerTurn);
-                        }
+                        advance_turn(&mut next_turn_state);
                         input_state.mode = InputMode::Game;
                         let new_count = item_count.saturating_sub(1);
                         if new_count > 0 && input_state.inv_selection >= new_count {
@@ -258,38 +254,28 @@ pub fn input_system(
             KeyCode::Char('i') if awaiting_input => {
                 cursor.pos.y += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             KeyCode::Char('k') if awaiting_input => {
                 cursor.pos.y -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             KeyCode::Char('j') if awaiting_input => {
                 cursor.pos.x -= 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             KeyCode::Char('l') if awaiting_input => {
                 cursor.pos.x += 1;
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Center cursor on player (C) — advances one tick ──
             KeyCode::Char('c') if awaiting_input => {
                 cursor.pos = player_pos.as_grid_vec();
                 if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Auto-aim (N): move cursor one step toward nearest hostile — advances one tick ──
             KeyCode::Char('n') if awaiting_input => {
@@ -308,9 +294,7 @@ pub fn input_system(
                     let step = (target - cursor.pos).king_step();
                     cursor.pos = cursor.pos + step;
                     if let Ok(mut vs) = player_viewshed.single_mut() { vs.dirty = true; }
-                    if let Some(next) = &mut next_turn_state {
-                        next.set(TurnState::PlayerTurn);
-                    }
+                    advance_turn(&mut next_turn_state);
                 } else {
                     combat_log.push("No enemies visible.".into());
                 }
@@ -332,34 +316,26 @@ pub fn input_system(
             // ── Wait / skip turn ────────────────────────────────
             KeyCode::Char('.') if awaiting_input => {
                 combat_log.push("You wait...".into());
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Reload weapon from inventory magazine ───────────
             KeyCode::Char('r') if awaiting_input => {
                 input_state.reload_pending = true;
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Melee wide (cleave) attack ──────────────────────
             KeyCode::Char('e') if awaiting_input => {
                 intents.melee_wide_intents.write(MeleeWideIntent {
                     attacker: player_entity,
                 });
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Pickup item on ground ───────────────────────────
             KeyCode::Char('g') if awaiting_input => {
                 intents.pickup_intents.write(PickupItemIntent {
                     picker: player_entity,
                 });
-                if let Some(next) = &mut next_turn_state {
-                    next.set(TurnState::PlayerTurn);
-                }
+                advance_turn(&mut next_turn_state);
             }
             // ── Use inventory item by slot (1-9) / Fire gun toward cursor / Throw / Grenade ──
             KeyCode::Char(c @ '1'..='9') if awaiting_input => {
@@ -379,9 +355,7 @@ pub fn input_system(
                                             dy: delta.y,
                                             gun_item: Some(item_entity),
                                         });
-                                        if let Some(next) = &mut next_turn_state {
-                                            next.set(TurnState::PlayerTurn);
-                                        }
+                                        advance_turn(&mut next_turn_state);
                                         handled = true;
                                     } else {
                                         combat_log.push("Cursor is on your position!".into());
@@ -408,9 +382,7 @@ pub fn input_system(
                                         range,
                                         damage,
                                     });
-                                    if let Some(next) = &mut next_turn_state {
-                                        next.set(TurnState::PlayerTurn);
-                                    }
+                                    advance_turn(&mut next_turn_state);
                                     handled = true;
                                 } else {
                                     combat_log.push("Cursor is on your position!".into());
@@ -430,9 +402,7 @@ pub fn input_system(
                                         target: cursor.pos,
                                         grenade_index: idx,
                                     });
-                                    if let Some(next) = &mut next_turn_state {
-                                        next.set(TurnState::PlayerTurn);
-                                    }
+                                    advance_turn(&mut next_turn_state);
                                 }
                                 handled = true;
                             }
@@ -445,9 +415,7 @@ pub fn input_system(
                         user: player_entity,
                         item_index: idx,
                     });
-                    if let Some(next) = &mut next_turn_state {
-                        next.set(TurnState::PlayerTurn);
-                    }
+                    advance_turn(&mut next_turn_state);
                 }
             }
             _ => {}
@@ -464,6 +432,12 @@ fn emit_move(
     dy: i32,
 ) {
     move_intents.write(MoveIntent { entity, dx, dy });
+    advance_turn(next_turn_state);
+}
+
+/// Helper: transitions to `PlayerTurn`, ending the input phase.
+#[inline]
+fn advance_turn(next_turn_state: &mut Option<ResMut<NextState<TurnState>>>) {
     if let Some(next) = next_turn_state {
         next.set(TurnState::PlayerTurn);
     }

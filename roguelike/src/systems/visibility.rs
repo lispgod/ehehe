@@ -92,12 +92,6 @@ struct Slope {
 }
 
 impl Slope {
-    /// self > other  ⟺  self.y / self.x > other.y / other.x
-    #[allow(dead_code)]
-    fn gt(self, other: Self) -> bool {
-        self.y * other.x > other.y * self.x
-    }
-
     /// self >= other
     fn ge(self, other: Self) -> bool {
         self.y * other.x >= other.y * self.x

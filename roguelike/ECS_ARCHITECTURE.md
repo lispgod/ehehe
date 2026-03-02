@@ -234,12 +234,26 @@ Using these methods instead of raw field mutation guarantees that:
 | `CameraFollow` | marker | Tags the entity the camera tracks |
 | `BlocksMovement` | marker | Marks an entity as impassable (enforced via `SpatialIndex`) |
 | `Hostile` | marker | Tags entities hostile to the player (triggers bump-to-attack) |
+| `HellGate` | marker | Tags the enemy stronghold — destroying it wins the game |
 | `Viewshed` | `{ range, visible_tiles, revealed_tiles, dirty }` | Field-of-view + fog-of-war memory |
 | `Health` | `{ current: i32, max: i32 }` | Hit-point pool for damageable entities |
 | `CombatStats` | `{ attack: i32, defense: i32 }` | Offensive/defensive power for combat resolution |
 | `Speed` | `Speed(i32)` | Energy gained per world tick (100 = normal) |
 | `Energy` | `Energy(i32)` | Accumulated action points; act when ≥ ACTION_COST |
 | `AiState` | `Idle \| Chasing` | AI behaviour state for non-player entities |
+| `Faction` | `Wildlife \| Outlaws \| Lawmen \| Vaqueros` | Group affiliation for spawning tiers |
+| `Stamina` | `{ current: i32, max: i32 }` | Pool for special actions (grenades, etc.) |
+| `Ammo` | `{ current: i32, max: i32 }` | Ammunition for AI ranged attacks |
+| `Item` | marker | Tags an entity as a pickable item |
+| `ItemKind` | `Gun \| Knife \| Tomahawk \| Grenade \| Whiskey \| Hat` | Item type and associated stats |
+| `Inventory` | `{ items: Vec<Entity> }` | Holds item entities belonging to an entity |
+| `Projectile` | `{ path, path_index, tiles_per_tick, damage, penetration, source }` | Traveling bullet/shrapnel |
+| `CollectibleKind` | `Caps \| Bullets \| Powder \| Bandages \| Dollars` | Supply drop type |
+| `Experience` | `{ current: i32, next_level: i32 }` | EXP tracking for the player |
+| `Level` | `Level(i32)` | Player level for stat scaling |
+| `LootTable` | `{ drop_chance: f64 }` | Controls item drops on entity death |
+| `ExpReward` | `ExpReward(i32)` | EXP awarded when this entity is killed |
+| `Thrown` | marker | Tags a thrown item that landed and can be recovered |
 
 ### Why markers?
 
@@ -268,29 +282,40 @@ Entity
  └─ Viewshed { range: 15, dirty: true }
 ```
 
-### Monster (Goblin / Orc / Rat)
+### Monster (Coyote / Outlaw / Cowboy / …)
 
 ```text
 Entity
  ├─ Position { x, y }
- ├─ Name("Goblin")
- ├─ Renderable { symbol: "g", fg: Green, … }
+ ├─ Name("Coyote")
+ ├─ Renderable { symbol: "c", fg: Rgb(160,120,80), … }
  ├─ BlocksMovement  (marker)
  ├─ Hostile         (marker)
- ├─ Health { current: 8, max: 8 }
- ├─ CombatStats { attack: 3, defense: 1 }
- ├─ Speed(80)       (slower than player)
+ ├─ Faction::Wildlife
+ ├─ Health { current: 4, max: 4 }
+ ├─ CombatStats { attack: 2, defense: 0 }
+ ├─ Speed(110)
  ├─ Energy(0)
  ├─ AiState::Idle
- └─ Viewshed { range: 8 }
+ ├─ LootTable { drop_chance: 0.25 }
+ ├─ ExpReward(3)
+ ├─ Viewshed { range: 6 }
+ └─ Ammo { current: 0, max: 0 }
 ```
 
-### Future: Item
+All hostile entities share the same component bundle, constructed via
+`spawn::spawn_monster()`. This ensures consistent spawning across
+initial placement and wave spawning.
+
+### Item
 
 ```text
 Entity
  ├─ Position { x, y }
- └─ Renderable { symbol: "!", fg: Yellow, … }
+ ├─ Item            (marker)
+ ├─ Name("Colt Army")
+ ├─ Renderable { symbol: "P", fg: …, … }
+ └─ ItemKind::Gun { loaded: 6, capacity: 6, caliber: Cal44, attack: 6 }
 ```
 
 Entities are composed at spawn time by bundling the components they need.
@@ -418,8 +443,15 @@ The input system always runs so the player can unpause or quit.
 |---|---|---|---|
 | `MoveIntent` | `entity, dx, dy` | `input_system`, `ai_system` | `movement_system` |
 | `AttackIntent` | `attacker, target` | `movement_system` (bump-to-attack) | `combat_system` |
-| `DamageEvent` | `target, amount` | `combat_system`, `spell_system` | `apply_damage_system` |
-| `SpellCastIntent` | `caster: Entity, radius: CoordinateUnit` | `input_system` | `spell_system` |
+| `DamageEvent` | `target, amount` | `combat_system`, `spell_system`, `projectile_system`, `throw_system` | `apply_damage_system` |
+| `SpellCastIntent` | `caster, radius, target, grenade_index` | `input_system` | `spell_system` |
+| `RangedAttackIntent` | `attacker, range, dx, dy, gun_item` | `input_system` | `ranged_attack_system` |
+| `AiRangedAttackIntent` | `attacker, target, range` | `ai_system` | `ai_ranged_attack_system` |
+| `MeleeWideIntent` | `attacker` | `input_system` | `melee_wide_system` |
+| `PickupItemIntent` | `picker` | `input_system` | `pickup_system` |
+| `UseItemIntent` | `user, item_index` | `input_system` | `use_item_system` |
+| `DropItemIntent` | `user, item_index` | `input_system` | `drop_item_system` |
+| `ThrowItemIntent` | `thrower, item_entity, item_index, dx, dy, range, damage` | `input_system` | `throw_system` |
 
 Events decouple intent from physics. AI systems emit the same `MoveIntent`
 as the player input system — the resolution pipeline is completely shared.
@@ -644,23 +676,26 @@ roguelike/src/
 ├── lib.rs               Module declarations
 ├── grid_vec.rs          GridVec: algebraic 2D integer vector (Abelian group, distances, rotations, Bresenham, tests)
 ├── components.rs        All ECS components (Position, Player, Name, Renderable, Viewshed, Health, CombatStats, Speed, Energy, AiState, Hostile, …)
-├── events.rs            MoveIntent, AttackIntent, DamageEvent, SpellCastIntent
+├── events.rs            MoveIntent, AttackIntent, DamageEvent, SpellCastIntent, RangedAttackIntent, …
 ├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
 ├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, CombatLog, TurnCounter, KillCount, GameState, TurnState
-├── plugins.rs           RoguelikePlugin + RoguelikeSet + spawn_player + spawn_monsters + monster templates
+├── plugins.rs           RoguelikePlugin + RoguelikeSet + spawn_player + spawn_monsters
 ├── systems/
 │   ├── mod.rs           Re-exports
-│   ├── input.rs         input_system
+│   ├── input.rs         input_system (keyboard handling + intent emission)
 │   ├── spatial_index.rs spatial_index_system
 │   ├── movement.rs      movement_system (uses SpatialIndex + BlocksMovement + bump-to-attack)
-│   ├── combat.rs        combat_system + ranged_attack_system (Bresenham LoS) + apply_damage_system + death_system
-│   ├── ai.rs            ai_system + energy_accumulate_system
+│   ├── combat.rs        combat_system + ranged_attack_system + ai_ranged_attack_system + apply_damage_system + death_system + level_up_system + melee_wide_system
+│   ├── ai.rs            ai_system + energy_accumulate_system (A* pathfinding)
 │   ├── visibility.rs    visibility_system (recursive symmetric shadowcasting)
 │   ├── camera.rs        camera_follow_system
-│   ├── spell.rs         spell_system (AoE spell resolution)
-│   ├── wave_spawn.rs    wave_spawn_system (escalating enemy wave spawning)
-│   ├── turn.rs          end_player_turn + end_world_turn (state transitions + TurnCounter)
-│   └── render.rs        draw_system (three-state fog of war + health + combat log + turn/kill counters)
+│   ├── spell.rs         spell_system (grenade AoE via shrapnel projectiles)
+│   ├── spawn.rs         MonsterTemplate + MONSTER_TEMPLATES + spawn_monster helper (shared by plugins.rs and wave_spawn.rs)
+│   ├── projectile.rs    projectile_system + spawn_bullet + spawn_shrapnel
+│   ├── inventory.rs     pickup_system + use_item_system + drop_item_system + reload_system + auto_pickup_system + throw_system
+│   ├── wave_spawn.rs    wave_spawn_system (escalating enemy wave spawning from gate)
+│   ├── turn.rs          end_player_turn + end_world_turn (state transitions + TurnCounter + regen)
+│   └── render.rs        draw_system (three-state fog of war + health + combat log + turn/kill counters + inventory UI)
 ├── gamemap.rs           GameMap struct & noise-based procedural generation
 ├── voxel.rs             Voxel struct & rendering helpers
 ├── typeenums.rs         Floor / Furniture enums
@@ -686,7 +721,7 @@ features slot in naturally:
 | ~~Kill tracking / scoring~~ | ✅ Implemented: `KillCount` resource incremented by `death_system`, displayed in status bar |
 | ~~Turn counter~~ | ✅ Implemented: `TurnCounter` resource incremented by `end_world_turn`, displayed in status bar |
 | ~~Ranged combat~~ | ✅ Implemented: `RangedAttackIntent` with Bresenham line trajectory, wall obstruction, and bullet penetration mechanics |
-| Items & inventory | `Item` marker + `InBackpack(Entity)` component |
+| ~~Items & inventory~~ | ✅ Implemented: `Item` marker + `Inventory { items: Vec<Entity> }` + auto-pickup + drop + use + reload |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
 | ~~Pathfinding AI~~ | ✅ Implemented: A* with Chebyshev heuristic (admissible + consistent for 8-connected grids), lexicographic (f, h) tie-breaking for reduced node expansion. 256-node exploration budget with greedy fallback. |
 

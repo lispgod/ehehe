@@ -3,11 +3,55 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
-    Inventory, Item, ItemKind, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
+    AiLookDir, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, Experience, ExpReward, Faction, Health, Hostile,
+    Inventory, Item, ItemKind, Level, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
+
+// ───────────────────────── Procedural NPC Names ───────────────────
+
+const FIRST_NAMES: &[&str] = &[
+    "Silas", "Ezekiel", "Cornelius", "Jebediah", "Obadiah",
+    "Elijah", "Caleb", "Josiah", "Amos", "Enoch",
+    "Rufus", "Virgil", "Cyrus", "Hector", "Magnus",
+    "Bartholomew", "Thaddeus", "Solomon", "Augustus", "Percival",
+    "Clayton", "Emmett", "Levi", "Abel", "Jesse",
+    "Wyatt", "Morgan", "Hank", "Earl", "Jasper",
+];
+
+const NICKNAMES: &[&str] = &[
+    "Dusty", "Slim", "Rattlesnake", "Two-Gun", "One-Eye",
+    "Whiskey", "Ironjaw", "Red", "Trigger", "Sidewinder",
+    "Buckshot", "Tombstone", "Cactus", "Copperhead", "Dynamite",
+    "Grizzly", "Hawk", "Longshot", "Maverick", "Sundown",
+];
+
+const LAST_NAMES: &[&str] = &[
+    "Crowley", "Boone", "Shaw", "Hollister", "Cartwright",
+    "McAllister", "Dalton", "Cassidy", "Harlan", "Garrett",
+    "Ringo", "Earp", "Masterson", "Holliday", "Calhoun",
+    "Braddock", "Pickett", "Stanton", "Thornton", "Wainwright",
+];
+
+/// Generates a procedural 1850s cowboy-themed name from position hash.
+/// ~30% of NPCs get a nickname (e.g., "Dusty" Silas Crowley).
+fn generate_npc_name(x: i32, y: i32) -> String {
+    let hash1 = (x.wrapping_mul(7919) ^ y.wrapping_mul(104729)).unsigned_abs() as usize;
+    let hash2 = (x.wrapping_mul(1009) ^ y.wrapping_mul(7529)).unsigned_abs() as usize;
+    let hash3 = (x.wrapping_mul(2903) ^ y.wrapping_mul(3571)).unsigned_abs() as usize;
+    let hash4 = (x.wrapping_mul(5381) ^ y.wrapping_mul(9103)).unsigned_abs() as usize;
+
+    let first = FIRST_NAMES[hash1 % FIRST_NAMES.len()];
+    let last = LAST_NAMES[hash2 % LAST_NAMES.len()];
+
+    if hash3 % 10 < 3 {
+        let nick = NICKNAMES[hash4 % NICKNAMES.len()];
+        format!("\"{nick}\" {first} {last}")
+    } else {
+        format!("{first} {last}")
+    }
+}
 
 /// Monster archetype for procedural spawning.
 ///
@@ -134,9 +178,17 @@ pub fn spawn_monster(
         }
     }
 
+    // Humanoid NPCs get procedurally generated cowboy names.
+    // Wildlife keeps its species name.
+    let npc_name: String = if matches!(template.faction, Faction::Wildlife) {
+        template.name.into()
+    } else {
+        generate_npc_name(x, y)
+    };
+
     commands.spawn((
         Position { x, y },
-        Name(template.name.into()),
+        Name(npc_name),
         Renderable {
             symbol: template.symbol.into(),
             fg: template.fg,
@@ -172,5 +224,10 @@ pub fn spawn_monster(
             max: template.ammo,
         },
         Inventory { items: inv_items },
+        Level(1),
+        Experience {
+            current: 0,
+            next_level: 20,
+        },
     ));
 }

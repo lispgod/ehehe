@@ -12,7 +12,7 @@ use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
     CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
-    InputState, KillCount, SpellParticles, TurnCounter,
+    InputState, KillCount, SoundEvents, SpellParticles, TurnCounter, SOUND_RANGE,
 };
 use crate::systems::input::KEYBINDINGS;
 use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
@@ -22,9 +22,28 @@ use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
 const PARTICLE_LIFETIME: f32 = 8.0;
 
 
-/// Ticks and renders combat particles each frame.
-pub fn particle_tick_system(mut particles: ResMut<SpellParticles>) {
+/// Ticks and renders combat particles each frame. Also computes which
+/// sound indicators should be visible on the map from `SoundEvents`.
+pub fn particle_tick_system(
+    mut particles: ResMut<SpellParticles>,
+    sound_events: Res<SoundEvents>,
+    player_query: Query<(&Position, Option<&Viewshed>), With<Player>>,
+) {
     particles.tick();
+
+    // Compute sound indicators: audible events outside visible area.
+    particles.sound_indicators.clear();
+    if let Ok((pos, Some(vs))) = player_query.single() {
+        let player_world = pos.as_grid_vec();
+        for (event_pos, _) in &sound_events.events {
+            let in_range = player_world.chebyshev_distance(*event_pos) <= SOUND_RANGE;
+            let is_visible = vs.visible_tiles.contains(event_pos);
+            let is_revealed = vs.revealed_tiles.contains(event_pos);
+            if in_range && !is_visible && is_revealed {
+                particles.sound_indicators.push(*event_pos);
+            }
+        }
+    }
 }
 
 /// Advances the cursor blink timer each frame.
@@ -241,6 +260,21 @@ pub fn draw_system(
             }
         }
 
+        // Render sound indicators ("!") for audible events outside visible area.
+        // (Sound indicators are pre-computed in particle_tick_system.)
+        for event_pos in &spell_particles.sound_indicators {
+            let screen = *event_pos - bottom_left;
+            if screen.x >= 0
+                && screen.x < render_width as CoordinateUnit
+                && screen.y >= 0
+                && screen.y < render_height as CoordinateUnit
+            {
+                let bg = render_packet[screen.y as usize][screen.x as usize].2;
+                render_packet[screen.y as usize][screen.x as usize] =
+                    ("!".into(), RatColor::Rgb(255, 255, 0), bg);
+            }
+        }
+
         let mut render_lines = Vec::new();
 
         for y in 0..render_height as usize {
@@ -324,6 +358,7 @@ pub fn draw_system(
             &turn_counter,
             &kill_count,
             &collectibles,
+            visible_tiles,
         );
 
         // ── Inventory Bar (wide, horizontal) ────────────────────
@@ -411,6 +446,7 @@ fn render_bottom_panel(
     turn_counter: &TurnCounter,
     kill_count: &KillCount,
     collectibles: &Collectibles,
+    visible_tiles: Option<&HashSet<MyPoint>>,
 ) {
     // Split bottom panel into four horizontal columns: stats | log | furniture | visible
     let horiz_chunks = Layout::default()
@@ -433,11 +469,14 @@ fn render_bottom_panel(
 
     // ── Central Log (middle) ────────────────────────────────────
     let log_height = log_area.height.saturating_sub(2) as usize; // subtract border
-    let log_lines: Vec<Line> = combat_log
-        .recent(log_height.max(1))
-        .into_iter()
-        .map(|s| Line::from(format!(" {s}")).dark_gray())
-        .collect();
+    let log_lines: Vec<Line> = if let Some(vt) = visible_tiles {
+        combat_log.recent_visible(log_height.max(1), vt)
+    } else {
+        combat_log.recent(log_height.max(1))
+    }
+    .into_iter()
+    .map(|s| Line::from(format!(" {s}")).dark_gray())
+    .collect();
 
     let title = format!(" Log | Tick:{} Kills:{} | ?:help ", turn_counter.0, kill_count.0);
     frame.render_widget(

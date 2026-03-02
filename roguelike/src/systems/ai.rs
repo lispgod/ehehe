@@ -121,6 +121,28 @@ fn a_star_first_step(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
+/// Checks line-of-sight between two points using Bresenham, ignoring
+/// the directional FOV cone.  Returns `true` when no vision-blocking
+/// furniture exists on the path (the endpoints are excluded from the
+/// obstruction check so the attacker can fire from / into a doorway).
+fn has_clear_line_of_sight(origin: GridVec, target: GridVec, game_map: &GameMapResource) -> bool {
+    let path = origin.bresenham_line(target);
+    for &tile in &path[1..] {
+        if tile == target {
+            return true;
+        }
+        match game_map.0.get_voxel_at(&tile) {
+            Some(v) => {
+                if v.furniture.as_ref().is_some_and(|f| f.blocks_vision()) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Returns `true` if two factions are hostile to each other.
 /// - Outlaws and Lawmen fight each other.
 /// - Wildlife attacks everyone.
@@ -513,7 +535,7 @@ pub fn ai_system(
                 // If all guns are empty, attempt to reload one before attacking.
                 let mut used_gun = false;
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
-                    && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&target_vec))
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map)
                 {
                     if let Some(ref mut inv) = inventory {
                         let gun_ent = inv.items.iter().copied().find(|&ent| {

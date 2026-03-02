@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{Health, Stamina, Player, Position};
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, ExtraWorldTicks, GameMapResource, TurnCounter, TurnState};
+use crate::resources::{CombatLog, ExtraWorldTicks, GameMapResource, SoundEvents, TurnCounter, TurnState};
 use crate::typeenums::Floor;
 
 /// Stamina regenerated per world turn.
@@ -37,8 +37,10 @@ pub fn end_world_turn(
     mut turn_counter: ResMut<TurnCounter>,
     mut player_query: Query<(&mut Stamina, &mut Health), With<Player>>,
     mut extra_ticks: ResMut<ExtraWorldTicks>,
+    mut sound_events: ResMut<SoundEvents>,
 ) {
     turn_counter.0 += 1;
+    sound_events.tick();
 
     if let Ok((mut stamina, mut health)) = player_query.single_mut() {
         // Regenerate player stamina using the pool's recover method.

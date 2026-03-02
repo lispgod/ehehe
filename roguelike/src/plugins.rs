@@ -13,7 +13,7 @@ use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
     CameraPosition, Collectibles, CombatLog, CursorPosition, ExtraWorldTicks, GameMapResource, GameState, InputState,
-    KillCount, MapSeed, PendingExp, RestartRequested, SpatialIndex, SpellParticles, TurnCounter,
+    KillCount, MapSeed, PendingExp, PendingNpcExp, RestartRequested, SoundEvents, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
 use crate::systems::{ai, camera, combat, input, inventory, movement, projectile, render, spawn, spatial_index, spell, turn, visibility};
@@ -83,12 +83,14 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<TurnCounter>()
             .init_resource::<KillCount>()
             .init_resource::<PendingExp>()
+            .init_resource::<PendingNpcExp>()
             .init_resource::<SpellParticles>()
             .init_resource::<InputState>()
             .init_resource::<RestartRequested>()
             .init_resource::<CursorPosition>()
             .init_resource::<Collectibles>()
             .init_resource::<ExtraWorldTicks>()
+            .init_resource::<SoundEvents>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -106,7 +108,8 @@ impl Plugin for RoguelikePlugin {
                     .chain(),
             )
             // ── Input (PreUpdate — emits intents before Update processes them) ──
-            .add_systems(PreUpdate, (input::input_system, restart_system).chain())
+            .add_systems(PreUpdate, input::input_system)
+            .add_systems(PreUpdate, restart_system)
             // ── Index (always runs) ──
             .add_systems(
                 Update,
@@ -132,6 +135,7 @@ impl Plugin for RoguelikePlugin {
                     combat::apply_damage_system,
                     combat::death_system,
                     combat::level_up_system,
+                    combat::npc_level_up_system,
                 )
                     .chain()
                     .in_set(RoguelikeSet::Action)
@@ -341,7 +345,7 @@ fn restart_system(
         commands.entity(entity).despawn();
     }
 
-    combat_log.messages.clear();
+    combat_log.clear();
     kill_count.0 = 0;
     turn_counter.0 = 0;
     pending_exp.0 = 0;

@@ -152,13 +152,26 @@ pub struct KillCount(pub u32);
 #[derive(Resource, Debug, Default)]
 pub struct PendingExp(pub i32);
 
+/// Accumulates EXP from kills for NPC entities (enemy level-up).
+/// Processed by the `npc_level_up_system` after death processing.
+#[derive(Resource, Debug, Default)]
+pub struct PendingNpcExp {
+    pub entries: Vec<(Entity, i32)>,
+}
+
 /// Accumulator for combat log messages displayed in the status bar.
 /// Maintains a rolling history of recent messages using a bounded
 /// ring buffer (`VecDeque`) for O(1) enqueue/dequeue — the correct
 /// data structure for a bounded FIFO queue.
+///
+/// Each message may optionally carry a world position so the render
+/// system can filter to only show events visible to the player.
 #[derive(Resource, Debug, Default)]
 pub struct CombatLog {
     pub messages: VecDeque<String>,
+    /// Parallel deque: the world position associated with each message.
+    /// `None` means the message is always shown (e.g., level-up, UI feedback).
+    positions: VecDeque<Option<GridVec>>,
 }
 
 /// Maximum number of messages retained in the combat log.
@@ -167,9 +180,14 @@ const MAX_COMBAT_LOG_MESSAGES: usize = 50;
 /// Active combat particles for rendering grenade/bullet animations.
 /// Each entry is (position, remaining_lifetime_frames, delay_before_visible).
 /// Particles with delay > 0 are not yet visible; they count down each tick.
+///
+/// Also stores pre-computed sound indicator positions for the render system.
 #[derive(Resource, Debug, Default)]
 pub struct SpellParticles {
     pub particles: Vec<(MyPoint, u32, u32)>,
+    /// World positions where "!" sound indicators should appear this frame.
+    /// Computed by the particle tick system from SoundEvents + player viewshed.
+    pub sound_indicators: Vec<MyPoint>,
 }
 
 /// Maximum number of active combat particles to prevent unbounded growth.
@@ -217,13 +235,31 @@ impl SpellParticles {
 }
 
 impl CombatLog {
-    /// Adds a message and trims the oldest entry to keep the log bounded.
+    /// Adds a message (always visible) and trims the oldest entry.
     /// O(1) amortised via `VecDeque::pop_front` (no element shifting).
     pub fn push(&mut self, message: String) {
         self.messages.push_back(message);
+        self.positions.push_back(None);
         if self.messages.len() > MAX_COMBAT_LOG_MESSAGES {
             self.messages.pop_front();
+            self.positions.pop_front();
         }
+    }
+
+    /// Adds a message tagged with a world position for visibility filtering.
+    pub fn push_at(&mut self, message: String, pos: GridVec) {
+        self.messages.push_back(message);
+        self.positions.push_back(Some(pos));
+        if self.messages.len() > MAX_COMBAT_LOG_MESSAGES {
+            self.messages.pop_front();
+            self.positions.pop_front();
+        }
+    }
+
+    /// Clears all entries (messages and positions).
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.positions.clear();
     }
 
     /// Returns the most recent `n` messages as owned references.
@@ -231,6 +267,22 @@ impl CombatLog {
         let len = self.messages.len();
         let start = len.saturating_sub(n);
         self.messages.iter().skip(start).map(|s| s.as_str()).collect()
+    }
+
+    /// Returns the most recent `n` messages that are either untagged
+    /// (always visible) or tagged with a position inside `visible`.
+    pub fn recent_visible(&self, n: usize, visible: &std::collections::HashSet<GridVec>) -> Vec<&str> {
+        self.messages
+            .iter()
+            .zip(self.positions.iter())
+            .filter(|(_, pos)| pos.map_or(true, |p| visible.contains(&p)))
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|(msg, _)| msg.as_str())
+            .collect()
     }
 }
 
@@ -276,6 +328,32 @@ impl Default for Collectibles {
             bandages: 5,
             dollars: 0,
         }
+    }
+}
+
+/// Tracks audible events (gunshots, explosions) that should produce "!" sound
+/// indicators on the map in areas not visible to the player.
+#[derive(Resource, Debug, Default)]
+pub struct SoundEvents {
+    /// (position, remaining_ticks)
+    pub events: Vec<(GridVec, u32)>,
+}
+
+/// Maximum audible range (Chebyshev distance) for sound indicators.
+pub const SOUND_RANGE: i32 = 20;
+
+impl SoundEvents {
+    /// Records an audible event at the given position.
+    pub fn add(&mut self, pos: GridVec) {
+        self.events.push((pos, 3));
+    }
+
+    /// Ticks down lifetimes and removes expired events.
+    pub fn tick(&mut self) {
+        self.events.retain_mut(|(_, life)| {
+            *life = life.saturating_sub(1);
+            *life > 0
+        });
     }
 }
 

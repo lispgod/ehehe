@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CombatStats, Hostile, Name, Player, Position, Projectile, Renderable};
 use crate::events::DamageEvent;
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, GameMapResource};
+use crate::resources::{CombatLog, GameMapResource, SoundEvents};
 use crate::typedefs::RatColor;
 
 /// Bullet travel speed in tiles per tick.
@@ -97,9 +97,11 @@ pub fn projectile_system(
     mut projectiles: Query<(Entity, &mut Position, &mut Projectile, &mut Renderable)>,
     mut damage_events: MessageWriter<DamageEvent>,
     targets: Query<(Entity, &Position, &CombatStats, Option<&Name>), (With<Hostile>, Without<Projectile>)>,
-    player_query: Query<(Entity, &Position), (With<Player>, Without<Projectile>)>,
+    player_query: Query<(Entity, &Position, &CombatStats, Option<&Name>), (With<Player>, Without<Projectile>)>,
+    source_names: Query<Option<&Name>>,
     game_map: Res<GameMapResource>,
     mut combat_log: ResMut<CombatLog>,
+    mut sound_events: ResMut<SoundEvents>,
 ) {
     // Build a lookup of hostile entities by position for O(1) hit detection.
     let mut target_by_pos: std::collections::HashMap<GridVec, Vec<(Entity, i32, String)>> =
@@ -112,12 +114,19 @@ pub fn projectile_system(
             .push((target_entity, target_stats.defense, t_name));
     }
 
-    // Player position for shrapnel self-damage.
+    // Player position for NPC bullet hits and shrapnel self-damage.
     let player_info = player_query.single().ok();
 
     for (proj_entity, mut proj_pos, mut proj, mut renderable) in &mut projectiles {
         let mut despawn = false;
         let steps = proj.tiles_per_tick;
+
+        // Look up the name of the entity that fired this projectile.
+        let source_name: String = source_names
+            .get(proj.source)
+            .ok()
+            .flatten()
+            .map_or("???".into(), |n| n.0.clone());
 
         for _ in 0..steps {
             // Check current tile for damage before advancing.
@@ -127,6 +136,7 @@ pub fn projectile_system(
 
             // Stop if hitting an impassable wall.
             if !game_map.0.is_passable(&tile) {
+                sound_events.add(tile);
                 despawn = true;
                 break;
             }
@@ -147,7 +157,11 @@ pub fn projectile_system(
                         amount: hit_damage,
                         source: Some(proj.source),
                     });
-                    combat_log.push(format!("Projectile hits {t_name} for {hit_damage} damage!"));
+                    combat_log.push_at(
+                        format!("{source_name}'s bullet hits {t_name} for {hit_damage} damage!"),
+                        tile,
+                    );
+                    sound_events.add(tile);
                     proj.penetration -= target_def;
                 }
                 if proj.penetration <= 0 {
@@ -156,9 +170,32 @@ pub fn projectile_system(
                 }
             }
 
+            // NPC bullet hitting the player: check if the projectile source
+            // is NOT the player and it landed on the player's tile.
+            if let Some((player_entity, player_pos, player_stats, player_name)) = &player_info
+                && proj.source != *player_entity
+                && tile == player_pos.as_grid_vec()
+                && proj.penetration > 0
+            {
+                let hit_damage = proj.penetration;
+                damage_events.write(DamageEvent {
+                    target: *player_entity,
+                    amount: hit_damage,
+                    source: Some(proj.source),
+                });
+                let p_name = player_name.map_or("???", |n| &n.0);
+                combat_log.push(format!("{source_name}'s bullet hits {p_name} for {hit_damage} damage!"));
+                sound_events.add(tile);
+                proj.penetration -= player_stats.defense;
+                if proj.penetration <= 0 {
+                    despawn = true;
+                    break;
+                }
+            }
+
             // Shrapnel self-damage: if the projectile's source is the player
             // and the projectile lands on the player's tile.
-            if let Some((player_entity, player_pos)) = &player_info
+            if let Some((player_entity, player_pos, _, _)) = &player_info
                 && proj.source == *player_entity && tile == player_pos.as_grid_vec() {
                     let self_damage = (proj.damage / SELF_DAMAGE_DIVISOR).max(1);
                     damage_events.write(DamageEvent {

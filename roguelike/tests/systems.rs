@@ -28,6 +28,8 @@ fn test_app() -> App {
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
+    app.init_resource::<PendingNpcExp>();
+    app.init_resource::<SoundEvents>();
     app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
@@ -560,6 +562,8 @@ fn test_app_with_spells() -> App {
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
+    app.init_resource::<PendingNpcExp>();
+    app.init_resource::<SoundEvents>();
     app.init_resource::<SpellParticles>();
     app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();
@@ -1000,6 +1004,8 @@ fn test_app_with_ranged() -> App {
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
     app.init_resource::<PendingExp>();
+    app.init_resource::<PendingNpcExp>();
+    app.init_resource::<SoundEvents>();
     app.init_resource::<SpellParticles>();
     app.init_resource::<CursorPosition>();
     app.init_state::<GameState>();

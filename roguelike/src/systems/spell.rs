@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Inventory, Stamina, Name};
+use crate::components::{CombatStats, Inventory, Item, ItemKind, Stamina, Name, Position, Renderable};
 use crate::events::{MolotovCastIntent, SpellCastIntent};
-use crate::resources::{CombatLog, GameMapResource, SpellParticles};
+use crate::resources::{CombatLog, GameMapResource, MapSeed, SpellParticles};
 use crate::typeenums::{Floor, Furniture};
+use crate::typedefs::RatColor;
 
 /// Stamina cost for casting the AoE grenade.
 const SPELL_STAMINA_COST: i32 = 10;
@@ -22,6 +23,7 @@ pub fn spell_system(
     mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>)>,
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
+    seed: Res<MapSeed>,
 ) {
     for intent in intents.read() {
         let Ok((caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
@@ -59,6 +61,7 @@ pub fn spell_system(
         // Environmental destruction: destroy obstacles and set some on fire.
         let mut destroyed_count = 0;
         let mut fire_count = 0;
+        let mut water_count = 0;
         for dx in -intent.radius..=intent.radius {
             for dy in -intent.radius..=intent.radius {
                 let dist = dx.abs().max(dy.abs());
@@ -67,13 +70,28 @@ pub fn spell_system(
                     if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos)
                         && let Some(ref furn) = voxel.furniture {
                             let is_flammable = furn.is_flammable();
+                            let is_water_trough = matches!(furn, Furniture::WaterTrough);
+                            let is_lootable = matches!(furn, Furniture::Crate | Furniture::Barrel);
                             // Sturdy non-destructible objects survive explosions.
                             let is_indestructible = matches!(
                                 furn,
                                 Furniture::Wall | Furniture::LampPost
-                                | Furniture::HitchingPost | Furniture::WaterTrough
+                                | Furniture::HitchingPost
                             );
-                            if !is_indestructible {
+                            if is_water_trough {
+                                // Water trough spills water when destroyed
+                                voxel.furniture = None;
+                                voxel.floor = Some(Floor::Water);
+                                water_count += 1;
+                            } else if !is_indestructible {
+                                if is_lootable {
+                                    // Crates/barrels drop loot when destroyed
+                                    let loot_roll = crate::noise::value_noise(
+                                        target_pos.x, target_pos.y,
+                                        seed.0.wrapping_add(88888),
+                                    );
+                                    spawn_container_loot(&mut commands, target_pos.x, target_pos.y, loot_roll);
+                                }
                                 // Dynamite sets flammable things on fire in the inner radius.
                                 if is_flammable && dist <= 1 {
                                     voxel.furniture = None;
@@ -93,6 +111,9 @@ pub fn spell_system(
         }
         if fire_count > 0 {
             combat_log.push(format!("{fire_count} object(s) catch fire!"));
+        }
+        if water_count > 0 {
+            combat_log.push(format!("{water_count} water trough(s) spill water!"));
         }
     }
 }
@@ -171,4 +192,35 @@ pub fn molotov_system(
             combat_log.push(format!("A blazing inferno! {fire_count} tile(s) set ablaze!"));
         }
     }
+}
+
+/// Spawns a random loot item when a container (crate/barrel) is destroyed.
+/// Containers have a chance to drop supplies or small items.
+fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
+    if roll < 0.3 {
+        commands.spawn((
+            Position { x, y },
+            Item,
+            Name("Whiskey Bottle".into()),
+            Renderable { symbol: "w".into(), fg: RatColor::Rgb(180, 120, 60), bg: RatColor::Black },
+            ItemKind::Whiskey { heal: 10 },
+        ));
+    } else if roll < 0.5 {
+        commands.spawn((
+            Position { x, y },
+            Item,
+            Name("Bowie Knife".into()),
+            Renderable { symbol: "/".into(), fg: RatColor::Rgb(192, 192, 210), bg: RatColor::Black },
+            ItemKind::Knife { attack: 4 },
+        ));
+    } else if roll < 0.65 {
+        commands.spawn((
+            Position { x, y },
+            Item,
+            Name("Dynamite Stick".into()),
+            Renderable { symbol: "*".into(), fg: RatColor::Rgb(255, 165, 0), bg: RatColor::Black },
+            ItemKind::Grenade { damage: 8, radius: 2 },
+        ));
+    }
+    // else: no drop (35% chance)
 }

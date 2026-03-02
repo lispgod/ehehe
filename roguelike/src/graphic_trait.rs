@@ -27,6 +27,7 @@ impl GraphicElement for Floor {
             Floor::ScorchedEarth => ".".into(),
             Floor::WoodPlanks => " ".into(),
             Floor::Fire => "^".into(),
+            Floor::Water => "~".into(),
         }
     }
 
@@ -43,6 +44,7 @@ impl GraphicElement for Floor {
             Floor::ScorchedEarth => RatColor::Rgb(90, 40, 20),
             Floor::WoodPlanks => RatColor::Rgb(130, 95, 50),
             Floor::Fire => RatColor::Rgb(255, 140, 0),
+            Floor::Water => RatColor::Rgb(80, 140, 200),
         }
     }
 
@@ -59,6 +61,7 @@ impl GraphicElement for Floor {
             Floor::ScorchedEarth => RatColor::Rgb(55, 30, 15),
             Floor::WoodPlanks => RatColor::Rgb(95, 70, 38),
             Floor::Fire => RatColor::Rgb(200, 60, 0),
+            Floor::Water => RatColor::Rgb(40, 80, 140),
         }
     }
 }

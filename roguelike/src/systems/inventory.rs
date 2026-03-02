@@ -214,10 +214,10 @@ const LOOT_TABLE: &[LootEntry] = &[
         weight: 0.11,
     },
     LootEntry {
-        name: "Cowboy Hat",
-        symbol: "^",
-        fg: RatColor::Rgb(210, 180, 140),
-        kind: ItemKind::Hat { defense: 1 },
+        name: "Bandages",
+        symbol: "+",
+        fg: RatColor::Rgb(220, 210, 200),
+        kind: ItemKind::Whiskey { heal: 5 },
         weight: 0.10,
     },
 ];

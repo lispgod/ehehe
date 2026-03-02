@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use crate::components::{Ammo, Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Experience, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
@@ -61,7 +61,6 @@ pub fn cursor_blink_system(mut cursor: ResMut<CursorPosition>) {
 /// ├────────┬────────────────────────┬───────────┤
 /// │ Stats  │    Central Log         │  Info     │
 /// │ HP/STA │    (combat log)        │  Inv/Vis  │
-/// │ Ammo   │                       │           │
 /// └────────┴────────────────────────┴───────────┘
 pub fn draw_system(
     mut context: ResMut<RatatuiContext>,
@@ -69,7 +68,7 @@ pub fn draw_system(
     camera: Res<CameraPosition>,
     renderables: Query<(&Position, &Renderable, Option<&Name>), Without<Projectile>>,
     player_query: Query<
-        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Ammo>, Option<&Inventory>, Option<&Level>, Option<&Experience>),
+        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Inventory>, Option<&Level>, Option<&Experience>),
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
@@ -107,25 +106,24 @@ pub fn draw_system(
         let render_height = game_area.height;
 
         // Collect the player's visible and revealed tiles.
-        let (visible_tiles, revealed_tiles, player_hp, player_stamina, player_ammo, player_inv, player_level, player_exp): (
+        let (visible_tiles, revealed_tiles, player_hp, player_stamina, player_inv, player_level, player_exp): (
             Option<&HashSet<MyPoint>>,
             Option<&HashSet<MyPoint>>,
             Option<&Health>,
             Option<&Stamina>,
-            Option<&Ammo>,
             Option<&Inventory>,
             Option<&Level>,
             Option<&Experience>,
         ) = player_query
             .single()
             .ok()
-            .map(|(_, vs, hp, sta, ammo, inv, lvl, exp)| {
+            .map(|(_, vs, hp, sta, inv, lvl, exp)| {
                 let (vis, rev) = vs
                     .map(|vs| (Some(&vs.visible_tiles), Some(&vs.revealed_tiles)))
                     .unwrap_or((None, None));
-                (vis, rev, hp, sta, ammo, inv, lvl, exp)
+                (vis, rev, hp, sta, inv, lvl, exp)
             })
-            .unwrap_or((None, None, None, None, None, None, None, None));
+            .unwrap_or((None, None, None, None, None, None, None));
 
         let mut render_packet = game_map.0.create_render_packet_with_fog(
             &camera.0,
@@ -349,7 +347,6 @@ pub fn draw_system(
             bottom_area,
             player_hp,
             player_stamina,
-            player_ammo,
             &visible_entity_infos,
             &visible_furniture,
             &combat_log,
@@ -437,7 +434,6 @@ fn render_bottom_panel(
     area: Rect,
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
-    player_ammo: Option<&Ammo>,
     visible_entities: &[(String, RatColor, RatColor, String)],
     visible_furniture: &[(String, RatColor, String)],
     combat_log: &CombatLog,
@@ -452,7 +448,7 @@ fn render_bottom_panel(
     let horiz_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(22),   // Stats column (HP, Stamina, Ammo, Level)
+            Constraint::Length(22),   // Stats column (HP, Stamina, Level)
             Constraint::Min(1),       // Central log (wide, fills remaining space)
             Constraint::Length(18),   // Furniture legend column
             Constraint::Length(22),   // Visible entities column
@@ -465,7 +461,7 @@ fn render_bottom_panel(
     let visible_area = horiz_chunks[3];
 
     // ── Stats Column (left) ─────────────────────────────────────
-    render_stats_column(frame, stats_area, player_hp, player_stamina, player_ammo, player_level, player_exp, collectibles);
+    render_stats_column(frame, stats_area, player_hp, player_stamina, player_level, player_exp, collectibles);
 
     // ── Central Log (middle) ────────────────────────────────────
     let log_height = log_area.height.saturating_sub(2) as usize; // subtract border
@@ -497,13 +493,12 @@ fn render_bottom_panel(
     render_visible_column(frame, visible_area, visible_entities);
 }
 
-/// Renders the stats column (HP, Stamina, Ammo, Level gauges stacked vertically).
+/// Renders the stats column (HP, Stamina, Level gauges stacked vertically).
 fn render_stats_column(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
-    player_ammo: Option<&Ammo>,
     player_level: Option<&Level>,
     player_exp: Option<&Experience>,
     collectibles: &Collectibles,
@@ -513,7 +508,6 @@ fn render_stats_column(
         .constraints([
             Constraint::Length(1), // HP gauge (compact, no border)
             Constraint::Length(1), // Stamina gauge
-            Constraint::Length(1), // Ammo gauge
             Constraint::Length(1), // EXP gauge
             Constraint::Length(1), // Collectibles line
             Constraint::Min(0),   // padding
@@ -545,16 +539,6 @@ fn render_stats_column(
         frame.render_widget(gauge, chunks[1]);
     }
 
-    // Ammo
-    if let Some(ammo) = player_ammo {
-        let ratio = if ammo.max > 0 { (ammo.current as f64 / ammo.max as f64).clamp(0.0, 1.0) } else { 0.0 };
-        let gauge = Gauge::default()
-            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow).bg(ratatui::style::Color::DarkGray))
-            .ratio(ratio)
-            .label(Span::from(format!("AMMO {}/{}", ammo.current, ammo.max)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
-        frame.render_widget(gauge, chunks[2]);
-    }
-
     // EXP
     if let (Some(exp), Some(level)) = (player_exp, player_level) {
         let ratio = if exp.next_level > 0 { (exp.current as f64 / exp.next_level as f64).clamp(0.0, 1.0) } else { 0.0 };
@@ -562,7 +546,7 @@ fn render_stats_column(
             .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Green).bg(ratatui::style::Color::DarkGray))
             .ratio(ratio)
             .label(Span::from(format!("Lv.{} {}/{}", level.0, exp.current, exp.next_level)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
-        frame.render_widget(gauge, chunks[3]);
+        frame.render_widget(gauge, chunks[2]);
     }
 
     // Collectibles
@@ -572,7 +556,7 @@ fn render_stats_column(
     );
     frame.render_widget(
         Paragraph::new(Line::from(coll_text).dark_gray()),
-        chunks[4],
+        chunks[3],
     );
 }
 

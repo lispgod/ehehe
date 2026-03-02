@@ -3,9 +3,10 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Health, HellGate, Hostile, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents};
+use crate::resources::{CombatLog, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents};
 use crate::systems::inventory::spawn_loot;
 use crate::grid_vec::GridVec;
+use crate::typeenums::Furniture;
 use crate::typedefs::{CoordinateUnit, RatColor};
 
 /// Computes the bullet endpoint by scaling a direction vector so the
@@ -232,9 +233,7 @@ pub fn level_up_system(
         stats.attack += 1;
         stats.defense += 1;
         hp.max += 5;
-        hp.current = hp.max; // full heal on level up
         stamina.max += 5;
-        stamina.current = stamina.max;
         combat_log.push(format!(
             "LEVEL UP! Now level {}! ATK {} DEF {} HP {} STA {}",
             level.0, stats.attack, stats.defense, hp.max, stamina.max
@@ -376,6 +375,7 @@ pub fn melee_wide_system(
     attacker_query: Query<(&Position, &CombatStats, Option<&Name>)>,
     targets: Query<(Entity, &Position, &CombatStats, Option<&Name>), With<Hostile>>,
     mut combat_log: ResMut<CombatLog>,
+    mut game_map: ResMut<GameMapResource>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
@@ -404,7 +404,33 @@ pub fn melee_wide_system(
             }
         }
 
-        if hit_count == 0 {
+        // Destroy adjacent destructible furniture (Chebyshev distance 1).
+        let mut furn_destroyed = 0;
+        for dx in -1..=1i32 {
+            for dy in -1..=1i32 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let tile = origin + GridVec::new(dx, dy);
+                if let Some(voxel) = game_map.0.get_voxel_at_mut(&tile)
+                    && let Some(ref furn) = voxel.furniture {
+                        let is_indestructible = matches!(
+                            furn,
+                            Furniture::Wall | Furniture::LampPost
+                            | Furniture::HitchingPost | Furniture::Rock
+                        );
+                        if !is_indestructible {
+                            voxel.furniture = None;
+                            furn_destroyed += 1;
+                        }
+                    }
+            }
+        }
+        if furn_destroyed > 0 {
+            combat_log.push(format!("{a_name} smashes {furn_destroyed} piece(s) of furniture!"));
+        }
+
+        if hit_count == 0 && furn_destroyed == 0 {
             combat_log.push(format!("{a_name} roundhouse kicks but hits nothing!"));
         }
     }

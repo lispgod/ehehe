@@ -7,6 +7,7 @@ use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, Energy, Factio
 use crate::events::{AiRangedAttackIntent, AttackIntent, MolotovCastIntent, MoveIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
+use crate::typeenums::Furniture;
 
 // ───────────────────────── A* Pathfinding ──────────────────────────
 
@@ -120,6 +121,19 @@ fn a_star_first_step(
 
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
+
+/// Returns `true` if any cardinal neighbor of `pos` is a cactus.
+/// Used by NPC pathfinding to avoid cactus-adjacent tiles.
+fn is_near_cactus(pos: GridVec, game_map: &GameMapResource) -> bool {
+    for neighbor in pos.cardinal_neighbors() {
+        if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
+            if matches!(voxel.furniture, Some(Furniture::Cactus)) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 /// Checks line-of-sight between two points using Bresenham, ignoring
 /// the directional FOV cone.  Returns `true` when no vision-blocking
@@ -299,6 +313,7 @@ pub fn ai_system(
                     let step = a_star_first_step(my_pos, item_vec, |p| {
                         game_map.0.is_passable(&p)
                             && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
+                            && !is_near_cactus(p, &game_map)
                     });
                     if let Some(step) = step {
                         if !step.is_zero() {
@@ -340,6 +355,7 @@ pub fn ai_system(
                     let step = a_star_first_step(my_pos, item_vec, |p| {
                         game_map.0.is_passable(&p)
                             && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
+                            && !is_near_cactus(p, &game_map)
                     });
                     if let Some(step) = step {
                         if !step.is_zero() {
@@ -603,6 +619,7 @@ pub fn ai_system(
                             .entities_at(&pos)
                             .iter()
                             .any(|&e| e != entity && blockers.contains(e))
+                        && !is_near_cactus(pos, &game_map)
                 })
                 .unwrap_or_else(|| (target_vec - my_pos).king_step());
 

@@ -91,6 +91,27 @@ impl GameMap {
             }
         }
 
+        // ── Step 2b: Cross streets (vertical dirt roads) ────────────
+        // Place several vertical cross streets at noise-determined positions
+        // to break up the grid and create a more varied town layout.
+        let cross_seed = seed.wrapping_add(66666);
+        let cross_count = 3 + ((value_noise(0, 0, cross_seed) * 4.0) as i32); // 3-6 cross streets
+        for i in 0..cross_count {
+            let cx_noise = value_noise(i, 0, cross_seed);
+            let cx = 20 + (cx_noise * (width - 40) as f64) as CoordinateUnit;
+            let cross_half_width = 1;
+            for x in (cx - cross_half_width)..=(cx + cross_half_width) {
+                for y in 1..height - 1 {
+                    if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
+                        if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                            voxel.floor = Some(Floor::Dirt);
+                            voxel.furniture = None;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 3: Generate buildings ──────────────────────────────
         let buildings = generate_buildings(width, height, seed);
 
@@ -258,22 +279,29 @@ fn generate_buildings(
     let street_y = height / 2;
     let bldg_seed = seed.wrapping_add(11111);
 
-    // Building rows: above and below the main street
-    let rows: &[(CoordinateUnit, CoordinateUnit)] = &[
-        (street_y + 5, street_y + 5 + 12),   // south row
-        (street_y - 16, street_y - 5),        // north row
+    // Building rows: multiple rows above and below the main street for a larger town.
+    // Extra rows are placed further from the street to fill the larger map.
+    let rows: Vec<(CoordinateUnit, CoordinateUnit)> = vec![
+        (street_y + 5, street_y + 5 + 12),    // south row 1 (close)
+        (street_y - 16, street_y - 5),         // north row 1 (close)
+        (street_y + 20, street_y + 20 + 12),   // south row 2 (far)
+        (street_y - 32, street_y - 20),        // north row 2 (far)
+        (street_y + 36, street_y + 36 + 10),   // south row 3 (outskirts)
+        (street_y - 46, street_y - 36),        // north row 3 (outskirts)
     ];
 
-    for &(row_min_y, row_max_y) in rows {
-        let mut cx = 6;
+    for (row_idx, &(row_min_y, row_max_y)) in rows.iter().enumerate() {
+        // Vary the starting offset per row for less grid-like placement
+        let row_offset_noise = value_noise(row_idx as i32, row_min_y, bldg_seed.wrapping_add(6666));
+        let mut cx = 6 + (row_offset_noise * 8.0) as CoordinateUnit;
         let mut bldg_index = 0u32;
         while cx < width - 10 {
-            let noise = value_noise(cx, bldg_index as i32, bldg_seed);
-            let kind_noise = value_noise(bldg_index as i32, cx, bldg_seed.wrapping_add(2222));
+            let noise = value_noise(cx, bldg_index as i32 + row_idx as i32, bldg_seed);
+            let kind_noise = value_noise(bldg_index as i32, cx + row_idx as i32, bldg_seed.wrapping_add(2222));
 
             let bw = 6 + (noise * 6.0) as CoordinateUnit; // width 6–11
             let bh = 5 + (noise * 4.0) as CoordinateUnit; // height 5–8
-            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 3.0) as CoordinateUnit;
+            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 4.0) as CoordinateUnit;
             let by = row_min_y + by_jitter;
 
             // Don't exceed row bounds or map bounds
@@ -288,7 +316,9 @@ fn generate_buildings(
                 });
             }
 
-            cx += bw + 3 + (noise * 3.0) as CoordinateUnit; // gap between buildings
+            // Vary the gap between buildings more
+            let gap_noise = value_noise(cx + 1, bldg_index as i32, bldg_seed.wrapping_add(4444));
+            cx += bw + 3 + (noise * 3.0 + gap_noise * 4.0) as CoordinateUnit;
             bldg_index += 1;
         }
     }
@@ -543,7 +573,7 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
 
 impl Default for GameMap {
     fn default() -> Self {
-        GameMap::new(200, 140, 42)
+        GameMap::new(400, 280, 42)
     }
 }
 
@@ -623,7 +653,7 @@ mod tests {
 
     #[test]
     fn game_map_spawn_area_is_clear() {
-        let map = GameMap::new(120, 80, 42);
+        let map = GameMap::new(400, 280, 42);
         // The spawn point area (within radius 6 of SPAWN_POINT) should be clear
         for dy in -5..=5 {
             for dx in -5..=5 {

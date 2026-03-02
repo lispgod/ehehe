@@ -12,7 +12,7 @@ const STAMINA_REGEN_PER_TURN: i32 = 2;
 const HEALTH_REGEN_PER_TURN: i32 = 1;
 
 /// Health regeneration only triggers every N turns to keep it slower than stamina.
-const HEALTH_REGEN_INTERVAL: u32 = 3;
+const HEALTH_REGEN_INTERVAL: u32 = 30;
 
 /// Fire spreads every N world turns.
 const FIRE_SPREAD_INTERVAL: u32 = 4;

@@ -32,7 +32,7 @@ All grid coordinates use the `GridVec` type, which forms an **Abelian group** (�
 | **Inverse** | `-v` for every `v` | Every vector has a negation |
 | **Commutativity** | `a + b = b + a` | Order doesn't matter |
 
-Additionally, `GridVec` supports scalar multiplication (ℤ-module structure), three
+Additionally, `GridVec` supports scalar multiplication (ℤ-module structure), four
 distance metrics, bilinear operations, and lattice rotations:
 
 | Metric | Formula | Use case |
@@ -40,15 +40,21 @@ distance metrics, bilinear operations, and lattice rotations:
 | Manhattan (L₁) | `\|Δx\| + \|Δy\|` | 4-connected grid distance |
 | Chebyshev (L∞) | `max(\|Δx\|, \|Δy\|)` | 8-connected (king move) distance |
 | Squared Euclidean | `Δx² + Δy²` | Comparison without sqrt (monotonic) |
+| Euclidean (L₂) | `√(Δx² + Δy²)` | True straight-line distance (for attenuation, display) |
 
 | Operation | Formula | Use case |
 |---|---|---|
 | **Dot product** | `aₓbₓ + aᵧbᵧ` | Projection, alignment test (positive → same half-plane, zero → orthogonal) |
 | **2D cross product** | `aₓbᵧ − aᵧbₓ` | Signed area / orientation test (det of 2×2 matrix [a\|b]) |
+| **Norm²** | `x² + y²` | Squared length (= `v · v`), avoids sqrt for magnitude comparison |
 | **King step** | `(signum(x), signum(y))` | Normalize to Chebyshev unit ball — single-step 8-directional movement |
+| **is_zero** | `x = 0 ∧ y = 0` | Identity element test |
 | **Rotate 90° CW** | `(x, y) ↦ (y, −x)` | SO(2) lattice rotation (cyclic group C₄: R⁴ = I) |
 | **Rotate 90° CCW** | `(x, y) ↦ (−y, x)` | Inverse rotation (R_ccw ∘ R_cw = I) |
 | **Bresenham line** | Integer rasterization | Exact tile sequence between two points for line-of-sight and ranged attacks |
+
+**Norm² identity**: `‖v‖² = v · v = distance_squared(v, ZERO)`. This connects the
+inner product structure to the metric space structure, verified by unit tests.
 
 #### Lattice Rotations (C₄ Cyclic Group)
 
@@ -89,15 +95,20 @@ algorithm for multi-actor turn ordering in roguelikes (used by Angband, DCSS, Co
 ```
 Each world tick:
   for each actor:
-    energy += speed
+    energy.accumulate(&speed)     // energy += speed
 
-  for each actor where energy ≥ ACTION_COST:
+  for each actor where energy.can_act():   // energy ≥ ACTION_COST
     perform action
-    energy -= ACTION_COST
+    energy.spend_action()         // energy -= ACTION_COST
 ```
 
+The `Energy` component provides three methods that encapsulate the scheduling invariants:
+- `accumulate(&Speed)` — one tick of energy gain.
+- `can_act() -> bool` — predicate: `energy ≥ ACTION_COST`.
+- `spend_action()` — deducts `ACTION_COST`, preserving excess for next tick.
+
 **Properties:**
-- **Exact fairness**: over N ticks, an entity with speed S takes exactly ⌊N × S / ACTION_COST⌋ actions.
+- **Exact fairness**: over N ticks, an entity with speed S takes exactly ⌊N × S / ACTION_COST⌋ actions. Verified by a property test that checks this identity for multiple speed values over 100 ticks.
 - **Integer-only**: no floating-point, no rounding errors.
 - **Deterministic**: same inputs → same scheduling order.
 - **Speed ratios**: Speed(100) = 1 action/tick; Speed(50) = 1 action per 2 ticks; Speed(200) = 2 actions/tick.
@@ -153,6 +164,62 @@ simultaneously because the index would still show their original positions
 (stale read). The atomic `move_entity` prevents this race condition entirely,
 and encapsulating it as a method (rather than ad-hoc field manipulation)
 ensures all callers maintain the invariant correctly.
+
+### Damage Model — `compute_damage(atk, def)`
+
+All combat damage in the game is resolved through a single pure function:
+
+```
+damage(atk, def) = max(0, atk − def)
+```
+
+This function is used by melee bump attacks (`combat_system`), roundhouse kicks
+(`melee_wide_system`), thrown weapons (`throw_system`), and any other damage
+source that uses attack vs. defense. Having a single canonical formula
+eliminates divergence between systems.
+
+**Mathematical properties** (verified by property tests):
+
+| Property | Statement |
+|---|---|
+| **Non-negative** | ∀ atk, def: `damage(atk, def) ≥ 0` |
+| **Monotone ↑ in attack** | `atk₁ ≤ atk₂ ⟹ damage(atk₁, def) ≤ damage(atk₂, def)` |
+| **Monotone ↓ in defense** | `def₁ ≤ def₂ ⟹ damage(atk, def₁) ≥ damage(atk, def₂)` |
+| **Zero threshold** | `damage(atk, def) = 0 ⟺ atk ≤ def` |
+| **Linearity above threshold** | For `atk > def`: `damage(atk, def) = atk − def` |
+| **Idempotent clamping** | `max(0, max(0, x)) = max(0, x)` |
+
+The `CombatStats` component provides a convenience method `damage_against(&defender)`
+that calls `compute_damage(self.attack, defender.defense)`.
+
+### Pool Invariants — Health, Stamina, Ammo
+
+The `Health`, `Stamina`, and `Ammo` components represent **clamped integer pools**
+with the fundamental invariant:
+
+```
+0 ≤ current ≤ max
+```
+
+Each pool provides methods that maintain this invariant:
+
+| Component | Method | Behaviour |
+|---|---|---|
+| `Health` | `apply_damage(amount) → actual` | Reduces current, clamps to 0, returns actual damage dealt |
+| `Health` | `heal(amount) → actual` | Increases current, clamps to max, returns actual HP restored |
+| `Health` | `is_dead() → bool` | True when `current ≤ 0` |
+| `Health` | `is_full() → bool` | True when `current ≥ max` |
+| `Health` | `fraction() → f64` | Returns `current / max ∈ [0, 1]` (0 if max = 0) |
+| `Stamina` | `spend(cost) → bool` | Atomic check-and-deduct: returns false (no mutation) if insufficient |
+| `Stamina` | `recover(amount)` | Increases current, clamps to max |
+| `Ammo` | `spend_one() → bool` | Spends 1 round if available |
+| `Ammo` | `is_empty() → bool` | True when `current ≤ 0` |
+
+Using these methods instead of raw field mutation guarantees that:
+1. Health never goes below 0 (no negative HP bugs).
+2. Healing never exceeds max (no over-heal exploits).
+3. Stamina spending is atomic (check + deduct in one operation).
+4. The `actual` return value from `apply_damage` / `heal` enables accurate combat logging.
 
 ---
 

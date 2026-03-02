@@ -134,6 +134,55 @@ fn is_near_cactus(pos: GridVec, game_map: &GameMapResource) -> bool {
     false
 }
 
+/// Returns `true` if `pos` is walkable for AI pathfinding: the tile is passable
+/// on the game map, not occupied by a blocking entity other than `self_entity`,
+/// and not adjacent to a cactus.
+fn is_walkable_for_ai(
+    pos: GridVec,
+    self_entity: Entity,
+    game_map: &GameMapResource,
+    spatial: &SpatialIndex,
+    blockers: &Query<(), With<BlocksMovement>>,
+) -> bool {
+    game_map.0.is_passable(&pos)
+        && !spatial.entities_at(&pos).iter().any(|&e| e != self_entity && blockers.contains(e))
+        && !is_near_cactus(pos, game_map)
+}
+
+/// Updates the NPC's look direction and marks the viewshed dirty.
+/// Used after movement or rotation to ensure FOV is recalculated.
+fn update_look_dir(
+    dir: GridVec,
+    ai_look_dir: &mut Option<Mut<AiLookDir>>,
+    viewshed: &mut Option<Mut<Viewshed>>,
+) {
+    if let Some(look) = ai_look_dir {
+        look.0 = dir.king_step();
+        if let Some(vs) = viewshed {
+            vs.dirty = true;
+        }
+    }
+}
+
+/// Rotates the NPC's look direction one step clockwise through the 8 cardinal
+/// and diagonal directions. Marks the viewshed dirty.
+fn rotate_look_dir(
+    ai_look_dir: &mut Option<Mut<AiLookDir>>,
+    viewshed: &mut Option<Mut<Viewshed>>,
+) {
+    if let Some(look) = ai_look_dir {
+        let current_normalized = look.0.king_step();
+        let idx = GridVec::DIRECTIONS_8.iter()
+            .position(|&d| d == current_normalized)
+            .map(|i| (i + 1) % 8)
+            .unwrap_or(0);
+        look.0 = GridVec::DIRECTIONS_8[idx];
+        if let Some(vs) = viewshed {
+            vs.dirty = true;
+        }
+    }
+}
+
 /// Checks line-of-sight between two points using Bresenham, ignoring
 /// the directional FOV cone.  Returns `true` when no vision-blocking
 /// furniture exists on the path (the endpoints are excluded from the
@@ -296,44 +345,26 @@ pub fn ai_system(
                 // Check if any target is visible — transition to Chasing.
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
-                    if let Some((_, tv)) = chase_target
-                        && let Some(ref mut look) = ai_look_dir {
-                            let toward = (tv - my_pos).king_step();
-                            if !toward.is_zero() {
-                                look.0 = toward;
-                            }
+                    if let Some((_, tv)) = chase_target {
+                        let toward = (tv - my_pos).king_step();
+                        if !toward.is_zero() {
+                            update_look_dir(toward, &mut ai_look_dir, &mut viewshed);
                         }
+                    }
                 } else if let Some((_, item_vec)) = nearest_item {
                     // No combat target but a floor item is visible — pathfind to it.
                     let step = a_star_first_step(my_pos, item_vec, |p| {
-                        game_map.0.is_passable(&p)
-                            && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
-                            && !is_near_cactus(p, &game_map)
+                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                         && !step.is_zero() {
                             move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            if let Some(ref mut look) = ai_look_dir {
-                                look.0 = step.king_step();
-                                if let Some(ref mut vs) = viewshed {
-                                    vs.dirty = true;
-                                }
-                            }
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     energy.spend_action();
                 } else {
                     // Idle: slowly rotate look direction.
-                    if let Some(ref mut look) = ai_look_dir {
-                        let current_normalized = look.0.king_step();
-                        let idx = GridVec::DIRECTIONS_8.iter()
-                            .position(|&d| d == current_normalized)
-                            .map(|i| (i + 1) % 8)
-                            .unwrap_or(0);
-                        look.0 = GridVec::DIRECTIONS_8[idx];
-                        if let Some(ref mut vs) = viewshed {
-                            vs.dirty = true;
-                        }
-                    }
+                    rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                 }
             }
@@ -347,19 +378,12 @@ pub fn ai_system(
                 // If a floor item is visible, pathfind toward it.
                 if let Some((_, item_vec)) = nearest_item {
                     let step = a_star_first_step(my_pos, item_vec, |p| {
-                        game_map.0.is_passable(&p)
-                            && !spatial.entities_at(&p).iter().any(|&e| e != entity && blockers.contains(e))
-                            && !is_near_cactus(p, &game_map)
+                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                         && !step.is_zero() {
                             move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            if let Some(ref mut look) = ai_look_dir {
-                                look.0 = step.king_step();
-                                if let Some(ref mut vs) = viewshed {
-                                    vs.dirty = true;
-                                }
-                            }
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     energy.spend_action();
                     continue;
@@ -374,18 +398,7 @@ pub fn ai_system(
                     .wrapping_add(turn_counter.0 as i32) as u32;
                 if pause_hash.is_multiple_of(7) {
                     // Skip this turn (idle pause for natural movement).
-                    if let Some(ref mut look) = ai_look_dir {
-                        // Slowly look around during pause.
-                        let current_normalized = look.0.king_step();
-                        let idx = GridVec::DIRECTIONS_8.iter()
-                            .position(|&d| d == current_normalized)
-                            .map(|i| (i + 1) % 8)
-                            .unwrap_or(0);
-                        look.0 = GridVec::DIRECTIONS_8[idx];
-                        if let Some(ref mut vs) = viewshed {
-                            vs.dirty = true;
-                        }
-                    }
+                    rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
                 }
@@ -439,12 +452,7 @@ pub fn ai_system(
                             && !spatial.entities_at(&target).iter().any(|&e| e != entity && blockers.contains(e))
                         {
                             move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            if let Some(ref mut look) = ai_look_dir {
-                                look.0 = step.king_step();
-                                if let Some(ref mut vs) = viewshed {
-                                    vs.dirty = true;
-                                }
-                            }
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     }
 
@@ -482,12 +490,7 @@ pub fn ai_system(
                     && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_target);
 
                 if needs_rotation {
-                    if let Some(ref mut look) = ai_look_dir {
-                        look.0 = toward_target;
-                        if let Some(ref mut vs) = viewshed {
-                            vs.dirty = true;
-                        }
-                    }
+                    update_look_dir(toward_target, &mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
                 }
@@ -622,12 +625,7 @@ pub fn ai_system(
 
                 // A* pathfinding toward target.
                 let step = a_star_first_step(my_pos, target_vec, |pos| {
-                    game_map.0.is_passable(&pos)
-                        && !spatial
-                            .entities_at(&pos)
-                            .iter()
-                            .any(|&e| e != entity && blockers.contains(e))
-                        && !is_near_cactus(pos, &game_map)
+                    is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
                 })
                 .unwrap_or_else(|| (target_vec - my_pos).king_step());
 
@@ -637,12 +635,7 @@ pub fn ai_system(
                         dx: step.x,
                         dy: step.y,
                     });
-                    if let Some(ref mut look) = ai_look_dir {
-                        look.0 = step.king_step();
-                        if let Some(ref mut vs) = viewshed {
-                            vs.dirty = true;
-                        }
-                    }
+                    update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                 }
             }

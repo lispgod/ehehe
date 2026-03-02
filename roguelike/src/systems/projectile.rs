@@ -166,11 +166,7 @@ pub fn projectile_system(
         let steps = proj.tiles_per_tick;
 
         // Look up the name of the entity that fired this projectile.
-        let source_name: &str = source_names
-            .get(proj.source)
-            .ok()
-            .flatten()
-            .map_or("???", |n| &n.0);
+        let source_name = display_name(source_names.get(proj.source).ok().flatten());
 
         for _ in 0..steps {
             // Check current tile for damage before advancing.

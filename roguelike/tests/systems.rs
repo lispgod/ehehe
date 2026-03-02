@@ -3222,3 +3222,149 @@ fn turn_counter_starts_at_zero() {
     let counter = app.world().resource::<TurnCounter>();
     assert_eq!(counter.0, 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  PROJECTILE SPEED CONSTANTS TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn bullet_speed_is_slow_enough_to_be_visible() {
+    // Bullets must travel slowly enough to be visible on screen for
+    // several ticks (≤ 3 tiles per tick).
+    assert!(
+        projectile::BULLET_TILES_PER_TICK <= 3,
+        "Bullets should travel at most 3 tiles per tick for visibility, got {}",
+        projectile::BULLET_TILES_PER_TICK,
+    );
+}
+
+#[test]
+fn shrapnel_speed_is_slow_enough_to_be_visible() {
+    assert!(
+        projectile::SHRAPNEL_TILES_PER_TICK <= 1,
+        "Shrapnel should travel at most 1 tile per tick for visibility, got {}",
+        projectile::SHRAPNEL_TILES_PER_TICK,
+    );
+}
+
+#[test]
+fn thrown_speed_is_slow_enough_to_be_visible() {
+    assert!(
+        projectile::THROWN_TILES_PER_TICK <= 2,
+        "Thrown items should travel at most 2 tiles per tick for visibility, got {}",
+        projectile::THROWN_TILES_PER_TICK,
+    );
+}
+
+#[test]
+fn bullet_faster_than_shrapnel() {
+    assert!(
+        projectile::BULLET_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK,
+        "Bullets should be faster than shrapnel",
+    );
+}
+
+#[test]
+fn thrown_faster_than_shrapnel() {
+    assert!(
+        projectile::THROWN_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK,
+        "Thrown items should be faster than shrapnel",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  NPC FOV NARROWNESS TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn npc_fov_is_narrow_around_45_degrees() {
+    // Spawn an NPC looking east at unit distance (typical AiLookDir).
+    let mut app = test_app_with_fov();
+
+    app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Hostile,
+        AiLookDir(GridVec::new(1, 0)), // looking east
+        Faction::Outlaws,
+        Viewshed {
+            range: 20,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    app.update();
+
+    let viewshed = app.world_mut()
+        .query::<&Viewshed>()
+        .single(app.world())
+        .unwrap();
+
+    let origin = GridVec::new(60, 40);
+
+    // Should see tiles directly east (in the look direction)
+    let forward = origin + GridVec::new(5, 0);
+    assert!(
+        viewshed.visible_tiles.contains(&forward),
+        "NPC should see tiles in its look direction",
+    );
+
+    // Should NOT see tiles far to the side (perpendicular to look direction).
+    // With a ~45° cone, a tile at distance 5 directly north is at 90° and
+    // should be outside the cone.
+    let perpendicular = origin + GridVec::new(0, 5);
+    assert!(
+        !viewshed.visible_tiles.contains(&perpendicular),
+        "NPC should NOT see tiles perpendicular to look direction (outside narrow cone)",
+    );
+
+    // Should NOT see tiles behind (directly west)
+    let behind = origin + GridVec::new(-5, 0);
+    assert!(
+        !viewshed.visible_tiles.contains(&behind),
+        "NPC should NOT see tiles behind its look direction",
+    );
+}
+
+#[test]
+fn wildlife_fov_is_short_range() {
+    // Animals have very limited FOV range.
+    let mut app = test_app_with_fov();
+
+    app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Hostile,
+        AiLookDir(GridVec::new(1, 0)),
+        Faction::Wildlife,
+        Viewshed {
+            range: 20,
+            visible_tiles: std::collections::HashSet::new(),
+            revealed_tiles: std::collections::HashSet::new(),
+            dirty: true,
+        },
+    ));
+
+    app.update();
+
+    let viewshed = app.world_mut()
+        .query::<&Viewshed>()
+        .single(app.world())
+        .unwrap();
+
+    let origin = GridVec::new(60, 40);
+
+    // Animal should see very close tiles
+    let close = origin + GridVec::new(2, 0);
+    assert!(
+        viewshed.visible_tiles.contains(&close),
+        "Animal should see very close tiles in its look direction",
+    );
+
+    // Animal should NOT see tiles far away (range capped at 8)
+    let far = origin + GridVec::new(12, 0);
+    assert!(
+        !viewshed.visible_tiles.contains(&far),
+        "Animal should NOT see distant tiles (range limited to 8)",
+    );
+}

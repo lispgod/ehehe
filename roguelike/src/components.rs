@@ -248,6 +248,8 @@ pub enum AiState {
     Chasing,
     /// Entity is patrolling — moving along a route or wandering.
     Patrolling,
+    /// Entity is retreating — health is critical and no healing items available.
+    Fleeing,
 }
 
 /// Directional cursor for enemy entities. Defines which direction the enemy is
@@ -261,6 +263,48 @@ pub struct AiLookDir(pub GridVec);
 /// around this position when not chasing the player.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct PatrolOrigin(pub GridVec);
+
+/// Memory component for NPC AI — remembers the last known target position.
+/// When an NPC loses sight of its target, it navigates to the remembered
+/// position before returning to patrol/idle.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AiMemory {
+    /// Last known position of the chase target.
+    pub last_known_pos: Option<GridVec>,
+    /// Turn number when the target was last seen.
+    pub last_seen_turn: u32,
+}
+
+impl Default for AiMemory {
+    fn default() -> Self {
+        Self {
+            last_known_pos: None,
+            last_seen_turn: 0,
+        }
+    }
+}
+
+/// Personality traits that modulate NPC AI behavior.
+/// Different NPCs exhibit different combat styles based on these parameters.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AiPersonality {
+    /// How aggressively the NPC pursues targets (0.0 = passive, 1.0 = berserker).
+    pub aggression: f64,
+    /// How willing the NPC is to stay in fights when wounded (0.0 = coward, 1.0 = fearless).
+    pub courage: f64,
+    /// Preferred engagement distance. Ranged NPCs prefer > 3, melee prefer 1.
+    pub preferred_range: i32,
+}
+
+impl Default for AiPersonality {
+    fn default() -> Self {
+        Self {
+            aggression: 0.5,
+            courage: 0.5,
+            preferred_range: 1,
+        }
+    }
+}
 
 /// Marker component: tags entities hostile to the player.
 /// Used by bump-to-attack: moving into a hostile entity's tile triggers combat.

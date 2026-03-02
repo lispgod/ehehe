@@ -802,6 +802,10 @@ pub fn ai_system(
                     energy.spend_action();
                 }
             }
+            AiState::Fleeing => {
+                // Fleeing: spend action and do nothing else for now.
+                energy.spend_action();
+            }
         }
     }
 }

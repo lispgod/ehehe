@@ -7,9 +7,11 @@ use crate::noise::value_noise;
 use crate::resources::{CombatLog, GameMapResource, SoundEvents};
 use crate::typedefs::RatColor;
 
-/// Bullet travel speed in tiles per tick.
-/// Kept low so the bullet trail is visible on screen for several frames.
-pub const BULLET_TILES_PER_TICK: usize = 3;
+/// Bullet travel speed in tiles per game turn.
+/// Each time the player or world takes a turn the bullet advances this many
+/// tiles along its Bresenham path, then freezes in mid-air (with a blinking
+/// render) until the next turn.
+pub const BULLET_TILES_PER_TICK: usize = 12;
 
 /// Shrapnel travel speed in tiles per tick.
 pub const SHRAPNEL_TILES_PER_TICK: usize = 1;
@@ -147,7 +149,15 @@ pub fn projectile_system(
     game_map: Res<GameMapResource>,
     mut combat_log: ResMut<CombatLog>,
     mut sound_events: ResMut<SoundEvents>,
+    turn_state: Option<Res<State<crate::resources::TurnState>>>,
 ) {
+    // Projectiles only advance during actual game turns (PlayerTurn / WorldTurn).
+    // During AwaitingInput they freeze in mid-air with the blinking render.
+    if let Some(ref ts) = turn_state {
+        if *ts.get() == crate::resources::TurnState::AwaitingInput {
+            return;
+        }
+    }
     // Build a lookup of hostile entities by position for O(1) hit detection.
     let mut target_by_pos: std::collections::HashMap<GridVec, Vec<(Entity, String, i32)>> =
         std::collections::HashMap::new();

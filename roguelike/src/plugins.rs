@@ -322,12 +322,13 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
 }
 
 /// Helper: spawns monsters in distinct faction groups across the map.
-/// Groups are placed at deterministic positions far from the player spawn,
+/// Groups are placed at deterministic positions throughout the town,
 /// with each group containing NPCs of the same faction.
+/// Many enemies are spawned to create a densely populated town.
 fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) {
     let group_seed = seed.wrapping_add(54321);
-    let min_spawn_dist_sq = 12 * 12;
-    let group_radius = 6i32; // NPCs spawn within this radius of group center
+    let min_spawn_dist_sq = 8 * 8; // enemies can be fairly close to spawn
+    let group_radius = 5i32; // NPCs spawn within this radius of group center
 
     // Faction-template pairs: each group spawns NPCs from one faction.
     let faction_templates: &[&[usize]] = &[
@@ -340,22 +341,21 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
         &[9, 10],   // Sheriff: Sheriff(9), Deputy(10)
     ];
 
-    // Generate group centers using deterministic noise-based placement.
-    // Scan coarse grid cells (every 30 tiles) and place groups where noise is low.
-    let cell_size = 30i32;
+    // Dense grid: scan every 18 tiles (smaller cells = more groups).
+    let cell_size = 18i32;
     let mut group_idx = 0u64;
 
     for cy in (cell_size..map.0.height - cell_size).step_by(cell_size as usize) {
         for cx in (cell_size..map.0.width - cell_size).step_by(cell_size as usize) {
             let center = GridVec::new(cx, cy);
 
-            if center.distance_squared(SPAWN_POINT) < min_spawn_dist_sq * 2 {
+            if center.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
                 continue;
             }
 
             let noise = value_noise(cx, cy, group_seed);
-            if noise > 0.25 {
-                continue; // Only ~25% of cells get a group
+            if noise > 0.55 {
+                continue; // ~55% of cells get a group (up from 25%)
             }
 
             // Select faction for this group based on position hash.
@@ -363,10 +363,9 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             let templates = faction_templates[faction_idx];
             group_idx += 1;
 
-            // Spawn 3-5 NPCs per group within the radius.
-            // The first NPC in each non-wildlife group is the leader.
+            // Spawn 4-8 NPCs per group within the radius.
             let group_size_noise = value_noise(cx, cy, group_seed.wrapping_add(11111));
-            let group_size = 3 + (group_size_noise * 3.0) as i32; // 3-5
+            let group_size = 4 + (group_size_noise * 5.0) as i32; // 4-8
 
             let mut spawned = 0;
             let mut leader_entity: Option<Entity> = None;
@@ -384,8 +383,8 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                     }
 
                     let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
-                    if tile_noise > 0.15 {
-                        continue; // Sparse placement within group
+                    if tile_noise > 0.35 {
+                        continue; // More generous placement (up from 0.15)
                     }
 
                     let template_idx = templates[(spawned as usize) % templates.len()];
@@ -405,6 +404,55 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 if spawned >= group_size {
                     break;
                 }
+            }
+        }
+    }
+
+    // ── Strategic spawns near the player ─────────────────────────
+    // Place extra enemy clusters within 15-30 tiles of spawn so the
+    // player encounters opposition immediately.
+    let near_seed = seed.wrapping_add(99999);
+    let near_cluster_count = 6;
+    for i in 0..near_cluster_count {
+        let angle_noise = value_noise(i, 0, near_seed);
+        let dist_noise = value_noise(0, i, near_seed);
+        let angle = angle_noise * std::f64::consts::TAU;
+        let dist = 15.0 + dist_noise * 20.0;
+        let cx = SPAWN_POINT.x + (angle.cos() * dist) as i32;
+        let cy = SPAWN_POINT.y + (angle.sin() * dist) as i32;
+
+        // Pick a combat-oriented faction for nearby enemies
+        let nearby_templates: &[usize] = match i % 3 {
+            0 => &[2, 5],  // Outlaws + Gunslingers
+            1 => &[3],     // Vaqueros
+            _ => &[7, 8],  // Indians
+        };
+
+        let mut spawned = 0;
+        let near_group_size = 3 + (value_noise(i, 1, near_seed) * 3.0) as i32;
+        for dy in -4..=4i32 {
+            for dx in -4..=4i32 {
+                if spawned >= near_group_size {
+                    break;
+                }
+                let pos = GridVec::new(cx + dx, cy + dy);
+                if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
+                    continue;
+                }
+                if !map.0.is_passable(&pos) {
+                    continue;
+                }
+                let tile_noise = value_noise(pos.x, pos.y, near_seed.wrapping_add(33333));
+                if tile_noise > 0.25 {
+                    continue;
+                }
+                let template_idx = nearby_templates[(spawned as usize) % nearby_templates.len()];
+                let template = &MONSTER_TEMPLATES[template_idx];
+                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.30);
+                spawned += 1;
+            }
+            if spawned >= near_group_size {
+                break;
             }
         }
     }

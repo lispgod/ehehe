@@ -34,17 +34,21 @@ struct Building {
 }
 
 impl GameMap {
-    /// Creates a new game map as a cowboy western town.
+    /// Creates a new game map as a giant midwestern town.
     ///
     /// The generation pipeline:
     ///   1. **Desert base** — noise-driven arid terrain (sand, dirt, gravel).
-    ///   2. **Main street** — a wide dirt road running horizontally.
+    ///   2. **Street grid** — multiple horizontal avenues and vertical cross
+    ///      streets forming a dense town grid.
     ///   3. **Buildings** — deterministically placed houses, saloons, stables
-    ///      with walls and wood-plank interiors.
-    ///   4. **Street furniture** — benches, lamp posts, barrels, crates,
+    ///      with walls and wood-plank interiors filling every city block.
+    ///   4. **Landmarks** — a large Town Hall and oversized Grand Saloon.
+    ///   5. **Parks** — small green parks with trees and benches scattered
+    ///      throughout the town.
+    ///   6. **Street furniture** — benches, lamp posts, barrels, crates,
     ///      hitching posts, water troughs, signs placed along streets.
-    ///   5. **Decorative elements** — cacti, dead trees, rocks in open areas.
-    ///   6. **Spawn clearing** — guaranteed open area around the player spawn.
+    ///   7. **Decorative elements** — cacti, dead trees, rocks in open areas.
+    ///   8. **Spawn clearing** — guaranteed open area around the player spawn.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
         let mut voxels = Vec::with_capacity(height as usize);
 
@@ -86,52 +90,78 @@ impl GameMap {
             sand_cloud_previous_floor: HashMap::new(),
         };
 
-        // ── Step 2: Main street (horizontal dirt road) ──────────────
-        let street_y = height / 2;
-        let street_half_width = 2;
-        for y in (street_y - street_half_width)..=(street_y + street_half_width) {
-            for x in 1..width - 1 {
-                if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-                    voxel.floor = Some(Floor::Dirt);
-                    voxel.furniture = None;
-                }
-            }
-        }
-
-        // ── Step 2b: Cross streets (vertical dirt roads) ────────────
-        // Place several vertical cross streets at noise-determined positions
-        // to break up the grid and create a more varied town layout.
-        let cross_seed = seed.wrapping_add(66666);
-        let cross_count = 3 + ((value_noise(0, 0, cross_seed) * 4.0) as i32); // 3-6 cross streets
-        for i in 0..cross_count {
-            let cx_noise = value_noise(i, 0, cross_seed);
-            let cx = 20 + (cx_noise * (width - 40) as f64) as CoordinateUnit;
-            let cross_half_width = 1;
-            for x in (cx - cross_half_width)..=(cx + cross_half_width) {
-                for y in 1..height - 1 {
-                    if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y))
-                        && !matches!(voxel.furniture, Some(Furniture::Wall)) {
+        // ── Step 2: Street grid ─────────────────────────────────────
+        // Multiple horizontal avenues spanning the map width.
+        let avenue_spacing = 28;
+        let avenue_half_width = 2;
+        let mut avenue_ys: Vec<CoordinateUnit> = Vec::new();
+        {
+            let first_avenue = 20;
+            let mut ay = first_avenue;
+            while ay < height - 20 {
+                avenue_ys.push(ay);
+                for y in (ay - avenue_half_width)..=(ay + avenue_half_width) {
+                    for x in 1..width - 1 {
+                        if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
                             voxel.floor = Some(Floor::Dirt);
                             voxel.furniture = None;
                         }
+                    }
                 }
+                ay += avenue_spacing;
             }
         }
 
-        // ── Step 3: Generate buildings ──────────────────────────────
-        let buildings = generate_buildings(width, height, seed);
+        // Vertical cross streets every ~30 tiles with noise-based jitter.
+        let cross_seed = seed.wrapping_add(66666);
+        let cross_spacing = 26;
+        let cross_half_width = 1;
+        let mut cross_xs: Vec<CoordinateUnit> = Vec::new();
+        {
+            let mut cx = 20i32;
+            let mut ci = 0i32;
+            while cx < width - 20 {
+                let jitter = (value_noise(ci, 0, cross_seed) * 6.0) as CoordinateUnit - 3;
+                let actual_cx = (cx + jitter).clamp(2, width - 3);
+                cross_xs.push(actual_cx);
+                for x in (actual_cx - cross_half_width)..=(actual_cx + cross_half_width) {
+                    for y in 1..height - 1 {
+                        if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y))
+                            && !matches!(voxel.furniture, Some(Furniture::Wall))
+                        {
+                            voxel.floor = Some(Floor::Dirt);
+                            voxel.furniture = None;
+                        }
+                    }
+                }
+                cx += cross_spacing;
+                ci += 1;
+            }
+        }
+
+        // ── Step 3: Generate buildings filling every city block ──────
+        let buildings = generate_buildings(width, height, seed, &avenue_ys, avenue_half_width);
 
         for b in &buildings {
             place_building(&mut map, b, seed);
         }
 
-        // ── Step 4: Street furniture along the main street ──────────
-        place_street_furniture(&mut map, width, street_y, street_half_width, seed);
+        // ── Step 4: Landmark buildings ──────────────────────────────
+        place_town_hall(&mut map, width, height, seed);
+        place_grand_saloon(&mut map, width, height, seed);
 
-        // ── Step 5: Decorative elements in open areas ───────────────
+        // ── Step 5: Small parks ─────────────────────────────────────
+        place_parks(&mut map, width, height, seed, &cross_xs, &avenue_ys);
+
+        // ── Step 6: Street furniture along every avenue ──────────────
+        for &ay in &avenue_ys {
+            place_street_furniture(&mut map, width, ay, avenue_half_width, seed);
+        }
+
+        // ── Step 7: Decorative elements in open areas ───────────────
         place_desert_decorations(&mut map, width, height, seed);
 
-        // ── Step 6: Spawn clearing ──────────────────────────────────
+        // ── Step 8: Spawn clearing ──────────────────────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
 
         map
@@ -294,40 +324,64 @@ const BUILDING_TYPE_COUNT: u32 = 12;
 
 /// Generates deterministic building footprints for the western town.
 ///
-/// Buildings are placed in rows above and below the main street.
+/// Buildings are placed in rows between every pair of adjacent avenues,
+/// filling the entire map with dense city blocks.
 /// Uses noise for position jitter and building kind selection.
 fn generate_buildings(
     width: CoordinateUnit,
     height: CoordinateUnit,
     seed: NoiseSeed,
+    avenue_ys: &[CoordinateUnit],
+    avenue_half_width: CoordinateUnit,
 ) -> Vec<Building> {
     let mut buildings = Vec::new();
-    let street_y = height / 2;
     let bldg_seed = seed.wrapping_add(11111);
 
-    // Building rows: multiple rows above and below the main street for a larger town.
-    // Extra rows are placed further from the street to fill the larger map.
-    let rows: Vec<(CoordinateUnit, CoordinateUnit)> = vec![
-        (street_y + 5, street_y + 5 + 12),    // south row 1 (close)
-        (street_y - 16, street_y - 5),         // north row 1 (close)
-        (street_y + 20, street_y + 20 + 12),   // south row 2 (far)
-        (street_y - 32, street_y - 20),        // north row 2 (far)
-        (street_y + 36, street_y + 36 + 10),   // south row 3 (outskirts)
-        (street_y - 46, street_y - 36),        // north row 3 (outskirts)
-    ];
+    // Build rows between every pair of adjacent avenues.
+    // Also add rows above the first avenue and below the last.
+    let mut row_bands: Vec<(CoordinateUnit, CoordinateUnit)> = Vec::new();
 
-    for (row_idx, &(row_min_y, row_max_y)) in rows.iter().enumerate() {
+    // Band above the first avenue
+    if let Some(&first) = avenue_ys.first() {
+        let top = 4;
+        let bot = first - avenue_half_width - 2;
+        if bot - top >= 6 {
+            row_bands.push((top, bot));
+        }
+    }
+
+    // Bands between each pair of avenues
+    for pair in avenue_ys.windows(2) {
+        let top = pair[0] + avenue_half_width + 2;
+        let bot = pair[1] - avenue_half_width - 2;
+        if bot - top >= 6 {
+            row_bands.push((top, bot));
+        }
+    }
+
+    // Band below the last avenue
+    if let Some(&last) = avenue_ys.last() {
+        let top = last + avenue_half_width + 2;
+        let bot = height - 4;
+        if bot - top >= 6 {
+            row_bands.push((top, bot));
+        }
+    }
+
+    for (row_idx, &(row_min_y, row_max_y)) in row_bands.iter().enumerate() {
         // Vary the starting offset per row for less grid-like placement
         let row_offset_noise = value_noise(row_idx as i32, row_min_y, bldg_seed.wrapping_add(6666));
-        let mut cx = 6 + (row_offset_noise * 8.0) as CoordinateUnit;
+        let mut cx = 4 + (row_offset_noise * 6.0) as CoordinateUnit;
         let mut bldg_index = 0u32;
-        while cx < width - 10 {
+        let band_height = row_max_y - row_min_y;
+        while cx < width - 6 {
             let noise = value_noise(cx, bldg_index as i32 + row_idx as i32, bldg_seed);
             let kind_noise = value_noise(bldg_index as i32, cx + row_idx as i32, bldg_seed.wrapping_add(2222));
 
             let bw = 6 + (noise * 6.0) as CoordinateUnit; // width 6–11
-            let bh = 5 + (noise * 4.0) as CoordinateUnit; // height 5–8
-            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 4.0) as CoordinateUnit;
+            let max_h = band_height.min(10);
+            let bh = 5 + (noise * (max_h - 5).max(1) as f64) as CoordinateUnit; // height 5–max_h
+            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 3.0) as CoordinateUnit;
             let by = row_min_y + by_jitter;
 
             // Don't exceed row bounds or map bounds
@@ -342,9 +396,9 @@ fn generate_buildings(
                 });
             }
 
-            // Vary the gap between buildings more
+            // Tighter gaps between buildings for a denser town
             let gap_noise = value_noise(cx + 1, bldg_index as i32, bldg_seed.wrapping_add(4444));
-            cx += bw + 3 + (noise * 3.0 + gap_noise * 4.0) as CoordinateUnit;
+            cx += bw + 2 + (noise * 2.0 + gap_noise * 3.0) as CoordinateUnit;
             bldg_index += 1;
         }
     }
@@ -551,6 +605,187 @@ fn set_furniture(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, furn: 
         && !matches!(voxel.floor, Some(Floor::Dirt)) {
             voxel.furniture = Some(furn);
         }
+}
+
+/// Places a large Town Hall building near the center of the map.
+/// The Town Hall is 18×12 with a grand interior containing tables, chairs,
+/// benches and signs (maps/notices).
+/// Skipped on maps too small to fit the building.
+fn place_town_hall(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let tw: CoordinateUnit = 18;
+    let th: CoordinateUnit = 12;
+    if width < tw + 6 || height < th + 6 {
+        return; // map too small for a town hall
+    }
+    let th_seed = seed.wrapping_add(111222);
+    let cx = width / 2 + (value_noise(0, 0, th_seed) * 20.0) as CoordinateUnit - 10;
+    let cy = height / 3;
+    let tx = (cx - tw / 2).clamp(2, width - tw - 2);
+    let ty = (cy - th / 2).clamp(2, height - th - 2);
+
+    // Lay down walls and wood-plank floor
+    for y in ty..ty + th {
+        for x in tx..tx + tw {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                let is_border = x == tx || x == tx + tw - 1 || y == ty || y == ty + th - 1;
+                let is_door = y == ty + th - 1 && x == tx + tw / 2;
+                let is_back_door = y == ty && x == tx + tw / 2;
+                if is_border && !is_door && !is_back_door {
+                    voxel.furniture = Some(Furniture::Wall);
+                } else {
+                    voxel.furniture = None;
+                }
+                voxel.floor = Some(Floor::WoodPlanks);
+            }
+        }
+    }
+
+    // Interior furniture: long meeting table, chairs, signs
+    let ix = tx + 2;
+    let iy = ty + 2;
+    // Central table row
+    for dx in 2..tw - 4 {
+        set_furniture(map, tx + dx, iy + 2, Furniture::Table);
+    }
+    // Chairs along table
+    for dx in (2..tw - 4).step_by(2) {
+        set_furniture(map, tx + dx, iy + 1, Furniture::Chair);
+        set_furniture(map, tx + dx, iy + 3, Furniture::Chair);
+    }
+    // Signs on the walls
+    set_furniture(map, ix, iy, Furniture::Sign);
+    set_furniture(map, ix + 1, iy, Furniture::Sign);
+    // Barrels in corners
+    set_furniture(map, tx + 1, ty + 1, Furniture::Barrel);
+    set_furniture(map, tx + tw - 2, ty + 1, Furniture::Barrel);
+    set_furniture(map, tx + 1, ty + th - 2, Furniture::Crate);
+    set_furniture(map, tx + tw - 2, ty + th - 2, Furniture::Crate);
+}
+
+/// Places a Grand Saloon — a large 20×14 saloon with piano, many tables,
+/// chairs, and barrels. Placed in the southern half of the map.
+/// Skipped on maps too small to fit the building.
+fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let sw: CoordinateUnit = 20;
+    let sh: CoordinateUnit = 14;
+    if width < sw + 6 || height < sh + 6 {
+        return; // map too small for a grand saloon
+    }
+    let gs_seed = seed.wrapping_add(333444);
+    let cx = width / 2 - 20 + (value_noise(1, 1, gs_seed) * 40.0) as CoordinateUnit;
+    let cy = height * 2 / 3;
+    let sx = (cx - sw / 2).clamp(2, width - sw - 2);
+    let sy = (cy - sh / 2).clamp(2, height - sh - 2);
+
+    // Lay down walls and wood-plank floor
+    for y in sy..sy + sh {
+        for x in sx..sx + sw {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                let is_border = x == sx || x == sx + sw - 1 || y == sy || y == sy + sh - 1;
+                // Two wide doorways
+                let is_main_door = y == sy + sh - 1 && (x == sx + sw / 2 || x == sx + sw / 2 - 1);
+                let is_side_door = x == sx && y == sy + sh / 2;
+                if is_border && !is_main_door && !is_side_door {
+                    voxel.furniture = Some(Furniture::Wall);
+                } else {
+                    voxel.furniture = None;
+                }
+                voxel.floor = Some(Floor::WoodPlanks);
+            }
+        }
+    }
+
+    // Interior: piano in corner, multiple table+chair clusters, barrel bar
+    set_furniture(map, sx + 1, sy + 1, Furniture::Piano);
+    // Bar (barrels along the back wall)
+    for dx in 3..sw - 3 {
+        set_furniture(map, sx + dx, sy + 1, Furniture::Barrel);
+    }
+    // Tables and chairs in a grid pattern
+    for row in 0..3 {
+        for col in 0..3 {
+            let tx = sx + 3 + col * 5;
+            let ty = sy + 4 + row * 3;
+            if tx + 2 < sx + sw - 1 && ty + 1 < sy + sh - 1 {
+                set_furniture(map, tx, ty, Furniture::Table);
+                set_furniture(map, tx - 1, ty, Furniture::Chair);
+                set_furniture(map, tx + 1, ty, Furniture::Chair);
+            }
+        }
+    }
+    // Corner barrels
+    set_furniture(map, sx + sw - 2, sy + 1, Furniture::Barrel);
+    set_furniture(map, sx + sw - 2, sy + sh - 2, Furniture::Crate);
+}
+
+/// Places 3-5 small parks throughout the town.
+/// Each park is a grassy area with trees, benches, and open space.
+fn place_parks(
+    map: &mut GameMap,
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+    _cross_xs: &[CoordinateUnit],
+    _avenue_ys: &[CoordinateUnit],
+) {
+    let park_seed = seed.wrapping_add(555666);
+    let park_count = 3 + (value_noise(0, 0, park_seed) * 3.0) as i32; // 3-5 parks
+    let mut placed = 0;
+    let mut pi = 0i32;
+    while placed < park_count && pi < 20 {
+        let px_noise = value_noise(pi, 0, park_seed);
+        let py_noise = value_noise(0, pi, park_seed.wrapping_add(1));
+        let park_cx = 30 + (px_noise * (width - 60) as f64) as CoordinateUnit;
+        let park_cy = 30 + (py_noise * (height - 60) as f64) as CoordinateUnit;
+        let park_w = 8 + (value_noise(pi, 1, park_seed) * 5.0) as CoordinateUnit; // 8-12
+        let park_h = 6 + (value_noise(1, pi, park_seed) * 5.0) as CoordinateUnit; // 6-10
+
+        pi += 1;
+
+        // Don't place parks too close to spawn
+        let dist_sq = GridVec::new(park_cx, park_cy).distance_squared(SPAWN_POINT);
+        if dist_sq < 100 {
+            continue;
+        }
+
+        // Lay down grass floor and clear furniture
+        for y in park_cy..park_cy + park_h {
+            for x in park_cx..park_cx + park_w {
+                if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
+                    // Don't overwrite border walls
+                    if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                        voxel.floor = Some(Floor::Grass);
+                        voxel.furniture = None;
+                    }
+                }
+            }
+        }
+
+        // Place trees around the edges
+        for dx in (0..park_w).step_by(3) {
+            set_furniture(map, park_cx + dx, park_cy, Furniture::Tree);
+            set_furniture(map, park_cx + dx, park_cy + park_h - 1, Furniture::Tree);
+        }
+        for dy in (0..park_h).step_by(3) {
+            set_furniture(map, park_cx, park_cy + dy, Furniture::Tree);
+            set_furniture(map, park_cx + park_w - 1, park_cy + dy, Furniture::Tree);
+        }
+
+        // Benches in the interior
+        if park_w >= 6 && park_h >= 4 {
+            set_furniture(map, park_cx + 2, park_cy + park_h / 2, Furniture::Bench);
+            set_furniture(map, park_cx + park_w - 3, park_cy + park_h / 2, Furniture::Bench);
+        }
+
+        // Water trough (fountain stand-in)
+        if park_w >= 8 && park_h >= 6 {
+            set_furniture(map, park_cx + park_w / 2, park_cy + park_h / 2, Furniture::WaterTrough);
+        }
+
+        placed += 1;
+    }
 }
 
 /// Places street furniture (benches, lamp posts, barrels, signs, hitching posts)

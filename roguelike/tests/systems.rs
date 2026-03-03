@@ -3057,11 +3057,17 @@ fn turn_counter_starts_at_zero() {
 
 #[test]
 fn bullet_speed_is_slow_enough_to_be_visible() {
-    // Bullets must travel slowly enough to be visible on screen for
-    // several ticks (≤ 3 tiles per tick).
+    // Bullets advance ~12 tiles per game turn and freeze in mid-air
+    // between turns (projectile_system skips AwaitingInput frames).
+    // This makes them clearly visible as a blinking dot between player actions.
     assert!(
-        projectile::BULLET_TILES_PER_TICK <= 3,
-        "Bullets should travel at most 3 tiles per tick for visibility, got {}",
+        projectile::BULLET_TILES_PER_TICK <= 15,
+        "Bullets should travel at most 15 tiles per tick for visibility, got {}",
+        projectile::BULLET_TILES_PER_TICK,
+    );
+    assert!(
+        projectile::BULLET_TILES_PER_TICK >= 8,
+        "Bullets should travel at least 8 tiles per tick to feel fast, got {}",
         projectile::BULLET_TILES_PER_TICK,
     );
 }

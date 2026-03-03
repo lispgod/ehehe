@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, Experience, ExpReward, Faction, Health, Hostile,
-    Inventory, Item, ItemKind, Level, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Viewshed,
+    AiLookDir, AiMemory, AiPersonality, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, Experience, ExpReward, Faction, Health, Hostile,
+    Inventory, Item, ItemKind, Level, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Stamina, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
@@ -202,6 +202,24 @@ pub fn spawn_monster(
         generate_npc_name(x, y)
     };
 
+    // Compute personality based on faction and position hash.
+    let is_ranged = template.ammo > 0;
+    let personality_hash = item_hash.wrapping_mul(7) ^ (x.wrapping_add(y)).unsigned_abs();
+    let aggression = 0.3 + (personality_hash % 7) as f64 * 0.1; // 0.3 – 0.9
+    let courage = if matches!(template.faction, Faction::Wildlife) {
+        0.2 // Animals flee easily
+    } else {
+        0.3 + (personality_hash % 5) as f64 * 0.15 // 0.3 – 0.9
+    };
+    let preferred_range = if is_ranged { 5 + (personality_hash % 6) as i32 } else { 1 };
+
+    // Humanoid NPCs get a small stamina pool for special actions.
+    let npc_stamina = if matches!(template.faction, Faction::Wildlife) {
+        0
+    } else {
+        20 + (scaled_health / 3)
+    };
+
     commands.spawn((
         Position { x, y },
         Name(npc_name),
@@ -227,6 +245,12 @@ pub fn spawn_monster(
         AiState::Patrolling,
         AiLookDir(GridVec::new(0, -1)), // default: looking south
         PatrolOrigin(GridVec::new(x, y)),
+        AiMemory::default(),
+        AiPersonality {
+            aggression,
+            courage,
+            preferred_range,
+        },
         LootTable { drop_chance },
         ExpReward(template.exp_reward + exp_bonus),
         Viewshed {
@@ -240,6 +264,10 @@ pub fn spawn_monster(
             max: template.ammo,
         },
         Inventory { items: inv_items },
+        Stamina {
+            current: npc_stamina,
+            max: npc_stamina,
+        },
         Level(1),
         Experience {
             current: 0,

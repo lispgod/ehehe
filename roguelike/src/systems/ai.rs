@@ -3,8 +3,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiState, Ammo, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
-use crate::events::{AiRangedAttackIntent, AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, SpellCastIntent, ThrowItemIntent};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, Ammo, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
+use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
 use crate::typeenums::Furniture;
@@ -243,33 +243,133 @@ const DODGE_CHANCE: f64 = 0.20;
 /// Patrol radius: how far an NPC will wander from its spawn point.
 const PATROL_RADIUS: i32 = 8;
 
+/// HP fraction below which an NPC considers fleeing (if courage is low enough).
+const FLEE_HP_THRESHOLD: f64 = 0.3;
+
+/// Number of turns memory persists after losing sight of a target.
+const MEMORY_DURATION: u32 = 15;
+
+// ─────────────────────── AI Decision Helpers ───────────────────────
+
+/// Returns `true` if the NPC has any healing item (whiskey) in inventory.
+fn has_healing_item(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    inventory.as_ref().is_some_and(|inv| {
+        inv.items.iter().any(|&ent| {
+            item_kinds.get(ent).ok().is_some_and(|k|
+                matches!(*k, ItemKind::Whiskey { .. })
+            )
+        })
+    })
+}
+
+/// Returns `true` if the NPC has a loaded gun in inventory.
+fn has_loaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    inventory.as_ref().is_some_and(|inv| {
+        inv.items.iter().any(|&ent| {
+            item_kinds.get(ent).ok().is_some_and(|k|
+                matches!(*k, ItemKind::Gun { loaded, .. } if loaded > 0)
+            )
+        })
+    })
+}
+
+/// Returns `true` if the NPC should consider fleeing based on health and personality.
+fn should_flee(health: &Option<Mut<Health>>, personality: Option<&AiPersonality>, inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    let Some(hp) = health else { return false; };
+    if hp.fraction() >= FLEE_HP_THRESHOLD { return false; }
+    if has_healing_item(inventory, item_kinds) { return false; }
+    let courage = personality.map(|p| p.courage).unwrap_or(0.5);
+    hp.fraction() < courage * FLEE_HP_THRESHOLD
+}
+
+/// Find a direction to flee away from a threat position.
+fn flee_direction(
+    my_pos: GridVec,
+    threat_pos: GridVec,
+    entity: Entity,
+    game_map: &GameMapResource,
+    spatial: &SpatialIndex,
+    blockers: &Query<(), With<BlocksMovement>>,
+) -> Option<GridVec> {
+    let away = (my_pos - threat_pos).king_step();
+    if !away.is_zero() {
+        let target = my_pos + away;
+        if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
+            return Some(away);
+        }
+    }
+    for dir in GridVec::DIRECTIONS_8 {
+        let dot_toward_threat = dir.x * (threat_pos.x - my_pos.x).signum()
+            + dir.y * (threat_pos.y - my_pos.y).signum();
+        if dot_toward_threat <= 0 {
+            let target = my_pos + dir;
+            if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
+                return Some(dir);
+            }
+        }
+    }
+    None
+}
+
+/// Find the best direction to maintain preferred range from a target.
+fn kite_direction(
+    my_pos: GridVec,
+    target_pos: GridVec,
+    preferred_range: i32,
+    entity: Entity,
+    game_map: &GameMapResource,
+    spatial: &SpatialIndex,
+    blockers: &Query<(), With<BlocksMovement>>,
+) -> Option<GridVec> {
+    let dist = my_pos.chebyshev_distance(target_pos);
+    if dist == preferred_range {
+        return None;
+    }
+    if dist < preferred_range {
+        flee_direction(my_pos, target_pos, entity, game_map, spatial, blockers)
+    } else {
+        let toward = (target_pos - my_pos).king_step();
+        if !toward.is_zero() {
+            let target = my_pos + toward;
+            if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
+                return Some(toward);
+            }
+        }
+        a_star_first_step(my_pos, target_pos, |p| {
+            is_walkable_for_ai(p, entity, game_map, spatial, blockers)
+        })
+    }
+}
+
 /// AI system: runs during `WorldTurn` for every entity with an `AiState`.
 ///
-/// **Behaviour**:
-/// - **Idle**: if the player is within the entity's Viewshed, switch to `Chasing`.
-/// - **Patrolling**: wander around patrol origin. If player or enemy faction
-///   entity is spotted, switch to `Chasing`.
-///   - Lawmen: patrol in a structured pattern around their origin.
-///   - Wildlife: random wandering with occasional idle pauses.
-///   - Outlaws: skulk (move slowly, stay near buildings).
-/// - **Chasing**: use **A\* pathfinding** to pursue the player or nearest
-///   hostile faction entity. NPCs with guns fire them; NPCs with throwables
-///   (dynamite, molotovs, knives, tomahawks) use them at range. NPCs heal
-///   with whiskey when wounded, and use melee wide attacks when surrounded.
+/// **Architecture**: NPC AI is a decision layer on top of player capabilities.
+/// NPCs emit the same intent events as the player (MoveIntent, RangedAttackIntent,
+/// UseItemIntent, PickupItemIntent, etc.) — the action resolution systems are
+/// unified for both players and NPCs.
 ///
-/// NPCs also fight entities of hostile factions (outlaws vs lawmen vs wildlife).
+/// **Behaviour**:
+/// - **Idle**: if the player or hostile faction entity is visible, switch to `Chasing`.
+///   Otherwise, slowly rotate look direction and scavenge nearby items.
+/// - **Patrolling**: wander around patrol origin. If player or enemy faction
+///   entity is spotted, switch to `Chasing`. Investigates remembered positions.
+/// - **Chasing**: use A* pathfinding to pursue the target. NPCs use the
+///   same combat abilities as the player: fire guns (RangedAttackIntent), throw
+///   grenades/molotovs, throw knives, heal with whiskey (UseItemIntent),
+///   roundhouse kick (MeleeWideIntent). Ranged NPCs kite to maintain range.
+/// - **Fleeing**: retreat from threats when health is critical and no healing
+///   items are available.
+///
+/// **Memory**: NPCs remember the last known position of their target. When
+/// sight is lost, they navigate to the remembered position before giving up.
 pub fn ai_system(
-    mut commands: Commands,
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut Ammo>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position), With<Player>>,
-    // Query all NPCs with position + faction for inter-faction combat targeting
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
-    // Query all items on the floor (have Position + Item, no inventory ownership)
     floor_items: Query<(Entity, &Position), With<Item>>,
-    // Query hostiles to check for adjacent enemies (melee wide)
     hostile_positions: Query<(Entity, &Position), With<Hostile>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
@@ -277,21 +377,20 @@ pub fn ai_system(
     blockers: Query<(), With<BlocksMovement>>,
     mut item_kinds: Query<&mut ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
-    (mut ranged_intents, mut attack_intents, mut spell_intents): (MessageWriter<AiRangedAttackIntent>, MessageWriter<AttackIntent>, MessageWriter<SpellCastIntent>),
+    (mut ranged_intents, mut attack_intents, mut spell_intents): (MessageWriter<RangedAttackIntent>, MessageWriter<AttackIntent>, MessageWriter<SpellCastIntent>),
     (mut molotov_intents, mut melee_wide_intents, mut throw_intents): (MessageWriter<MolotovCastIntent>, MessageWriter<MeleeWideIntent>, MessageWriter<ThrowItemIntent>),
+    (mut use_item_intents, mut pickup_intents): (MessageWriter<UseItemIntent>, MessageWriter<PickupItemIntent>),
     (dynamic_rng, seed, spell_particles): (Res<crate::resources::DynamicRng>, Res<crate::resources::MapSeed>, Res<crate::resources::SpellParticles>),
 ) {
     let player_info = player_query.single().ok();
     let player_vec = player_info.map(|(_, p)| p.as_grid_vec());
 
-    // Collect sand cloud positions for line-of-sight checks.
     let sand_cloud_tiles: HashSet<GridVec> = spell_particles.particles.iter()
         .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
         .map(|(pos, _, _, _)| *pos)
         .collect();
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin, mut inventory, mut health, mut stamina, combat_stats) in &mut ai_query {
-        // Only act if enough energy has accumulated.
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, ammo, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
@@ -309,12 +408,11 @@ pub fn ai_system(
                     && factions_are_hostile(my_f, of) {
                         let ov = other_pos.as_grid_vec();
                         let dist = my_pos.chebyshev_distance(ov);
-                        if dist < best_dist {
-                            // Only target if visible
-                            if viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ov)) {
-                                best_dist = dist;
-                                best = Some((other_ent, ov));
-                            }
+                        if dist < best_dist
+                            && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ov))
+                        {
+                            best_dist = dist;
+                            best = Some((other_ent, ov));
                         }
                     }
             }
@@ -323,7 +421,6 @@ pub fn ai_system(
             None
         };
 
-        // Determine chase target: prefer player if visible, else faction target
         let player_visible = player_vec.is_some_and(|pv|
             viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
         );
@@ -334,7 +431,15 @@ pub fn ai_system(
             faction_target
         };
 
-        // Find the nearest visible floor item for scavenging during idle/patrol.
+        // Update memory when target is visible
+        if let Some((_, tv)) = chase_target {
+            if let Some(ref mut mem) = ai_memory {
+                mem.last_known_pos = Some(tv);
+                mem.last_seen_turn = turn_counter.0;
+            }
+        }
+
+        // Find the nearest visible floor item for scavenging.
         let nearest_item: Option<(Entity, GridVec)> = {
             let mut best_dist = i32::MAX;
             let mut best = None;
@@ -343,34 +448,28 @@ pub fn ai_system(
                 let dist = my_pos.chebyshev_distance(iv);
                 if dist < best_dist
                     && viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&iv))
+                    && inventory.as_ref().is_some_and(|inv| inv.items.len() < 9)
                 {
-                    // Only pick up items if NPC has inventory space.
-                    if inventory.as_ref().is_some_and(|inv| inv.items.len() < 9) {
-                        best_dist = dist;
-                        best = Some((item_ent, iv));
-                    }
+                    best_dist = dist;
+                    best = Some((item_ent, iv));
                 }
             }
             best
         };
 
-        // NPC auto-pickup: if standing on an item, pick it up.
-        if let Some((item_ent, item_vec)) = nearest_item
+        // NPC auto-pickup via unified PickupItemIntent
+        if let Some((_, item_vec)) = nearest_item
             && item_vec == my_pos
-                && let Some(ref mut inv) = inventory
-                    && inv.items.len() < 9 {
-                        commands.entity(item_ent).remove::<Position>();
-                        inv.items.push(item_ent);
-                    }
+            && inventory.as_ref().is_some_and(|inv| inv.items.len() < 9)
+        {
+            pickup_intents.write(PickupItemIntent { picker: entity });
+        }
 
-        // ── NPC Healing: use whiskey when HP < 50% ──────────────────
-        // Humanoid NPCs (with inventory) will consume a whiskey item to
-        // heal themselves, just like the player can.
+        // NPC Healing via unified UseItemIntent
         let mut healed_this_turn = false;
         if let Some(ref hp) = health
-            && !hp.is_full()
             && hp.fraction() < 0.5
-            && let Some(ref mut inv) = inventory
+            && let Some(ref inv) = inventory
         {
             let whiskey_idx = inv.items.iter().position(|&ent| {
                 item_kinds.get(ent).ok().is_some_and(|k|
@@ -378,17 +477,11 @@ pub fn ai_system(
                 )
             });
             if let Some(idx) = whiskey_idx {
-                let whiskey_ent = inv.items[idx];
-                if let Ok(kind) = item_kinds.get(whiskey_ent) {
-                    if let ItemKind::Whiskey { heal } = *kind {
-                        if let Some(ref mut hp_mut) = health {
-                            hp_mut.heal(heal);
-                        }
-                        inv.items.remove(idx);
-                        commands.entity(whiskey_ent).despawn();
-                        healed_this_turn = true;
-                    }
-                }
+                use_item_intents.write(UseItemIntent {
+                    user: entity,
+                    item_index: idx,
+                });
+                healed_this_turn = true;
             }
         }
         if healed_this_turn {
@@ -396,7 +489,7 @@ pub fn ai_system(
             continue;
         }
 
-        // ── Count adjacent hostile entities (for melee wide decision) ────
+        // Count adjacent hostile entities (for melee wide decision)
         let adjacent_enemy_count = {
             let mut count = 0;
             for dir in GridVec::DIRECTIONS_8 {
@@ -404,7 +497,6 @@ pub fn ai_system(
                 let has_enemy = spatial.entities_at(&neighbor).iter().any(|&e| {
                     e != entity && hostile_positions.contains(e)
                 });
-                // Also check if player is adjacent (for hostile NPCs)
                 let has_player = player_vec.is_some_and(|pv| pv == neighbor);
                 if has_enemy || has_player {
                     count += 1;
@@ -413,15 +505,12 @@ pub fn ai_system(
             count
         };
 
-        // ── NPC Dodge: sidestep when projectile is nearby ────────────
-        // If there are spell particles (explosion shrapnel) near the NPC,
-        // attempt to dodge away. 20% chance to dodge each turn.
+        // NPC Dodge: sidestep when projectile is nearby
         let dodge_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0xD0D6);
         let nearby_danger = spell_particles.particles.iter().any(|(p, life, delay, _)| {
             *delay == 0 && *life > 0 && my_pos.chebyshev_distance(*p) <= 2
         });
         if nearby_danger && dodge_roll < DODGE_CHANCE {
-            // Find a safe direction to dodge
             let mut best_dir = None;
             let mut best_dist = 0;
             for dir in GridVec::DIRECTIONS_8 {
@@ -446,9 +535,17 @@ pub fn ai_system(
             }
         }
 
+        // Check if NPC should flee
+        if should_flee(&health, personality, &inventory, &item_kinds) {
+            if !matches!(*ai, AiState::Fleeing) {
+                *ai = AiState::Fleeing;
+            }
+        } else if matches!(*ai, AiState::Fleeing) {
+            *ai = if chase_target.is_some() { AiState::Chasing } else { AiState::Patrolling };
+        }
+
         match *ai {
             AiState::Idle => {
-                // Check if any target is visible — transition to Chasing.
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
                     if let Some((_, tv)) = chase_target {
@@ -458,8 +555,21 @@ pub fn ai_system(
                         }
                     }
                 } else if let Some((_, item_vec)) = nearest_item {
-                    // No combat target but a floor item is visible — pathfind to it.
                     let step = a_star_first_step(my_pos, item_vec, |p| {
+                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                    });
+                    if let Some(step) = step
+                            && !step.is_zero() {
+                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                        }
+                    energy.spend_action();
+                } else if let Some(ref mem) = ai_memory
+                    && let Some(remembered_pos) = mem.last_known_pos
+                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                    && my_pos != remembered_pos
+                {
+                    let step = a_star_first_step(my_pos, remembered_pos, |p| {
                         is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
@@ -469,41 +579,63 @@ pub fn ai_system(
                         }
                     energy.spend_action();
                 } else {
-                    // Idle: slowly rotate look direction.
+                    if let Some(ref mut mem) = ai_memory {
+                        if turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
+                            mem.last_known_pos = None;
+                        }
+                    }
                     rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                 }
             }
             AiState::Patrolling => {
-                // If we spot a target, transition to Chasing.
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
                     continue;
                 }
 
-                // If a floor item is visible, pathfind toward it.
                 if let Some((_, item_vec)) = nearest_item {
                     let step = a_star_first_step(my_pos, item_vec, |p| {
                         is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
-                        && !step.is_zero() {
-                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            && !step.is_zero() {
+                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
                             update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     energy.spend_action();
                     continue;
                 }
 
-                // Patrol behavior depends on faction.
+                // Check memory for remembered positions
+                if let Some(ref mem) = ai_memory
+                    && let Some(remembered_pos) = mem.last_known_pos
+                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                    && my_pos != remembered_pos
+                {
+                    let step = a_star_first_step(my_pos, remembered_pos, |p| {
+                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                    });
+                    if let Some(step) = step
+                            && !step.is_zero() {
+                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                        }
+                    energy.spend_action();
+                    continue;
+                }
+
+                if let Some(ref mut mem) = ai_memory {
+                    if turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
+                        mem.last_known_pos = None;
+                    }
+                }
+
                 let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
 
-                // Natural movement: occasional idle pauses based on position + turn.
-                // Using turn counter creates less frequent, more natural pauses.
                 let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
                     .wrapping_add(turn_counter.0 as i32) as u32;
                 if pause_hash.is_multiple_of(7) {
-                    // Skip this turn (idle pause for natural movement).
                     rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
@@ -511,12 +643,9 @@ pub fn ai_system(
 
                 let patrol_step = match my_faction {
                     Some(Faction::Lawmen) => {
-                        // Sheriff/Lawmen: structured patrol around origin
-                        // Walk toward the origin if too far, else circle around it.
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
                             Some((origin - my_pos).king_step())
                         } else {
-                            // Rotate clockwise around origin
                             let offset = my_pos - origin;
                             let rotated = offset.rotate_45_cw();
                             let target = origin + rotated;
@@ -524,16 +653,11 @@ pub fn ai_system(
                         }
                     }
                     Some(Faction::Wildlife) => {
-                        // Animals: random wandering using prime multipliers for
-                        // pseudo-random direction based on position and energy.
-                        // Occasionally change direction for more natural movement.
                         let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13));
                         let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])
                     }
                     Some(Faction::Outlaws) => {
-                        // Outlaws: skulk — stay near origin, move slowly and randomly.
-                        // Uses different prime multipliers (3, 11) for varied patterns.
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
                             Some((origin - my_pos).king_step())
                         } else {
@@ -543,8 +667,6 @@ pub fn ai_system(
                         }
                     }
                     _ => {
-                        // Vaqueros and others: wander using prime multipliers (5, 9)
-                        // for pseudo-random direction.
                         let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9));
                         let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                         Some(GridVec::DIRECTIONS_8[dir_idx])
@@ -564,11 +686,32 @@ pub fn ai_system(
 
                 energy.spend_action();
             }
+            AiState::Fleeing => {
+                let threat_pos = chase_target.map(|(_, tv)| tv)
+                    .or_else(|| player_vec);
+
+                if let Some(tp) = threat_pos {
+                    if let Some(dir) = flee_direction(my_pos, tp, entity, &game_map, &spatial, &blockers) {
+                        move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
+                        update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
+                    }
+                } else {
+                    let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
+                    if my_pos != origin {
+                        let step = a_star_first_step(my_pos, origin, |p| {
+                            is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        });
+                        if let Some(step) = step
+                                && !step.is_zero() {
+                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                            }
+                    }
+                    *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
+                }
+                energy.spend_action();
+            }
             AiState::Chasing => {
-                // When chasing, keep pursuing the player if they are within
-                // sight range (distance-based), not just within the directional
-                // viewshed cone. This prevents the NPC from losing the target
-                // during rotation ticks and makes chasing more persistent.
                 let sight_range = viewshed.as_ref().map(|vs| vs.range).unwrap_or(8);
                 let player_in_range = player_vec.is_some_and(|pv|
                     my_pos.chebyshev_distance(pv) <= sight_range
@@ -577,9 +720,28 @@ pub fn ai_system(
                     player_info.map(|(e, p)| (e, p.as_grid_vec()))
                 } else if let Some(ft) = faction_target {
                     Some(ft)
+                } else if let Some(ref mem) = ai_memory
+                    && let Some(remembered_pos) = mem.last_known_pos
+                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                    && my_pos != remembered_pos
+                {
+                    // Memory pursuit: navigate to remembered position.
+                    let step = a_star_first_step(my_pos, remembered_pos, |pos| {
+                        is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
+                    })
+                    .unwrap_or_else(|| (remembered_pos - my_pos).king_step());
+
+                    if !step.is_zero() {
+                        move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                    }
+                    energy.spend_action();
+                    continue;
                 } else {
-                    // Lost sight of all targets — return to patrolling.
                     *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
+                    if let Some(ref mut mem) = ai_memory {
+                        mem.last_known_pos = None;
+                    }
                     energy.spend_action();
                     continue;
                 };
@@ -589,8 +751,12 @@ pub fn ai_system(
                     continue;
                 };
 
-                // If the enemy has an AiLookDir, check if they need to rotate
-                // toward the target first (costs a tick).
+                // Update memory with current target position
+                if let Some(ref mut mem) = ai_memory {
+                    mem.last_known_pos = Some(target_vec);
+                    mem.last_seen_turn = turn_counter.0;
+                }
+
                 let toward_target = (target_vec - my_pos).king_step();
                 let needs_rotation = !toward_target.is_zero()
                     && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_target);
@@ -603,11 +769,10 @@ pub fn ai_system(
 
                 let dist = my_pos.chebyshev_distance(target_vec);
 
-                // Check inventory for throwable items (grenade/molotov) at medium range.
+                // Throwable items (grenade/molotov) at medium range
                 let mut used_throwable = false;
                 if (3..=6).contains(&dist)
                     && let Some(ref mut inv) = inventory {
-                        // Find a throwable item in inventory.
                         let throwable_idx = inv.items.iter().position(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(*k, ItemKind::Grenade { .. } | ItemKind::Molotov { .. })
@@ -646,8 +811,7 @@ pub fn ai_system(
                     continue;
                 }
 
-                // ── Throw knives/tomahawks at medium range ──────────────
-                // NPCs use thrown weapons like the player does.
+                // Throw knives/tomahawks at medium range
                 let mut used_thrown_weapon = false;
                 if (2..=8).contains(&dist)
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
@@ -686,9 +850,7 @@ pub fn ai_system(
                     continue;
                 }
 
-                // ── Melee wide (roundhouse kick) when surrounded ─────────
-                // If 2+ enemies are adjacent, use melee wide attack
-                // (same ability as the player's roundhouse kick).
+                // Melee wide (roundhouse kick) when surrounded
                 if adjacent_enemy_count >= 2
                     && stamina.as_ref().is_some_and(|s| s.current >= 15)
                     && combat_stats.is_some()
@@ -703,8 +865,7 @@ pub fn ai_system(
                     continue;
                 }
 
-                // 1/100 chance to throw sand at the target.
-                // XOR salt decorrelates the RNG from other per-entity rolls.
+                // Sand throw (1% chance)
                 let sand_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0x5A4D);
                 if sand_roll < 0.01 && (2..=5).contains(&dist) {
                     let toward = (target_vec - my_pos).king_step();
@@ -714,16 +875,14 @@ pub fn ai_system(
                             caster: entity,
                             radius: 2,
                             target: sand_center,
-                            grenade_index: usize::MAX, // sentinel: sand throw
+                            grenade_index: usize::MAX,
                         });
                         energy.spend_action();
                         continue;
                     }
                 }
 
-                // Check inventory for a loaded gun to fire. Decrements the gun's
-                // loaded rounds directly, keeping inventory-based ammo in sync.
-                // If all guns are empty, attempt to reload one before attacking.
+                // Ranged attack: fire guns via unified RangedAttackIntent
                 let mut used_gun = false;
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
@@ -735,19 +894,17 @@ pub fn ai_system(
                             )
                         });
                         if let Some(gun_entity) = gun_ent {
-                            if let Ok(mut kind) = item_kinds.get_mut(gun_entity)
-                                && let ItemKind::Gun { ref mut loaded, .. } = *kind {
-                                    *loaded -= 1;
-                                    ranged_intents.write(AiRangedAttackIntent {
-                                        attacker: entity,
-                                        target: target_entity,
-                                        range: AI_RANGED_ATTACK_RANGE,
-                                    });
-                                    used_gun = true;
-                                }
+                            let dx = target_vec.x - my_pos.x;
+                            let dy = target_vec.y - my_pos.y;
+                            ranged_intents.write(RangedAttackIntent {
+                                attacker: entity,
+                                range: AI_RANGED_ATTACK_RANGE,
+                                dx,
+                                dy,
+                                gun_item: Some(gun_entity),
+                            });
+                            used_gun = true;
                         } else {
-                            // No loaded gun found — try to reload a gun that needs reloading.
-                            // NPCs reload one round at a time, just like the player.
                             let reloadable_gun = inv.items.iter().copied().find(|&ent| {
                                 item_kinds.get(ent).ok().is_some_and(|k|
                                     matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
@@ -757,16 +914,19 @@ pub fn ai_system(
                                 && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
                                     && let ItemKind::Gun { ref mut loaded, .. } = *kind {
                                         *loaded += 1;
-                                        used_gun = true; // Spent this action reloading.
+                                        used_gun = true;
                                     }
                         }
                     } else if let Some(mut ammo_pool) = ammo
                         && ammo_pool.spend_one() {
-                            // Fallback for NPCs without inventory but with Ammo component.
-                            ranged_intents.write(AiRangedAttackIntent {
+                            let dx = target_vec.x - my_pos.x;
+                            let dy = target_vec.y - my_pos.y;
+                            ranged_intents.write(RangedAttackIntent {
                                 attacker: entity,
-                                target: target_entity,
                                 range: AI_RANGED_ATTACK_RANGE,
+                                dx,
+                                dy,
+                                gun_item: None,
                             });
                             used_gun = true;
                         }
@@ -776,7 +936,7 @@ pub fn ai_system(
                     continue;
                 }
 
-                // Adjacent to target? Attack directly (faction fight or player).
+                // Adjacent to target? Melee attack.
                 if dist == 1 {
                     attack_intents.write(AttackIntent {
                         attacker: entity,
@@ -784,6 +944,19 @@ pub fn ai_system(
                     });
                     energy.spend_action();
                     continue;
+                }
+
+                // Tactical range management (kiting) for ranged NPCs
+                let pref_range = personality.map(|p| p.preferred_range).unwrap_or(1);
+                let is_ranged_npc = pref_range > 1 && has_loaded_gun(&inventory, &item_kinds);
+
+                if is_ranged_npc && dist < pref_range {
+                    if let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {
+                        move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
+                        update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
+                        energy.spend_action();
+                        continue;
+                    }
                 }
 
                 // A* pathfinding toward target.
@@ -801,10 +974,6 @@ pub fn ai_system(
                     update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                 }
-            }
-            AiState::Fleeing => {
-                // Fleeing: spend action and do nothing else for now.
-                energy.spend_action();
             }
         }
     }

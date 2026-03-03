@@ -11,7 +11,7 @@ use roguelike::events::*;
 use roguelike::gamemap::GameMap;
 use roguelike::grid_vec::GridVec;
 use roguelike::resources::*;
-use roguelike::systems::{ai, combat, movement, projectile, spatial_index, spell, visibility};
+use roguelike::systems::{ai, combat, inventory, movement, projectile, spatial_index, spell, visibility};
 
 // ─── Helper ──────────────────────────────────────────────────────
 
@@ -1937,6 +1937,9 @@ fn test_app_with_ai() -> App {
     app.add_message::<MeleeWideIntent>();
     app.add_message::<MolotovCastIntent>();
     app.add_message::<ThrowItemIntent>();
+    app.add_message::<UseItemIntent>();
+    app.add_message::<PickupItemIntent>();
+    app.add_message::<DropItemIntent>();
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
@@ -1950,6 +1953,7 @@ fn test_app_with_ai() -> App {
     app.init_resource::<InputState>();
     app.init_resource::<GodMode>();
     app.init_resource::<DynamicRng>();
+    app.init_resource::<Collectibles>();
     app.init_state::<GameState>();
     app.add_sub_state::<TurnState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
@@ -1962,7 +1966,11 @@ fn test_app_with_ai() -> App {
             ai::ai_system,
             movement::movement_system,
             movement::cactus_damage_system,
+            inventory::pickup_system,
+            inventory::use_item_system,
+            inventory::throw_system,
             combat::combat_system,
+            combat::ranged_attack_system,
             combat::ai_ranged_attack_system,
             combat::melee_wide_system,
             projectile::projectile_system,
@@ -1990,7 +1998,10 @@ fn spawn_ai_npc(app: &mut App, x: i32, y: i32, name: &str, faction: Faction) -> 
         AiState::Idle,
         AiLookDir(GridVec::new(1, 0)),
         PatrolOrigin(GridVec::new(x, y)),
+        AiMemory::default(),
+        AiPersonality::default(),
         faction,
+    )).insert((
         Viewshed {
             range: 20,
             visible_tiles: std::collections::HashSet::new(),

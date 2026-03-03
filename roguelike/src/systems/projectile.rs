@@ -114,7 +114,7 @@ pub fn spawn_arrow(
     commands.spawn((
         Position { x: start_pos.x, y: start_pos.y },
         Renderable {
-            symbol: "→".into(),
+            symbol: "•".into(),
             fg: RatColor::Rgb(139, 90, 43),
             bg: RatColor::Black,
         },

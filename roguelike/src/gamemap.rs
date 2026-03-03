@@ -90,19 +90,145 @@ impl GameMap {
             sand_cloud_previous_floor: HashMap::new(),
         };
 
-        // ── Step 2: Street grid ─────────────────────────────────────
-        // Multiple horizontal avenues spanning the map width.
+        // ── Step 1b: Forest on outskirts ────────────────────────────
+        let forest_margin = 30; // tiles from edge where forest is dense
+        let forest_seed = seed.wrapping_add(77700);
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                let dist_to_edge = x.min(y).min(width - 1 - x).min(height - 1 - y);
+                if dist_to_edge >= forest_margin {
+                    continue;
+                }
+                let density = (1.0 - dist_to_edge as f64 / forest_margin as f64).powi(2);
+                let noise = value_noise(x, y, forest_seed);
+                if noise < density * 0.7 {
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        voxel.floor = Some(Floor::Grass);
+                        voxel.props = Some(Props::Tree);
+                    }
+                }
+            }
+        }
+        // Carve small paths through the forest
+        let path_seed = seed.wrapping_add(77711);
+        for i in 0..8i32 {
+            let angle = value_noise(i, 0, path_seed) * std::f64::consts::TAU;
+            let cx = width / 2;
+            let cy = height / 2;
+            let mut px = cx as f64;
+            let mut py = cy as f64;
+            let dx = angle.cos();
+            let dy = angle.sin();
+            while px > 0.0 && px < (width - 1) as f64 && py > 0.0 && py < (height - 1) as f64 {
+                let ix = px as CoordinateUnit;
+                let iy = py as CoordinateUnit;
+                for oy in -1..=1i32 {
+                    for ox in -1..=1i32 {
+                        let p = GridVec::new(ix + ox, iy + oy);
+                        if let Some(voxel) = map.get_voxel_at_mut(&p)
+                            && matches!(voxel.props, Some(Props::Tree))
+                        {
+                            voxel.props = None;
+                        }
+                    }
+                }
+                px += dx;
+                py += dy;
+            }
+        }
+
+        // ── Step 2: River through center ────────────────────────────
+        let river_seed = seed.wrapping_add(88800);
+        let river_cx = width as f64 / 2.0;
+        // River flows top to bottom with sinusoidal wobble
+        for y in 1..height - 1 {
+            let fy = y as f64;
+            let wobble = (fy * 0.02).sin() * 20.0
+                + (fy * 0.05).sin() * 8.0
+                + value_noise(0, y, river_seed) * 6.0;
+            let center_x = river_cx + wobble;
+            let river_width = 4.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 3.0;
+            let beach_width = 2.0;
+
+            for x in 1..width - 1 {
+                let fx = x as f64;
+                let dist = (fx - center_x).abs();
+                let pos = GridVec::new(x, y);
+                if dist < river_width * 0.4 {
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        voxel.floor = Some(Floor::DeepWater);
+                        voxel.props = None;
+                    }
+                } else if dist < river_width {
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        voxel.floor = Some(Floor::ShallowWater);
+                        voxel.props = None;
+                    }
+                } else if dist < river_width + beach_width {
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        if !matches!(voxel.props, Some(Props::Wall)) {
+                            voxel.floor = Some(Floor::Beach);
+                            voxel.props = None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Place bridges across the river at regular intervals
+        let bridge_spacing = 40;
+        let first_bridge_y = 30;
+        let mut bridge_ys: Vec<CoordinateUnit> = Vec::new();
+        {
+            let mut by = first_bridge_y;
+            while by < height - 30 {
+                bridge_ys.push(by);
+                by += bridge_spacing;
+            }
+        }
+        for &by in &bridge_ys {
+            for dy in -2..=2i32 {
+                let y = by + dy;
+                if y <= 0 || y >= height - 1 { continue; }
+                for x in 1..width - 1 {
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                                voxel.floor = Some(Floor::Bridge);
+                                voxel.props = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Step 3: Curved street grid ──────────────────────────────
+        // Horizontal avenues with sinusoidal curvature
         let avenue_spacing = 24;
         let avenue_half_width = 3;
         let mut avenue_ys: Vec<CoordinateUnit> = Vec::new();
+        let curve_seed = seed.wrapping_add(55500);
         {
-            let first_avenue = 20;
+            let first_avenue = 40; // start inside the forest margin
             let mut ay = first_avenue;
-            while ay < height - 20 {
+            while ay < height - 40 {
                 avenue_ys.push(ay);
-                for y in (ay - avenue_half_width)..=(ay + avenue_half_width) {
-                    for x in 1..width - 1 {
-                        if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
+                let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
+                let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
+                for x in 1..width - 1 {
+                    let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
+                    for hw in -avenue_half_width..=avenue_half_width {
+                        let y = ay + hw + curve_offset as CoordinateUnit;
+                        if y <= 0 || y >= height - 1 { continue; }
+                        let pos = GridVec::new(x, y);
+                        if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                            // Don't pave over river
+                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                                continue;
+                            }
                             voxel.floor = Some(Floor::Dirt);
                             voxel.props = None;
                         }
@@ -112,25 +238,34 @@ impl GameMap {
             }
         }
 
-        // Vertical cross streets every ~22 tiles with noise-based jitter.
+        // Vertical cross streets with sinusoidal curvature
         let cross_seed = seed.wrapping_add(66666);
         let cross_spacing = 22;
         let cross_half_width = 2;
         let mut cross_xs: Vec<CoordinateUnit> = Vec::new();
         {
-            let mut cx = 20i32;
+            let mut cx = 40i32;
             let mut ci = 0i32;
-            while cx < width - 20 {
+            while cx < width - 40 {
                 let jitter = (value_noise(ci, 0, cross_seed) * 6.0) as CoordinateUnit - 3;
                 let actual_cx = (cx + jitter).clamp(2, width - 3);
                 cross_xs.push(actual_cx);
-                for x in (actual_cx - cross_half_width)..=(actual_cx + cross_half_width) {
-                    for y in 1..height - 1 {
-                        if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y))
-                            && !matches!(voxel.props, Some(Props::Wall))
-                        {
-                            voxel.floor = Some(Floor::Dirt);
-                            voxel.props = None;
+                let curve_amp = 2.0 + value_noise(ci, 1, cross_seed) * 3.0;
+                let curve_freq = 0.02 + value_noise(1, ci, cross_seed) * 0.01;
+                for y in 1..height - 1 {
+                    let curve_offset = (y as f64 * curve_freq).sin() * curve_amp;
+                    for hw in -cross_half_width..=cross_half_width {
+                        let x = actual_cx + hw + curve_offset as CoordinateUnit;
+                        if x <= 0 || x >= width - 1 { continue; }
+                        let pos = GridVec::new(x, y);
+                        if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                                continue;
+                            }
+                            if !matches!(voxel.props, Some(Props::Wall)) {
+                                voxel.floor = Some(Floor::Dirt);
+                                voxel.props = None;
+                            }
                         }
                     }
                 }
@@ -139,29 +274,54 @@ impl GameMap {
             }
         }
 
-        // ── Step 3: Generate buildings filling every city block ──────
+        // ── Step 4: Generate buildings filling city blocks ───────────
         let buildings = generate_buildings(width, height, seed, &avenue_ys, avenue_half_width);
 
         for b in &buildings {
+            // Don't place buildings on water
+            let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
+            if let Some(voxel) = map.get_voxel_at(&center) {
+                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                    continue;
+                }
+            }
             place_building(&mut map, b, seed);
         }
 
-        // ── Step 4: Landmark buildings ──────────────────────────────
+        // ── Step 5: Landmark buildings ──────────────────────────────
         place_town_hall(&mut map, width, height, seed);
         place_grand_saloon(&mut map, width, height, seed);
 
-        // ── Step 5: Small parks ─────────────────────────────────────
+        // ── Step 6: Small parks ─────────────────────────────────────
         place_parks(&mut map, width, height, seed);
 
-        // ── Step 6: Street props along every avenue ──────────────
+        // ── Step 7: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
             place_street_props(&mut map, width, ay, avenue_half_width, seed);
         }
 
-        // ── Step 7: Decorative elements in open areas ───────────────
+        // ── Step 8: Decorative elements in open areas ───────────────
         place_desert_decorations(&mut map, width, height, seed);
 
-        // ── Step 8: Spawn clearing ──────────────────────────────────
+        // ── Step 9: Victory goal at top-right ───────────────────────
+        let goal_x = width - 15;
+        let goal_y = height - 15;
+        // Clear area and place the goal
+        clear_around(&mut map, GridVec::new(goal_x, goal_y), 4);
+        // Place victory goal markers in a visible pattern
+        for dy in -1..=1i32 {
+            for dx in -1..=1i32 {
+                let pos = GridVec::new(goal_x + dx, goal_y + dy);
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    voxel.floor = Some(Floor::Grass);
+                    if dx == 0 && dy == 0 {
+                        voxel.props = Some(Props::VictoryGoal);
+                    }
+                }
+            }
+        }
+
+        // ── Step 10: Spawn clearing (bottom-left) ───────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
 
         map
@@ -196,28 +356,27 @@ impl GameMap {
             })
     }
 
-    /// Finds a passable interior tile inside a saloon (building with a Piano).
-    /// Scans the map for Piano prop, then returns a nearby empty wood-plank tile.
-    /// Returns `None` if no saloon is found.
-    /// Search is deterministic (left-to-right, top-to-bottom) for reproducible spawns.
-    pub fn find_saloon_interior(&self) -> Option<GridVec> {
-        for y in 1..self.height - 1 {
-            for x in 1..self.width - 1 {
+    /// Finds a passable tile right outside the door of a house.
+    /// Scans the map near the bottom-left for a building doorway.
+    /// Returns `None` if no suitable location is found.
+    pub fn find_house_exterior(&self) -> Option<GridVec> {
+        // Search near SPAWN_POINT for a building with a doorway
+        let search_radius = 40;
+        let sx = SPAWN_POINT.x;
+        let sy = SPAWN_POINT.y;
+        for y in sy.saturating_sub(search_radius).max(1)..=(sy + search_radius).min(self.height - 2) {
+            for x in sx.saturating_sub(search_radius).max(1)..=(sx + search_radius).min(self.width - 2) {
                 let pos = GridVec::new(x, y);
                 if let Some(voxel) = self.get_voxel_at(&pos)
-                    && matches!(voxel.props, Some(Props::Piano))
+                    && voxel.props.is_none()
+                    && matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Sand) | Some(Floor::Gravel) | Some(Floor::Grass))
                 {
-                    // Found a piano — look for an adjacent empty wood-plank tile
-                    for dy in -2..=2i32 {
-                        for dx in -2..=2i32 {
-                            let candidate = pos + GridVec::new(dx, dy);
-                            if let Some(v) = self.get_voxel_at(&candidate)
-                                && v.props.is_none()
-                                && matches!(v.floor, Some(Floor::WoodPlanks))
-                            {
-                                return Some(candidate);
-                            }
-                        }
+                    // Check if there's an adjacent wall (meaning we're just outside a building)
+                    let has_adjacent_wall = pos.cardinal_neighbors().iter().any(|n| {
+                        self.get_voxel_at(n).is_some_and(|v| matches!(v.props, Some(Props::Wall)))
+                    });
+                    if has_adjacent_wall {
+                        return Some(pos);
                     }
                 }
             }
@@ -225,22 +384,21 @@ impl GameMap {
         None
     }
 
-    /// Creates a RenderPacket with full fog-of-war support.
+    /// Creates a RenderPacket with visibility-based dimming.
     ///
-    /// Tiles are rendered in three states:
-    /// - **Visible** (in `visible_tiles`): full brightness.
-    /// - **Revealed** (in `revealed_tiles` but not `visible_tiles`): heavily dimmed
-    ///   to show the player has been there, but the area is not currently lit.
-    /// - **Unseen** (in neither set): solid black.
+    /// The entire map is always visible (no fog of war / hidden areas).
+    /// Tiles are rendered in two states:
+    /// - **Visible** (in player's current FOV): full brightness.
+    /// - **Not visible** (outside player's FOV): dimmed but still shown.
     ///
-    /// When both sets are `None`, all tiles render at full brightness (no FOV).
+    /// When `visible_tiles` is `None`, all tiles render at full brightness.
     pub fn create_render_packet_with_fog(
         &self,
         center: &MyPoint,
         render_width: u16,
         render_height: u16,
         visible_tiles: Option<&std::collections::HashSet<MyPoint>>,
-        revealed_tiles: Option<&std::collections::HashSet<MyPoint>>,
+        _revealed_tiles: Option<&std::collections::HashSet<MyPoint>>,
     ) -> RenderPacket {
         let w_radius = render_width as CoordinateUnit / 2;
         let h_radius = render_height as CoordinateUnit / 2;
@@ -257,16 +415,9 @@ impl GameMap {
                     let is_visible = visible_tiles
                         .map(|vt| vt.contains(&world_pos))
                         .unwrap_or(true);
-                    let is_revealed = revealed_tiles
-                        .map(|rt| rt.contains(&world_pos))
-                        .unwrap_or(true);
 
-                    if is_visible {
-                        grid[ry as usize][rx as usize] = voxel.to_graphic(true);
-                    } else if is_revealed {
-                        grid[ry as usize][rx as usize] = voxel.to_graphic(false);
-                    }
-                    // else: unseen → stays as the default black cell
+                    // Always show the map — visible at full brightness, rest dimmed
+                    grid[ry as usize][rx as usize] = voxel.to_graphic(is_visible);
                 }
             }
         }

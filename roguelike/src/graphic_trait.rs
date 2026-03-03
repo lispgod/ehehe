@@ -26,6 +26,10 @@ impl GraphicElement for Floor {
             Floor::Fire => "^".into(),
             Floor::Water => "~".into(),
             Floor::SandCloud => "*".into(),
+            Floor::ShallowWater => "~".into(),
+            Floor::DeepWater => "≈".into(),
+            Floor::Beach => ".".into(),
+            Floor::Bridge => "=".into(),
         }
     }
 
@@ -41,6 +45,10 @@ impl GraphicElement for Floor {
             Floor::Fire => RatColor::Rgb(255, 140, 0),
             Floor::Water => RatColor::Rgb(80, 140, 200),
             Floor::SandCloud => RatColor::Rgb(210, 180, 120),
+            Floor::ShallowWater => RatColor::Rgb(100, 170, 220),
+            Floor::DeepWater => RatColor::Rgb(30, 80, 180),
+            Floor::Beach => RatColor::Rgb(220, 200, 140),
+            Floor::Bridge => RatColor::Rgb(140, 100, 55),
         }
     }
 
@@ -56,6 +64,10 @@ impl GraphicElement for Floor {
             Floor::Fire => RatColor::Rgb(200, 60, 0),
             Floor::Water => RatColor::Rgb(40, 80, 140),
             Floor::SandCloud => RatColor::Rgb(170, 140, 90),
+            Floor::ShallowWater => RatColor::Rgb(60, 120, 180),
+            Floor::DeepWater => RatColor::Rgb(15, 40, 120),
+            Floor::Beach => RatColor::Rgb(190, 170, 110),
+            Floor::Bridge => RatColor::Rgb(100, 72, 40),
         }
     }
 }
@@ -80,6 +92,7 @@ impl GraphicElement for Props {
             Props::Piano => "M".into(),
             Props::Sign => "]".into(),
             Props::HayBale => "&".into(),
+            Props::VictoryGoal => "★".into(),
         }
     }
 
@@ -102,6 +115,7 @@ impl GraphicElement for Props {
             Props::Piano => RatColor::Rgb(50, 45, 40),
             Props::Sign => RatColor::Rgb(150, 125, 70),
             Props::HayBale => RatColor::Rgb(200, 180, 80),
+            Props::VictoryGoal => RatColor::Rgb(255, 215, 0),
         }
     }
 

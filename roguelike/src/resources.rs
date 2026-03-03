@@ -174,14 +174,15 @@ pub struct CombatLog {
 const MAX_COMBAT_LOG_MESSAGES: usize = 50;
 
 /// Active combat particles for rendering grenade/bullet animations.
-/// Each entry is (position, remaining_lifetime_frames, delay_before_visible, is_sand).
+/// Each entry is (position, remaining_lifetime_frames, delay_before_visible, is_sand, velocity_x, velocity_y).
 /// Particles with delay > 0 are not yet visible; they count down each tick.
-/// `is_sand` particles are rendered as `*` (asterisk) and disperse slowly over 12 ticks.
+/// `is_sand` particles are rendered as smoke/plume that drifts and dissipates.
+/// Velocity fields allow particles to move each tick for visible motion.
 ///
 /// Also stores pre-computed sound indicator positions for the render system.
 #[derive(Resource, Debug, Default)]
 pub struct SpellParticles {
-    pub particles: Vec<(MyPoint, u32, u32, bool)>,
+    pub particles: Vec<(MyPoint, u32, u32, bool, i32, i32)>,
     /// World positions where "!" sound indicators should appear this frame.
     /// Computed by the particle tick system from SoundEvents + player viewshed.
     pub sound_indicators: Vec<MyPoint>,
@@ -193,7 +194,7 @@ const MAX_PARTICLES: usize = 800;
 impl SpellParticles {
     /// Adds an expanding ring of particles for a grenade blast.
     /// Particles at greater distances from the origin appear later, creating
-    /// an outward-traveling shrapnel wave effect.
+    /// an outward-traveling shrapnel wave effect. Particles drift outward.
     pub fn add_aoe(&mut self, origin: MyPoint, lifetime: u32) {
         let radius = 3i32; // visual radius of the particle ring
         let frames_per_ring = 2u32; // ticks of delay per distance unit
@@ -211,20 +212,37 @@ impl SpellParticles {
                     }
                     let pos = origin + MyPoint::new(dx, dy);
                     let delay = (r as u32 - 1) * frames_per_ring;
-                    self.particles.push((pos, lifetime, delay, false));
+                    // Particles drift outward from origin
+                    let vx = dx.signum();
+                    let vy = dy.signum();
+                    self.particles.push((pos, lifetime, delay, false, vx, vy));
                 }
             }
         }
     }
 
-    /// Ticks all particles: counts down delays, then lifetimes. Removes expired ones.
+    /// Ticks all particles: counts down delays, then lifetimes and moves particles.
+    /// Particles move multiple sub-steps per tick for visible, satisfying motion.
     pub fn tick(&mut self) {
-        self.particles.retain_mut(|(_, life, delay, _)| {
+        let sub_steps = 2; // move particles multiple times per tick
+        self.particles.retain_mut(|(pos, life, delay, _is_sand, vx, vy)| {
             if *delay > 0 {
                 *delay -= 1;
                 true // still waiting to appear
             } else {
+                // Move the particle multiple sub-steps for visible motion
+                for _ in 0..sub_steps {
+                    if *life > 0 {
+                        pos.x += *vx;
+                        pos.y += *vy;
+                    }
+                }
                 *life = life.saturating_sub(1);
+                // Slow down particles as they age (plume dissipation)
+                if *life < 3 {
+                    *vx = 0;
+                    *vy = 0;
+                }
                 *life > 0
             }
         });

@@ -453,8 +453,8 @@ pub fn ai_system(
     };
 
     let sand_cloud_tiles: HashSet<GridVec> = spell_particles.particles.iter()
-        .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
-        .map(|(pos, _, _, _)| *pos)
+        .filter(|(_, life, delay, _, _, _)| *delay == 0 && *life > 0)
+        .map(|(pos, _, _, _, _, _)| *pos)
         .collect();
 
     for (entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
@@ -590,7 +590,7 @@ pub fn ai_system(
 
         // NPC Dodge: sidestep when projectile is nearby
         let dodge_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0xD0D6);
-        let nearby_danger = spell_particles.particles.iter().any(|(p, life, delay, _)| {
+        let nearby_danger = spell_particles.particles.iter().any(|(p, life, delay, _, _, _)| {
             *delay == 0 && *life > 0 && my_pos.chebyshev_distance(*p) <= 2
         });
         if nearby_danger && dodge_roll < DODGE_CHANCE {
@@ -600,8 +600,8 @@ pub fn ai_system(
                 let target = my_pos + dir;
                 if is_walkable_for_ai(target, entity, &game_map, &spatial, &blockers) {
                     let min_particle_dist = spell_particles.particles.iter()
-                        .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
-                        .map(|(p, _, _, _)| target.chebyshev_distance(*p))
+                        .filter(|(_, life, delay, _, _, _)| *delay == 0 && *life > 0)
+                        .map(|(p, _, _, _, _, _)| target.chebyshev_distance(*p))
                         .min()
                         .unwrap_or(i32::MAX);
                     if min_particle_dist > best_dist {

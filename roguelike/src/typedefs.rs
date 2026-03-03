@@ -15,8 +15,8 @@ pub type CoordinateUnit = i32;
 /// Grid coordinate type — now a proper algebraic vector instead of a raw tuple.
 pub type MyPoint = GridVec;
 
-pub const SPAWN_X: CoordinateUnit = 200;
-pub const SPAWN_Y: CoordinateUnit = 140;
+pub const SPAWN_X: CoordinateUnit = 20;
+pub const SPAWN_Y: CoordinateUnit = 20;
 pub const SPAWN_POINT: MyPoint = GridVec::new(SPAWN_X, SPAWN_Y);
 
 /// Creates a 2D array of GraphicTriples initialized with spaces on a black background.

@@ -38,8 +38,8 @@ pub fn visibility_system(
 
     // Collect sand cloud positions (particles with lifetime > 0 and delay == 0).
     let sand_cloud_tiles: HashSet<MyPoint> = spell_particles.particles.iter()
-        .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
-        .map(|(pos, _, _, _)| *pos)
+        .filter(|(_, life, delay, _, _, _)| *delay == 0 && *life > 0)
+        .map(|(pos, _, _, _, _, _)| *pos)
         .collect();
 
     for (entity, pos, mut viewshed, ai_look_dir, faction) in &mut query {
@@ -72,19 +72,17 @@ pub fn visibility_system(
             let cos_t = if cone_dir.is_some() { 0.6 } else { -1.0 };
             (range, cos_t)
         } else if is_npc {
-            // Human NPCs: always directional, narrow ~45° cone.
-            // They never get circle FOV — always looking in their direction.
-            if let Some(dir) = cone_dir {
-                let dist = ((dir.x as f64).powi(2) + (dir.y as f64).powi(2)).sqrt();
-                let range = (viewshed.range as f64 + dist * 8.0).min(FOV_MAX_RANGE as f64);
-                // Narrow cone: baseline cos 0.86, up to 0.94 at distance.
-                // This yields roughly a 40–55° full FOV cone (≈ 45°).
-                let cone_t = (dist / 3.0).min(1.0);
-                let cos_t = 0.86 + cone_t * 0.08;
-                (range as CoordinateUnit, cos_t)
+            // Human NPCs: very far sight (100 tiles) but extremely narrow cone.
+            // In real life we can see almost infinitely far, so NPCs have long
+            // range but a very narrow FOV like looking through a tunnel.
+            if let Some(_dir) = cone_dir {
+                let range = 100;
+                // Extremely narrow cone: cos ≈ 0.97 (roughly ~14° full cone).
+                let cos_t = 0.97;
+                (range, cos_t)
             } else {
-                // NPC has no look direction set — use a narrow forward cone.
-                (viewshed.range, 0.86)
+                // NPC has no look direction set — use narrow forward cone.
+                (100, 0.97)
             }
         } else {
             // Player: use the original formula.

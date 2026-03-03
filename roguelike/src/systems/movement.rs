@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use crate::components::{BlocksMovement, Health, Hostile, Player, Position, Stamina, Viewshed};
 use crate::events::{AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, InputState, SpatialIndex, TurnCounter, TurnState};
-use crate::typeenums::Props;
+use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, GameState, InputState, SpatialIndex, TurnCounter, TurnState};
+use crate::typeenums::{Floor, Props};
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability *and* the `SpatialIndex` for entities that block movement.
@@ -114,6 +114,60 @@ pub fn movement_system(
 
     // Periodically prune old blood stains to prevent unbounded growth.
     blood_map.prune(turn_counter.0);
+}
+
+/// Checks if the player has reached the victory goal tile.
+/// Transitions to Victory state when the player steps on a VictoryGoal prop.
+pub fn victory_check_system(
+    player_query: Query<&Position, With<Player>>,
+    game_map: Res<GameMapResource>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut combat_log: ResMut<CombatLog>,
+    state: Res<State<GameState>>,
+) {
+    if *state.get() != GameState::Playing {
+        return;
+    }
+    if let Ok(pos) = player_query.single() {
+        let gv = pos.as_grid_vec();
+        if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
+            if matches!(voxel.props, Some(Props::VictoryGoal)) {
+                combat_log.push("You found the legendary Gold Cache! YOU WIN!".into());
+                next_state.set(GameState::Victory);
+            }
+        }
+    }
+}
+
+/// Logs a swimming message and applies extra world ticks when the player
+/// moves through water tiles, making water movement extra slow.
+pub fn water_slowdown_system(
+    player_query: Query<&Position, With<Player>>,
+    game_map: Res<GameMapResource>,
+    mut extra_ticks: ResMut<crate::resources::ExtraWorldTicks>,
+    mut combat_log: ResMut<CombatLog>,
+    turn_state: Option<Res<State<TurnState>>>,
+) {
+    let is_player_turn = turn_state.as_ref().is_some_and(|ts| *ts.get() == TurnState::PlayerTurn);
+    if !is_player_turn {
+        return;
+    }
+    if let Ok(pos) = player_query.single() {
+        let gv = pos.as_grid_vec();
+        if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
+            match &voxel.floor {
+                Some(Floor::ShallowWater) => {
+                    combat_log.push("You are swimming through shallow water...".into());
+                    extra_ticks.0 = extra_ticks.0.max(3);
+                }
+                Some(Floor::DeepWater) => {
+                    combat_log.push("You are swimming through deep water! Very slow!".into());
+                    extra_ticks.0 = extra_ticks.0.max(6);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Damage dealt by walking into a cactus (adjacent tile).

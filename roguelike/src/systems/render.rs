@@ -72,7 +72,7 @@ pub fn draw_system(
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
-    hostile_viewsheds: Query<(&Viewshed, Option<&Faction>), With<Hostile>>,
+    hostile_viewsheds: Query<(&Viewshed, Option<&Faction>, &Position), With<Hostile>>,
     projectiles: Query<(&Position, &Renderable), With<Projectile>>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
@@ -147,11 +147,19 @@ pub fn draw_system(
         }
 
         // Tint tiles visible to hostile entities with a red hue (enemy FOV cone).
-        // Only human NPCs have FOV highlighting — animals (Wildlife) are excluded.
+        // Only show FOV for NPCs that are visible to the player (within player's FOV).
+        // Animals (Wildlife) are excluded from FOV highlighting.
         {
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
-            for (vs, faction) in &hostile_viewsheds {
+            for (vs, faction, npc_pos) in &hostile_viewsheds {
                 if faction.is_some_and(|f| matches!(f, Faction::Wildlife)) {
+                    continue;
+                }
+                // Only tint FOV for NPCs that the player can currently see
+                let npc_in_player_view = visible_tiles
+                    .map(|vt| vt.contains(&npc_pos.as_grid_vec()))
+                    .unwrap_or(false);
+                if !npc_in_player_view {
                     continue;
                 }
                 enemy_visible.extend(&vs.visible_tiles);
@@ -229,7 +237,7 @@ pub fn draw_system(
         }
 
         // Overlay combat particles on the render packet.
-        for (particle_pos, lifetime, delay, is_sand) in &spell_particles.particles {
+        for (particle_pos, lifetime, delay, is_sand, _vx, _vy) in &spell_particles.particles {
             if *delay > 0 {
                 continue; // not yet visible
             }
@@ -242,19 +250,24 @@ pub fn draw_system(
                 if visible {
                     let bg = render_packet[screen.y as usize][screen.x as usize].2;
                     if *is_sand {
-                        // Sand/smoke particles display as asterisk, fading in color
+                        // Smoke plume: particles fade through different symbols
+                        // as they drift and dissipate, creating a visible plume effect.
                         let intensity = (*lifetime as f32 / 30.0).min(1.0);
-                        let r = (210.0 * intensity) as u8;
-                        let g = (180.0 * intensity) as u8;
-                        let b = (120.0 * intensity) as u8;
+                        let (symbol, r, g, b) = if *lifetime > 6 {
+                            ("▓", (220.0 * intensity) as u8, (190.0 * intensity) as u8, (130.0 * intensity) as u8)
+                        } else if *lifetime > 3 {
+                            ("░", (180.0 * intensity) as u8, (150.0 * intensity) as u8, (100.0 * intensity) as u8)
+                        } else {
+                            ("·", (120.0 * intensity) as u8, (100.0 * intensity) as u8, (70.0 * intensity) as u8)
+                        };
                         render_packet[screen.y as usize][screen.x as usize] =
-                            ("*".into(), RatColor::Rgb(r, g, b), bg);
+                            (symbol.into(), RatColor::Rgb(r, g, b), bg);
                     } else {
-                        // Explosion/fire particle symbol and color fade with lifetime.
+                        // Explosion/fire particle: visible movement with changing symbols
                         let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).min(1.0);
                         let r = (255.0 * intensity) as u8;
                         let g = (165.0 * intensity) as u8;
-                        let symbol = if *lifetime > 4 { "·" } else if *lifetime > 2 { "·" } else { "·" };
+                        let symbol = if *lifetime > 5 { "◦" } else if *lifetime > 3 { "·" } else { "." };
                         render_packet[screen.y as usize][screen.x as usize] =
                             (symbol.into(), RatColor::Rgb(r, g, 0), bg);
                     }
@@ -432,7 +445,7 @@ pub fn draw_system(
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! The Outlaw Hideout has been destroyed! Press Q to quit, R to restart. ";
+            let label = " VICTORY! You found the legendary Gold Cache! Press Q to quit, R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -744,11 +757,12 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
         Line::from(""),
         Line::from("  -*-  DEAD MAN'S HAND  -*-").bold().yellow(),
         Line::from(""),
-        Line::from("  You're a cowboy drinking in a saloon").white(),
-        Line::from("  when bandits raid your town!").white(),
+        Line::from("  You step outside your house to find").white(),
+        Line::from("  the town under siege! Reach the Gold").white(),
+        Line::from("  Cache (★) at the far corner to win.").white(),
         Line::from(""),
-        Line::from("  Destroy the Outlaw Hideout (Ω) to win.").dark_gray(),
-        Line::from("  Enemies spawn from it endlessly.").dark_gray(),
+        Line::from("  Head to the ★ at the top-right!").dark_gray(),
+        Line::from("  Watch out for enemies and the river.").dark_gray(),
         Line::from(""),
     ];
     for binding in KEYBINDINGS {

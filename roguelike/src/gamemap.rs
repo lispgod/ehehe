@@ -278,7 +278,8 @@ impl GameMap {
                 let curve_freq = 0.02 + value_noise(1, ci, cross_seed) * 0.01;
                 for y in 1..height - 1 {
                     let curve_offset = (y as f64 * curve_freq).sin() * curve_amp;
-                    // Sidewalk
+                    // Sidewalk — cross streets are laid after avenues, so we
+                    // must not overwrite existing avenue dirt roads or building walls.
                     for sw in 1..=cross_sidewalk_width {
                         for sign in [-1i32, 1] {
                             let x = actual_cx + sign * (cross_half_width + sw) + curve_offset as CoordinateUnit;
@@ -538,6 +539,8 @@ const BUILDING_TYPE_COUNT: u32 = 12;
 const DISTRICT_RESIDENTIAL: u32 = 0;
 const DISTRICT_COMMERCIAL: u32 = 1;
 const DISTRICT_LIVERY: u32 = 2;
+/// Cantina-row district — saloons, hotels, entertainment.
+#[allow(dead_code)]
 const DISTRICT_CANTINA: u32 = 3;
 
 /// Number of distinct district types.
@@ -704,8 +707,6 @@ const ROUNDED_CORNER_RADIUS: CoordinateUnit = 2;
 const L_SHAPE_NOTCH_DIVISOR: CoordinateUnit = 3;
 
 fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
-    let furn_seed = seed.wrapping_add(55555);
-
     // Determine building shape based on noise
     let shape_noise = value_noise(b.x + b.y, b.w + b.h, seed.wrapping_add(77777));
     let shape_type = if b.w >= 8 && b.h >= 8 {

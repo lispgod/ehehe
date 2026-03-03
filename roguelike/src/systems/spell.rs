@@ -1,14 +1,11 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Inventory, Item, ItemKind, Player, Projectile, Stamina, ThrownExplosive, Name, Position, Renderable, display_name};
+use crate::components::{CombatStats, Inventory, Item, ItemKind, Player, Projectile, SPELL_STAMINA_COST, Stamina, ThrownExplosive, Name, Position, Renderable, display_name};
 use crate::events::{MolotovCastIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, GameMapResource, InputState, MapSeed, SpellParticles, TurnCounter};
 use crate::typeenums::{Floor, Props};
 use crate::typedefs::RatColor;
-
-/// Stamina cost for casting the AoE grenade.
-const SPELL_STAMINA_COST: i32 = 10;
 
 /// Resolves grenade throw intents by spawning shrapnel projectile entities.
 ///
@@ -39,10 +36,8 @@ pub fn spell_system(
             if let Some(mut stamina) = stamina {
                 stamina.spend(5); // Sand throw costs 5 stamina
             }
-            // Place persistent SandCloud floor tiles on the map.
             let origin = intent.target;
             let radius_f = intent.radius as f64;
-            // Compute direction from caster to target for directional bias.
             let caster_vec = caster_pos.map(|p| p.as_grid_vec());
             let dir = caster_vec.map(|cv| {
                 let d = origin - cv;
@@ -50,37 +45,10 @@ pub fn spell_system(
                 if len > 0.01 { (d.x as f64 / len, d.y as f64 / len) } else { (0.0, 0.0) }
             }).unwrap_or((0.0, 0.0));
 
-            // First pass: collect tiles and their current floors.
-            let mut tiles_to_cloud: Vec<(crate::grid_vec::GridVec, Option<Floor>)> = Vec::new();
-            for dx in -(intent.radius + 1)..=(intent.radius + 1) {
-                for dy in -(intent.radius + 1)..=(intent.radius + 1) {
-                    let fx = dx as f64;
-                    let fy = dy as f64;
-                    let dist = (fx * fx + fy * fy).sqrt();
-                    let dot = if dist > 0.01 {
-                        (fx * dir.0 + fy * dir.1) / dist
-                    } else {
-                        0.0
-                    };
-                    let effective_radius = radius_f * 0.5 + dot.max(0.0) * radius_f;
-                    if dist > effective_radius {
-                        continue;
-                    }
-                    let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    if let Some(voxel) = game_map.0.get_voxel_at(&pos)
-                        && !matches!(voxel.props, Some(Props::Wall)) {
-                            tiles_to_cloud.push((pos, voxel.floor.clone()));
-                        }
-                }
-            }
-            // Second pass: apply changes.
-            for (pos, prev_floor) in tiles_to_cloud {
-                game_map.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
-                if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
-                    voxel.floor = Some(Floor::SandCloud);
-                }
-                game_map.0.sand_cloud_turns.insert(pos, turn_counter.0);
-            }
+            let scan_radius = intent.radius + 1;
+            let base_radius = radius_f * 0.5;
+            let directional_scale = radius_f;
+            game_map.place_sand_cloud(origin, turn_counter.0, dir, scan_radius, base_radius, directional_scale);
             continue;
         }
 

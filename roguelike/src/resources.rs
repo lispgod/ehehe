@@ -12,6 +12,59 @@ use crate::typedefs::{MyPoint, SPAWN_X, SPAWN_Y};
 #[derive(Resource)]
 pub struct GameMapResource(pub GameMap);
 
+impl GameMapResource {
+    /// Places persistent SandCloud floor tiles in a directionally-biased area.
+    ///
+    /// Used by gun smoke, sand throws, and similar effects. Tiles within
+    /// `scan_radius` of `origin` are converted to `SandCloud` if they pass
+    /// the directional bias check:
+    ///   `effective_radius = base_radius + max(0, dot) × directional_scale`
+    /// where `dot` is the cosine of the angle between the tile offset and
+    /// the given `direction` unit vector.
+    pub fn place_sand_cloud(
+        &mut self,
+        origin: GridVec,
+        turn: u32,
+        direction: (f64, f64),
+        scan_radius: i32,
+        base_radius: f64,
+        directional_scale: f64,
+    ) {
+        use crate::typeenums::{Floor, Props};
+
+        let mut tiles_to_cloud: Vec<(GridVec, Option<Floor>)> = Vec::new();
+        for dx in -scan_radius..=scan_radius {
+            for dy in -scan_radius..=scan_radius {
+                let fx = dx as f64;
+                let fy = dy as f64;
+                let dist = (fx * fx + fy * fy).sqrt();
+                let dot = if dist > 0.01 {
+                    (fx * direction.0 + fy * direction.1) / dist
+                } else {
+                    0.0
+                };
+                let effective_radius = base_radius + dot.max(0.0) * directional_scale;
+                if dist > effective_radius {
+                    continue;
+                }
+                let pos = origin + GridVec::new(dx, dy);
+                if let Some(voxel) = self.0.get_voxel_at(&pos)
+                    && !matches!(voxel.props, Some(Props::Wall))
+                {
+                    tiles_to_cloud.push((pos, voxel.floor.clone()));
+                }
+            }
+        }
+        for (pos, prev_floor) in tiles_to_cloud {
+            self.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
+            if let Some(voxel) = self.0.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::SandCloud);
+            }
+            self.0.sand_cloud_turns.insert(pos, turn);
+        }
+    }
+}
+
 /// Bevy resource holding the camera position (follows the tracked entity).
 #[derive(Resource)]
 pub struct CameraPosition(pub MyPoint);
@@ -198,10 +251,6 @@ pub struct SpellParticles {
 /// Maximum number of active combat particles to prevent unbounded growth.
 const MAX_PARTICLES: usize = 1200;
 
-/// Number of movement sub-steps per tick for particle animations.
-/// Higher values make particles move faster and more visibly.
-const PARTICLE_SUB_STEPS: usize = 1;
-
 /// Particles advance once every this many render frames to stay readable
 /// at high frame rates. At 60 FPS, 3 → particles tick at ~20 Hz.
 const PARTICLE_TICK_INTERVAL: u32 = 3;
@@ -251,12 +300,10 @@ impl SpellParticles {
                 *delay -= 1;
                 true // still waiting to appear
             } else {
-                // Move the particle multiple sub-steps for visible motion
-                for _ in 0..PARTICLE_SUB_STEPS {
-                    if *life > 0 {
-                        pos.x += *vx;
-                        pos.y += *vy;
-                    }
+                // Move the particle for visible motion
+                if *life > 0 {
+                    pos.x += *vx;
+                    pos.y += *vy;
                 }
                 *life = life.saturating_sub(1);
                 // Slow down particles as they age (plume dissipation)

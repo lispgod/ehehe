@@ -110,12 +110,6 @@ impl Health {
         self.current <= 0
     }
 
-    /// Returns `true` when health is at maximum.
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.current >= self.max
-    }
-
     /// Returns the health fraction in `[0.0, 1.0]`.
     /// Returns `0.0` if `max` is zero (avoids division by zero).
     #[inline]
@@ -218,6 +212,10 @@ impl Energy {
 /// Entities accumulate energy each tick equal to their `Speed` value.
 /// When energy ≥ ACTION_COST, they may act and energy is reduced by ACTION_COST.
 pub const ACTION_COST: CoordinateUnit = 100;
+
+/// Stamina cost for casting AoE grenades and molotov cocktails.
+/// Note: sand throwing has its own separate cost (5 stamina).
+pub const SPELL_STAMINA_COST: CoordinateUnit = 10;
 
 /// AI behaviour state for non-player entities.
 ///
@@ -559,12 +557,10 @@ impl Inventory {
     }
 }
 
-/// Loot table component: when this entity dies, it may drop items.
+/// Marker component: when this entity dies, it may drop items.
+/// The death system uses noise-based probability to determine drops.
 #[derive(Component, Debug)]
-pub struct LootTable {
-    /// Probability (0.0–1.0) that this entity drops an item on death.
-    pub drop_chance: f64,
-}
+pub struct LootTable;
 
 /// Type of collectible supply drop.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -690,12 +686,6 @@ mod tests {
     fn health_is_dead() {
         assert!(Health { current: 0, max: 30 }.is_dead());
         assert!(!Health { current: 1, max: 30 }.is_dead());
-    }
-
-    #[test]
-    fn health_is_full() {
-        assert!(Health { current: 30, max: 30 }.is_full());
-        assert!(!Health { current: 29, max: 30 }.is_full());
     }
 
     #[test]

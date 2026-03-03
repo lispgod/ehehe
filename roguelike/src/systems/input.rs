@@ -2,7 +2,7 @@ use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Hostile, Inventory, ItemKind, Stamina, Player, Position, Viewshed};
+use crate::components::{Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
 use crate::events::{MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
 
@@ -22,9 +22,6 @@ pub struct IntentWriters<'w> {
 
 /// Default radius for the player's grenade blast.
 const SPELL_RADIUS: i32 = 3;
-
-/// Stamina cost for throwing a grenade.
-const SPELL_STAMINA_COST: i32 = 10;
 
 /// Range for the targeted ranged attack (bullet max travel distance).
 const RANGED_ATTACK_RANGE: i32 = 100;

@@ -1823,7 +1823,6 @@ fn test_app_with_ai() -> App {
     app.add_message::<ThrowItemIntent>();
     app.add_message::<UseItemIntent>();
     app.add_message::<PickupItemIntent>();
-    app.add_message::<DropItemIntent>();
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
@@ -4282,11 +4281,9 @@ fn ai_idle_does_not_chase_without_visibility() {
 fn ai_health_fraction_calculation() {
     let hp_full = Health { current: 20, max: 20 };
     assert!((hp_full.fraction() - 1.0).abs() < f64::EPSILON, "Full HP should be 1.0");
-    assert!(hp_full.is_full(), "Full HP should report is_full()");
 
     let hp_half = Health { current: 10, max: 20 };
     assert!((hp_half.fraction() - 0.5).abs() < f64::EPSILON, "Half HP should be 0.5");
-    assert!(!hp_half.is_full(), "Half HP should not be full");
 
     let hp_zero = Health { current: 0, max: 20 };
     assert!((hp_zero.fraction() - 0.0).abs() < f64::EPSILON, "Zero HP should be 0.0");

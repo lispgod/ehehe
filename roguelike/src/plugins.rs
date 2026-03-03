@@ -8,7 +8,7 @@ use crate::components::{
     Health, Inventory, Item, ItemKind, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
-use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
@@ -83,7 +83,6 @@ impl Plugin for RoguelikePlugin {
             .add_message::<RangedAttackIntent>()
             .add_message::<MeleeWideIntent>()
             .add_message::<AiRangedAttackIntent>()
-            .add_message::<DropItemIntent>()
             .add_message::<ThrowItemIntent>()
             .add_message::<MolotovCastIntent>()
             // ── Resources ──
@@ -139,7 +138,6 @@ impl Plugin for RoguelikePlugin {
                     inventory::pickup_system,
                     inventory::auto_pickup_system,
                     inventory::use_item_system,
-                    inventory::drop_item_system,
                     inventory::throw_system,
                     inventory::reload_system,
                     spell::spell_system,
@@ -223,8 +221,8 @@ impl Plugin for RoguelikePlugin {
 }
 
 /// Spawns the player entity with all required ECS components.
-fn spawn_player(mut commands: Commands, seed: Res<MapSeed>, map: Res<GameMapResource>) {
-    do_spawn_player(&mut commands, seed.0, &map);
+fn spawn_player(mut commands: Commands, map: Res<GameMapResource>) {
+    do_spawn_player(&mut commands, &map);
 }
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
@@ -235,7 +233,7 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
 }
 
 /// Helper: spawns the player entity.
-fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
+fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
     // Find a saloon interior tile, falling back to default spawn point.
     let spawn_pos = map.0.find_house_exterior()
         .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
@@ -401,7 +399,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
 
                 let template_idx = templates[(spawned as usize) % templates.len()];
                 let template = &MONSTER_TEMPLATES[template_idx];
-                let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.25);
+                let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
 
                 if spawned == 0 && !matches!(template.faction, crate::components::Faction::Wildlife) {
                     commands.entity(ent).insert(GroupLeader);
@@ -473,7 +471,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
 
                     let template_idx = templates[(spawned as usize) % templates.len()];
                     let template = &MONSTER_TEMPLATES[template_idx];
-                    let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.25);
+                    let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
 
                     // First humanoid NPC in a group becomes the leader.
                     if spawned == 0 && !matches!(template.faction, crate::components::Faction::Wildlife) {
@@ -541,7 +539,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 }
                 let template_idx = nearby_templates[(spawned as usize) % nearby_templates.len()];
                 let template = &MONSTER_TEMPLATES[template_idx];
-                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.30);
+                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
                 spawned += 1;
             }
             if spawned >= near_group_size {
@@ -604,6 +602,6 @@ fn restart_system(
 
     next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands, seed.0, &game_map);
+    do_spawn_player(&mut commands, &game_map);
     do_spawn_monsters(&mut commands, &game_map, seed.0);
 }

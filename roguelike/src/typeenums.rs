@@ -45,30 +45,6 @@ pub enum WallMaterial {
     Stone,
 }
 
-impl WallMaterial {
-    /// Returns the relative cost to breach this wall type.
-    /// Lower values mean easier/faster breaching.
-    #[inline]
-    pub fn breach_cost(&self) -> u32 {
-        match self {
-            WallMaterial::Timber => 1,
-            WallMaterial::Adobe => 2,
-            WallMaterial::Stone => 5,
-        }
-    }
-
-    /// Returns the flammability rating `[0.0, 1.0]` for this material.
-    /// Higher values mean more susceptible to fire.
-    #[inline]
-    pub fn flammability(&self) -> f64 {
-        match self {
-            WallMaterial::Timber => 0.8,
-            WallMaterial::Adobe => 0.2,
-            WallMaterial::Stone => 0.0,
-        }
-    }
-}
-
 /// Building height tier — determines verticality and rooftop advantage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeightTier {
@@ -79,18 +55,6 @@ pub enum HeightTier {
     /// Tall structure (bell tower, watchtower, grain loft) —
     /// extended sight lines covering entire street segments.
     Tower,
-}
-
-impl HeightTier {
-    /// Returns the sight-line bonus (in tiles) for entities on this rooftop.
-    #[inline]
-    pub fn sight_bonus(&self) -> i32 {
-        match self {
-            HeightTier::SingleStory => 0,
-            HeightTier::DoubleStory => 4,
-            HeightTier::Tower => 10,
-        }
-    }
 }
 
 /// Props (obstacles/structures) placed on tiles.

@@ -78,13 +78,6 @@ pub struct MeleeWideIntent {
     pub attacker: Entity,
 }
 
-/// Fired when the player drops an item from inventory onto the ground.
-#[derive(Message, Debug, Clone)]
-pub struct DropItemIntent {
-    pub user: Entity,
-    pub item_index: usize,
-}
-
 /// Fired when the player throws a knife or tomahawk toward the cursor.
 #[derive(Message, Debug, Clone)]
 pub struct ThrowItemIntent {

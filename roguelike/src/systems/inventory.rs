@@ -4,7 +4,7 @@ use crate::components::{
     CollectibleKind, Health, Hostile, Inventory, Item, ItemKind, Name, Player, Position,
     Thrown, display_name, item_display_name,
 };
-use crate::events::{DropItemIntent, PickupItemIntent, ThrowItemIntent, UseItemIntent};
+use crate::events::{PickupItemIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{Collectibles, CombatLog, GameMapResource, InputState, SpellParticles, SpatialIndex};
 
@@ -255,35 +255,6 @@ pub fn auto_pickup_system(
                 inv.items.push(item_entity);
                 combat_log.push(format!("Picked up {name_str}"));
             }
-    }
-}
-
-/// Processes drop-item intents: removes an item from inventory and places it on the ground.
-pub fn drop_item_system(
-    mut intents: MessageReader<DropItemIntent>,
-    mut commands: Commands,
-    mut inventory_query: Query<(&mut Inventory, &Position), With<Player>>,
-    name_query: Query<Option<&Name>>,
-    mut combat_log: ResMut<CombatLog>,
-) {
-    for intent in intents.read() {
-        let Ok((mut inv, player_pos)) = inventory_query.single_mut() else {
-            continue;
-        };
-
-        let Some(item_entity) = inv.remove_at(intent.item_index) else {
-            combat_log.push("No item in that slot.".into());
-            continue;
-        };
-
-        let item_name = item_display_name(
-            name_query.get(item_entity).ok().flatten()
-        );
-
-        commands
-            .entity(item_entity)
-            .insert(Position { x: player_pos.x, y: player_pos.y });
-        combat_log.push(format!("Dropped {item_name}"));
     }
 }
 

@@ -197,7 +197,6 @@ pub fn spawn_monster(
     y: i32,
     health_bonus: i32,
     attack_bonus: i32,
-    drop_chance: f64,
 ) -> Entity {
     let scaled_health = template.health + health_bonus;
     let scaled_attack = template.attack + attack_bonus;
@@ -350,7 +349,7 @@ pub fn spawn_monster(
             courage,
             preferred_range,
         },
-        LootTable { drop_chance },
+        LootTable,
         Viewshed {
             range: template.sight_range,
             visible_tiles: HashSet::new(),

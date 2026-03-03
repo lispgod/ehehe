@@ -5,7 +5,7 @@ use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIn
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
-use crate::typeenums::{Floor, Props};
+use crate::typeenums::Props;
 use crate::typedefs::{CoordinateUnit, RatColor};
 
 /// Computes the bullet endpoint by scaling a direction vector so the
@@ -18,50 +18,25 @@ fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, rang
     origin + GridVec::new(dx * scale, dy * scale)
 }
 
+/// Gun smoke scan radius (Chebyshev distance from the firing position).
+const SMOKE_SCAN_RADIUS: i32 = 2;
+/// Base effective radius for gun smoke (before directional bias).
+const SMOKE_BASE_RADIUS: f64 = 0.8;
+/// Additional radius in the firing direction (directional plume stretch).
+const SMOKE_DIRECTIONAL_SCALE: f64 = 2.0;
+
 /// Spawns a small cloud of gun smoke at the firing position.
 /// Places persistent SandCloud floor tiles on the map that block sight.
 /// Saves the previous floor type for restoration when smoke dissipates.
 /// The smoke is biased in the firing direction for a more natural plume.
 fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, fire_dx: i32, fire_dy: i32) {
-    // Normalize firing direction for directional bias.
     let flen = ((fire_dx as f64).powi(2) + (fire_dy as f64).powi(2)).sqrt();
-    let (ndx, ndy) = if flen > 0.01 {
+    let dir = if flen > 0.01 {
         (fire_dx as f64 / flen, fire_dy as f64 / flen)
     } else {
         (0.0, 0.0)
     };
-
-    // First pass: collect positions and their current floor types.
-    let mut tiles_to_cloud: Vec<(GridVec, Option<Floor>)> = Vec::new();
-    for dx in -2..=2i32 {
-        for dy in -2..=2i32 {
-            let fx = dx as f64;
-            let fy = dy as f64;
-            let dist = (fx * fx + fy * fy).sqrt();
-            let dot = if dist > 0.01 {
-                (fx * ndx + fy * ndy) / dist
-            } else {
-                0.0
-            };
-            let effective_radius = 0.8 + dot.max(0.0) * 2.0;
-            if dist > effective_radius {
-                continue;
-            }
-            let pos = origin + GridVec::new(dx, dy);
-            if let Some(voxel) = game_map.0.get_voxel_at(&pos)
-                && !matches!(voxel.props, Some(Props::Wall)) {
-                    tiles_to_cloud.push((pos, voxel.floor.clone()));
-                }
-        }
-    }
-    // Second pass: apply changes.
-    for (pos, prev_floor) in tiles_to_cloud {
-        game_map.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
-        if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
-            voxel.floor = Some(Floor::SandCloud);
-        }
-        game_map.0.sand_cloud_turns.insert(pos, turn);
-    }
+    game_map.place_sand_cloud(origin, turn, dir, SMOKE_SCAN_RADIUS, SMOKE_BASE_RADIUS, SMOKE_DIRECTIONAL_SCALE);
 }
 
 /// Resolves attack intents into damage events.

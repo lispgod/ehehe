@@ -2135,27 +2135,6 @@ mod tests {
     }
 
     #[test]
-    fn wall_material_breach_costs() {
-        assert_eq!(WallMaterial::Timber.breach_cost(), 1);
-        assert_eq!(WallMaterial::Adobe.breach_cost(), 2);
-        assert_eq!(WallMaterial::Stone.breach_cost(), 5);
-    }
-
-    #[test]
-    fn wall_material_flammability() {
-        assert!(WallMaterial::Timber.flammability() > WallMaterial::Adobe.flammability());
-        assert!(WallMaterial::Adobe.flammability() > WallMaterial::Stone.flammability());
-        assert_eq!(WallMaterial::Stone.flammability(), 0.0);
-    }
-
-    #[test]
-    fn height_tier_sight_bonuses() {
-        assert_eq!(HeightTier::SingleStory.sight_bonus(), 0);
-        assert!(HeightTier::DoubleStory.sight_bonus() > 0);
-        assert!(HeightTier::Tower.sight_bonus() > HeightTier::DoubleStory.sight_bonus());
-    }
-
-    #[test]
     fn large_map_has_wall_materials() {
         let map = GameMap::new(200, 140, 42);
         assert!(

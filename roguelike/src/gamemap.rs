@@ -158,6 +158,35 @@ impl GameMap {
             })
     }
 
+    /// Finds a passable interior tile inside a saloon (building with a Piano).
+    /// Scans the map for Piano furniture, then returns a nearby empty wood-plank tile.
+    /// Returns `None` if no saloon is found.
+    /// Search is deterministic (left-to-right, top-to-bottom) for reproducible spawns.
+    pub fn find_saloon_interior(&self) -> Option<GridVec> {
+        for y in 1..self.height - 1 {
+            for x in 1..self.width - 1 {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = self.get_voxel_at(&pos)
+                    && matches!(voxel.furniture, Some(Furniture::Piano))
+                {
+                    // Found a piano — look for an adjacent empty wood-plank tile
+                    for dy in -2..=2i32 {
+                        for dx in -2..=2i32 {
+                            let candidate = pos + GridVec::new(dx, dy);
+                            if let Some(v) = self.get_voxel_at(&candidate)
+                                && v.furniture.is_none()
+                                && matches!(v.floor, Some(Floor::WoodPlanks))
+                            {
+                                return Some(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Creates a RenderPacket (2D grid of GraphicTriples) for display,
     /// centered on the given position with the given render dimensions.
     pub fn create_render_packet(

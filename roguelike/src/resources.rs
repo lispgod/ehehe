@@ -364,15 +364,15 @@ pub struct Collectibles {
 impl Default for Collectibles {
     fn default() -> Self {
         Self {
-            caps: 30,
+            caps: 10,
             bullets_31: 10,
-            bullets_36: 20,
-            bullets_44: 20,
-            bullets_50: 5,
-            bullets_58: 5,
-            bullets_577: 5,
-            bullets_69: 5,
-            powder: 30,
+            bullets_36: 0,
+            bullets_44: 0,
+            bullets_50: 0,
+            bullets_58: 0,
+            bullets_577: 0,
+            bullets_69: 0,
+            powder: 10,
             bandages: 0,
             dollars: 0,
         }
@@ -724,11 +724,11 @@ mod tests {
     #[test]
     fn collectibles_default_has_starting_supplies() {
         let c = Collectibles::default();
-        assert_eq!(c.caps, 30);
+        assert_eq!(c.caps, 10);
         assert_eq!(c.bullets_31, 10);
-        assert_eq!(c.bullets_36, 20);
-        assert_eq!(c.bullets_44, 20);
-        assert_eq!(c.powder, 30);
+        assert_eq!(c.bullets_36, 0);
+        assert_eq!(c.bullets_44, 0);
+        assert_eq!(c.powder, 10);
         assert_eq!(c.bandages, 0);
         assert_eq!(c.dollars, 0);
     }

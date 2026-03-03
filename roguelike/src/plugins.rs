@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    Ammo, BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Experience,
-    Health, Inventory, Item, ItemKind, Level, Outfit, Stamina, Name, Player, Position,
+    BlocksMovement, Caliber, CameraFollow, CombatStats, Energy,
+    Health, Inventory, Item, ItemKind, Outfit, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, DropItemIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
@@ -146,8 +146,6 @@ impl Plugin for RoguelikePlugin {
                     projectile::projectile_system,
                     combat::apply_damage_system,
                     combat::death_system,
-                    combat::level_up_system,
-                    combat::npc_level_up_system,
                 )
                     .chain()
                     .in_set(RoguelikeSet::Action)
@@ -207,8 +205,8 @@ impl Plugin for RoguelikePlugin {
 }
 
 /// Spawns the player entity with all required ECS components.
-fn spawn_player(mut commands: Commands, seed: Res<MapSeed>) {
-    do_spawn_player(&mut commands, seed.0);
+fn spawn_player(mut commands: Commands, seed: Res<MapSeed>, map: Res<GameMapResource>) {
+    do_spawn_player(&mut commands, seed.0, &map);
 }
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
@@ -257,8 +255,13 @@ fn generate_outfit(seed: u64) -> String {
 }
 
 /// Helper: spawns the player entity.
-fn do_spawn_player(commands: &mut Commands, seed: u64) {
-    // Spawn starting weapon: Colt Pocket
+fn do_spawn_player(commands: &mut Commands, seed: u64, map: &GameMapResource) {
+    // Find a saloon interior tile, falling back to default spawn point.
+    let spawn_pos = map.0.find_saloon_interior()
+        .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
+
+    // Spawn starting weapon: Colt Pocket (.31 caliber)
+    let caliber = Caliber::Cal31;
     let colt_pocket = commands.spawn((
         Item,
         Name("Colt Pocket".into()),
@@ -270,8 +273,8 @@ fn do_spawn_player(commands: &mut Commands, seed: u64) {
         ItemKind::Gun {
             loaded: 5,
             capacity: 5,
-            caliber: Caliber::Cal31,
-            attack: 3,
+            caliber,
+            attack: caliber.damage(),
             name: "Colt Pocket".into(),
         },
     )).id();
@@ -314,8 +317,8 @@ fn do_spawn_player(commands: &mut Commands, seed: u64) {
 
     commands.spawn((
         Position {
-            x: SPAWN_X,
-            y: SPAWN_Y,
+            x: spawn_pos.x,
+            y: spawn_pos.y,
         },
         Player,
         Name("Player".into()),
@@ -327,31 +330,22 @@ fn do_spawn_player(commands: &mut Commands, seed: u64) {
         CameraFollow,
         BlocksMovement,
         Health {
-            current: 30,
-            max: 30,
+            current: 100,
+            max: 100,
         },
         Stamina {
             current: 50,
             max: 50,
         },
-        Ammo {
-            current: 30,
-            max: 30,
-        },
         CombatStats {
             attack: 5,
-            defense: 2,
+            defense: 0,
         },
         Speed(ACTION_COST),
         Energy(0),
     )).insert((
         Inventory { items: vec![colt_pocket, knife, whiskey, molotov] },
         Outfit(generate_outfit(seed)),
-        Level(1),
-        Experience {
-            current: 0,
-            next_level: 20,
-        },
         Viewshed {
             range: 40,
             visible_tiles: HashSet::new(),
@@ -438,6 +432,6 @@ fn restart_system(
 
     next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands, seed.0);
+    do_spawn_player(&mut commands, seed.0, &game_map);
     do_spawn_monsters(&mut commands, &game_map, seed.0);
 }

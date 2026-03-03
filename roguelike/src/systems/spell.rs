@@ -32,7 +32,7 @@ pub fn spell_system(
         };
 
         // Sand throw (sentinel: grenade_index == usize::MAX) — creates dust clouds
-        // that block line of sight for 12 ticks.
+        // that block line of sight for 30 ticks (persists as the player moves).
         if intent.grenade_index == usize::MAX {
             if let Some(mut stamina) = stamina {
                 stamina.spend(5); // Sand throw costs 5 stamina
@@ -42,7 +42,7 @@ pub fn spell_system(
             for dx in -intent.radius..=intent.radius {
                 for dy in -intent.radius..=intent.radius {
                     let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    spell_particles.particles.push((pos, 12, 0, true));
+                    spell_particles.particles.push((pos, 30, 0, true));
                 }
             }
             continue;

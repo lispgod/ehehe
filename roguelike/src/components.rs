@@ -344,6 +344,24 @@ pub enum Caliber {
     Cal69,
 }
 
+impl Caliber {
+    /// Returns the base damage for this caliber.
+    /// Damage is equivalent to the caliber number: .31 = 31, .44 = 44, etc.
+    /// For .577, damage is truncated to 57 (hundredths) to stay in scale.
+    #[inline]
+    pub fn damage(&self) -> i32 {
+        match self {
+            Caliber::Cal31 => 31,
+            Caliber::Cal36 => 36,
+            Caliber::Cal44 => 44,
+            Caliber::Cal50 => 50,
+            Caliber::Cal58 => 58,
+            Caliber::Cal577 => 57,
+            Caliber::Cal69 => 69,
+        }
+    }
+}
+
 impl std::fmt::Display for Caliber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

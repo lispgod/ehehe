@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Faction, Health, HellGate, Hostile, Inventory, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents};
+use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, SpellParticles};
 use crate::grid_vec::GridVec;
 use crate::typeenums::Furniture;
 use crate::typedefs::{CoordinateUnit, RatColor};
@@ -16,6 +16,22 @@ fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, rang
     let max_comp = dx.abs().max(dy.abs());
     let scale = range.div_euclid(max_comp).max(1);
     origin + GridVec::new(dx * scale, dy * scale)
+}
+
+/// Smoke lifetime in ticks. Smoke persists for several turns after a gun fires,
+/// blocking line of sight. Uses the same particle system as sand clouds.
+const SMOKE_LIFETIME: u32 = 8;
+
+/// Spawns a small cloud of gun smoke at the firing position.
+/// Smoke particles are flagged as is_sand=true (rendered as `*`, blocks sight).
+fn spawn_gun_smoke(spell_particles: &mut SpellParticles, origin: GridVec) {
+    // Smoke cloud: small 3×3 area centered on the firing position
+    for dx in -1..=1i32 {
+        for dy in -1..=1i32 {
+            let pos = origin + GridVec::new(dx, dy);
+            spell_particles.particles.push((pos, SMOKE_LIFETIME, 0, true));
+        }
+    }
 }
 
 /// Resolves attack intents into damage events.
@@ -262,6 +278,7 @@ pub fn ranged_attack_system(
     mut combat_log: ResMut<CombatLog>,
     mut item_kind_query: Query<&mut ItemKind>,
     mut sound_events: ResMut<SoundEvents>,
+    mut spell_particles: ResMut<SpellParticles>,
     dynamic_rng: Res<DynamicRng>,
     seed: Res<MapSeed>,
 ) {
@@ -324,6 +341,9 @@ pub fn ranged_attack_system(
         combat_log.push(format!("{c_name} fires!"));
         sound_events.add(origin);
 
+        // Spawn gun smoke at the firing position (persists and blocks sight).
+        spawn_gun_smoke(&mut spell_particles, origin);
+
         // Spawn a bullet projectile entity that will travel along the path.
         crate::systems::projectile::spawn_bullet(
             &mut commands,
@@ -344,6 +364,7 @@ pub fn ai_ranged_attack_system(
     target_query: Query<&Position>,
     mut combat_log: ResMut<CombatLog>,
     mut sound_events: ResMut<SoundEvents>,
+    mut spell_particles: ResMut<SpellParticles>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
@@ -372,6 +393,9 @@ pub fn ai_ranged_attack_system(
 
         combat_log.push_at(format!("{a_name} fires!"), origin);
         sound_events.add(origin);
+
+        // Spawn gun smoke at the firing position (persists and blocks sight).
+        spawn_gun_smoke(&mut spell_particles, origin);
 
         // Spawn a bullet projectile entity.
         crate::systems::projectile::spawn_bullet(

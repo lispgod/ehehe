@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
-use crate::components::{Experience, Faction, Health, Hostile, Inventory, ItemKind, Level, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Faction, Health, Hostile, Inventory, ItemKind, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
 use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
@@ -68,7 +68,7 @@ pub fn draw_system(
     camera: Res<CameraPosition>,
     renderables: Query<(&Position, &Renderable, Option<&Name>), Without<Projectile>>,
     player_query: Query<
-        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Inventory>, Option<&Level>, Option<&Experience>),
+        (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Inventory>),
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
@@ -106,24 +106,22 @@ pub fn draw_system(
         let render_height = game_area.height;
 
         // Collect the player's visible and revealed tiles.
-        let (visible_tiles, revealed_tiles, player_hp, player_stamina, player_inv, player_level, player_exp): (
+        let (visible_tiles, revealed_tiles, player_hp, player_stamina, player_inv): (
             Option<&HashSet<MyPoint>>,
             Option<&HashSet<MyPoint>>,
             Option<&Health>,
             Option<&Stamina>,
             Option<&Inventory>,
-            Option<&Level>,
-            Option<&Experience>,
         ) = player_query
             .single()
             .ok()
-            .map(|(_, vs, hp, sta, inv, lvl, exp)| {
+            .map(|(_, vs, hp, sta, inv)| {
                 let (vis, rev) = vs
                     .map(|vs| (Some(&vs.visible_tiles), Some(&vs.revealed_tiles)))
                     .unwrap_or((None, None));
-                (vis, rev, hp, sta, inv, lvl, exp)
+                (vis, rev, hp, sta, inv)
             })
-            .unwrap_or((None, None, None, None, None, None, None));
+            .unwrap_or((None, None, None, None, None));
 
         let mut render_packet = game_map.0.create_render_packet_with_fog(
             &camera.0,
@@ -241,8 +239,8 @@ pub fn draw_system(
                 if visible {
                     let bg = render_packet[screen.y as usize][screen.x as usize].2;
                     if *is_sand {
-                        // Sand particles always display as asterisk, fading in color
-                        let intensity = (*lifetime as f32 / 12.0).min(1.0);
+                        // Sand/smoke particles display as asterisk, fading in color
+                        let intensity = (*lifetime as f32 / 30.0).min(1.0);
                         let r = (210.0 * intensity) as u8;
                         let g = (180.0 * intensity) as u8;
                         let b = (120.0 * intensity) as u8;
@@ -253,7 +251,7 @@ pub fn draw_system(
                         let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).min(1.0);
                         let r = (255.0 * intensity) as u8;
                         let g = (165.0 * intensity) as u8;
-                        let symbol = if *lifetime > 4 { "✦" } else if *lifetime > 2 { "*" } else { "·" };
+                        let symbol = if *lifetime > 4 { "·" } else if *lifetime > 2 { "·" } else { "·" };
                         render_packet[screen.y as usize][screen.x as usize] =
                             (symbol.into(), RatColor::Rgb(r, g, 0), bg);
                     }
@@ -392,8 +390,6 @@ pub fn draw_system(
             &visible_entity_infos,
             &visible_furniture,
             &combat_log,
-            player_level,
-            player_exp,
             &turn_counter,
             &kill_count,
             &collectibles,
@@ -476,8 +472,6 @@ fn render_bottom_panel(
     visible_entities: &[(String, RatColor, RatColor, String)],
     visible_furniture: &[(String, RatColor, String)],
     combat_log: &CombatLog,
-    player_level: Option<&Level>,
-    player_exp: Option<&Experience>,
     turn_counter: &TurnCounter,
     kill_count: &KillCount,
     collectibles: &Collectibles,
@@ -486,7 +480,7 @@ fn render_bottom_panel(
     let horiz_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(22),   // Stats column (HP, Stamina, Level)
+            Constraint::Length(22),   // Stats column (HP, Stamina)
             Constraint::Min(1),       // Central log (wide, fills remaining space)
             Constraint::Length(18),   // Furniture legend column
             Constraint::Length(22),   // Visible entities column
@@ -499,7 +493,7 @@ fn render_bottom_panel(
     let visible_area = horiz_chunks[3];
 
     // ── Stats Column (left) ─────────────────────────────────────
-    render_stats_column(frame, stats_area, player_hp, player_stamina, player_level, player_exp, collectibles);
+    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles);
 
     // ── Central Log (middle) ────────────────────────────────────
     // Show all recent messages — the log should persist across ticks, not reset.
@@ -528,14 +522,12 @@ fn render_bottom_panel(
     render_visible_column(frame, visible_area, visible_entities);
 }
 
-/// Renders the stats column (HP, Stamina, Level gauges stacked vertically).
+/// Renders the stats column (HP, Stamina gauges stacked vertically).
 fn render_stats_column(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
-    player_level: Option<&Level>,
-    player_exp: Option<&Experience>,
     collectibles: &Collectibles,
 ) {
     let chunks = Layout::default()
@@ -543,7 +535,6 @@ fn render_stats_column(
         .constraints([
             Constraint::Length(1), // HP gauge (compact, no border)
             Constraint::Length(1), // Stamina gauge
-            Constraint::Length(1), // EXP gauge
             Constraint::Length(1), // Collectibles row 1
             Constraint::Length(1), // Collectibles row 2
             Constraint::Length(1), // Collectibles row 3
@@ -576,16 +567,6 @@ fn render_stats_column(
         frame.render_widget(gauge, chunks[1]);
     }
 
-    // EXP
-    if let (Some(exp), Some(level)) = (player_exp, player_level) {
-        let ratio = if exp.next_level > 0 { (exp.current as f64 / exp.next_level as f64).clamp(0.0, 1.0) } else { 0.0 };
-        let gauge = Gauge::default()
-            .gauge_style(ratatui::style::Style::default().fg(ratatui::style::Color::Green).bg(ratatui::style::Color::DarkGray))
-            .ratio(ratio)
-            .label(Span::from(format!("Lv.{} {}/{}", level.0, exp.current, exp.next_level)).style(ratatui::style::Style::default().fg(ratatui::style::Color::White)));
-        frame.render_widget(gauge, chunks[2]);
-    }
-
     // Collectibles — 3 entries per row
     let row1 = format!(
         "Cap:{} Pdr:{} .31:{}",
@@ -599,9 +580,9 @@ fn render_stats_column(
         ".58:{} .577:{} .69:{}",
         collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69,
     );
-    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[3]);
-    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[4]);
-    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[5]);
+    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[2]);
+    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[3]);
+    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[4]);
 }
 
 /// Renders the visible entities column.

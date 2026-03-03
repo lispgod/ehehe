@@ -116,7 +116,7 @@ pub fn spawn_shrapnel(
             commands.spawn((
                 Position { x: start_pos.x, y: start_pos.y },
                 Renderable {
-                    symbol: "✦".into(),
+                    symbol: "·".into(),
                     fg: RatColor::Rgb(255, 165, 0),
                     bg: RatColor::Black,
                 },
@@ -335,7 +335,7 @@ pub fn projectile_system(
             renderable.symbol = "·".into();
             renderable.fg = RatColor::Rgb(180, 120, 0);
         } else if remaining <= 4 {
-            renderable.symbol = "*".into();
+            renderable.symbol = "·".into();
             renderable.fg = RatColor::Rgb(255, 180, 40);
         }
 

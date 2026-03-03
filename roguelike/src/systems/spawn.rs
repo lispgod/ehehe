@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiMemory, AiPersonality, AiState, Ammo, BlocksMovement, Caliber, CombatStats, Energy, Experience, ExpReward, Faction, Health, Hostile,
-    Inventory, Item, ItemKind, Level, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Stamina, Viewshed,
+    AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, Caliber, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
+    Inventory, Item, ItemKind, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Stamina, Viewshed,
 };
 use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
@@ -82,16 +82,16 @@ pub struct MonsterTemplate {
 /// - Outlaw: 90, Vaquero: 85, Cowboy: 80, Gunslinger: 100
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Tier 1: Wildlife (lowercase symbols — animals)
-    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 4, attack: 2, defense: 0, speed: 140, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
-    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 8, attack: 3, defense: 1, speed: 60, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, defense: 0, speed: 140, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, defense: 1, speed: 60, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
     // Tier 2: Outlaws (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 12, attack: 4, defense: 1, speed: 90, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
+    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, defense: 0, speed: 90, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
     // Tier 3: Vaqueros (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 15, attack: 5, defense: 2, speed: 85, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
+    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, defense: 0, speed: 85, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
     // Tier 4: Lawmen (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 20, attack: 6, defense: 3, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
+    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, defense: 0, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
     // Tier 5: Outlaws - Gunslinger (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 28, attack: 8, defense: 4, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
+    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, defense: 0, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,
@@ -129,22 +129,23 @@ pub fn spawn_monster(
     if template.ammo > 0 {
         // Use position-based hash to deterministically assign varied weapons.
         // Some NPCs get rifles, some revolvers, from the full period-accurate pool.
-        let weapon_pool: &[(&str, Caliber, i32, i32, &str)] = &[
-            // (name, caliber, capacity, attack, symbol)
-            ("Colt Sheriff", Caliber::Cal36, 5, 4, "p"),
-            ("Colt Army", Caliber::Cal44, 6, 6, "p"),
-            ("Colt Pocket", Caliber::Cal31, 5, 3, "p"),
-            ("Remington New Model Army", Caliber::Cal44, 6, 7, "p"),
-            ("Starr 1858 DA", Caliber::Cal44, 6, 5, "p"),
-            ("Savage 1856", Caliber::Cal36, 6, 4, "p"),
-            ("Adams Revolver", Caliber::Cal44, 5, 5, "p"),
-            ("Hawken Rifle", Caliber::Cal50, 1, 10, "r"),
-            ("Springfield 1842", Caliber::Cal69, 1, 12, "r"),
-            ("Springfield 1855", Caliber::Cal58, 1, 10, "r"),
-            ("Enfield 1853", Caliber::Cal577, 1, 10, "r"),
+        // Weapon damage is equivalent to caliber (.31 = 31 damage, etc.)
+        let weapon_pool: &[(&str, Caliber, i32, &str)] = &[
+            // (name, caliber, capacity, symbol)
+            ("Colt Sheriff", Caliber::Cal36, 5, "p"),
+            ("Colt Army", Caliber::Cal44, 6, "p"),
+            ("Colt Pocket", Caliber::Cal31, 5, "p"),
+            ("Remington New Model Army", Caliber::Cal44, 6, "p"),
+            ("Starr 1858 DA", Caliber::Cal44, 6, "p"),
+            ("Savage 1856", Caliber::Cal36, 6, "p"),
+            ("Adams Revolver", Caliber::Cal44, 5, "p"),
+            ("Hawken Rifle", Caliber::Cal50, 1, "r"),
+            ("Springfield 1842", Caliber::Cal69, 1, "r"),
+            ("Springfield 1855", Caliber::Cal58, 1, "r"),
+            ("Enfield 1853", Caliber::Cal577, 1, "r"),
         ];
         let weapon_idx = (item_hash as usize) % weapon_pool.len();
-        let (gun_name, caliber, capacity, gun_attack, symbol) = weapon_pool[weapon_idx];
+        let (gun_name, caliber, capacity, symbol) = weapon_pool[weapon_idx];
         let gun = commands.spawn((
             Item,
             Name(String::from(gun_name)),
@@ -157,7 +158,7 @@ pub fn spawn_monster(
                 loaded: template.ammo.min(capacity),
                 capacity,
                 caliber,
-                attack: gun_attack,
+                attack: caliber.damage(),
                 name: String::from(gun_name),
             },
         )).id();
@@ -259,19 +260,10 @@ pub fn spawn_monster(
             revealed_tiles: HashSet::new(),
             dirty: true,
         },
-        Ammo {
-            current: template.ammo,
-            max: template.ammo,
-        },
         Inventory { items: inv_items },
         Stamina {
             current: npc_stamina,
             max: npc_stamina,
-        },
-        Level(1),
-        Experience {
-            current: 0,
-            next_level: 20,
         },
     ));
 }

@@ -1914,9 +1914,9 @@ fn spell_sand_throw_creates_sand_particles() {
     assert!(!sand_particles.is_empty(),
         "Sand throw particles should have is_sand=true");
 
-    // Sand particles should have lifetime 12
-    assert!(sand_particles.iter().all(|(_, life, _, _)| *life == 12),
-        "Sand particles should have 12-tick lifetime");
+    // Sand particles should have lifetime 30
+    assert!(sand_particles.iter().all(|(_, life, _, _)| *life == 30),
+        "Sand particles should have 30-tick lifetime");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3107,7 +3107,7 @@ fn experience_advance_level_increases_level() {
 #[test]
 fn collectibles_can_reload_with_supplies() {
     let c = Collectibles::default();
-    assert!(c.can_reload(Caliber::Cal36),
+    assert!(c.can_reload(Caliber::Cal31),
         "Should be able to reload with starting supplies");
 }
 
@@ -3129,7 +3129,7 @@ fn collectibles_consume_reload_decrements() {
 fn collectibles_collect_adds_items() {
     let mut c = Collectibles::default();
     c.collect(CollectibleKind::Caps(10));
-    assert_eq!(c.caps, 40);
+    assert_eq!(c.caps, 20);
     c.collect(CollectibleKind::Bandages(5));
     assert_eq!(c.bandages, 5);
     c.collect(CollectibleKind::Dollars(100));

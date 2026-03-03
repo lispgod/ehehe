@@ -531,6 +531,15 @@ impl Default for CursorPosition {
 }
 
 impl CursorPosition {
+    /// Creates a cursor positioned at the given world coordinate.
+    pub fn at(pos: MyPoint) -> Self {
+        Self {
+            pos,
+            blink_frame: 0,
+            blink_half_period: 8,
+        }
+    }
+
     /// Returns true when the cursor should be visible (inverted colors).
     pub fn blink_visible(&self) -> bool {
         (self.blink_frame / self.blink_half_period).is_multiple_of(2)

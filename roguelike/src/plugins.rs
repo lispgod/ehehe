@@ -66,6 +66,11 @@ impl Plugin for RoguelikePlugin {
                     .unwrap_or(42)
             });
 
+        let game_map = GameMap::new(400, 280, seed);
+        // Compute actual player spawn position so camera+cursor start centered on it.
+        let player_spawn = game_map.find_saloon_interior()
+            .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
+
         app.add_plugins(bevy::state::app::StatesPlugin)
             // ── Messages ──
             .add_message::<MoveIntent>()
@@ -82,8 +87,8 @@ impl Plugin for RoguelikePlugin {
             .add_message::<MolotovCastIntent>()
             // ── Resources ──
             .insert_resource(MapSeed(seed))
-            .insert_resource(GameMapResource(GameMap::new(400, 280, seed)))
-            .insert_resource(CameraPosition(SPAWN_POINT))
+            .insert_resource(GameMapResource(game_map))
+            .insert_resource(CameraPosition(player_spawn))
             .init_resource::<SpatialIndex>()
             .init_resource::<CombatLog>()
             .init_resource::<TurnCounter>()
@@ -93,7 +98,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<SpellParticles>()
             .init_resource::<InputState>()
             .init_resource::<RestartRequested>()
-            .init_resource::<CursorPosition>()
+            .insert_resource(CursorPosition::at(player_spawn))
             .init_resource::<Collectibles>()
             .init_resource::<ExtraWorldTicks>()
             .init_resource::<SoundEvents>()
@@ -420,15 +425,17 @@ fn restart_system(
     pending_exp.0 = 0;
     spell_particles.particles.clear();
     *input_state = InputState::default();
-    camera.0 = SPAWN_POINT;
-    *cursor = CursorPosition::default();
+    *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
+    let player_spawn = game_map.0.find_saloon_interior()
+        .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
+    camera.0 = player_spawn;
+    *cursor = CursorPosition::at(player_spawn);
     *collectibles = Collectibles::default();
     extra_ticks.0 = 0;
     blood_map.stains.clear();
     spectating.0 = false;
     god_mode.0 = false;
     dynamic_rng.reset();
-    *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
 
     next_game_state.set(GameState::Playing);
 

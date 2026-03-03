@@ -213,7 +213,8 @@ impl Energy {
 /// When energy ≥ ACTION_COST, they may act and energy is reduced by ACTION_COST.
 pub const ACTION_COST: CoordinateUnit = 100;
 
-/// Stamina cost for throwing grenades and molotov cocktails.
+/// Stamina cost for casting AoE grenades and molotov cocktails.
+/// Note: sand throwing has its own separate cost (5 stamina).
 pub const SPELL_STAMINA_COST: CoordinateUnit = 10;
 
 /// AI behaviour state for non-player entities.

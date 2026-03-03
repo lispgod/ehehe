@@ -45,7 +45,10 @@ pub fn spell_system(
                 if len > 0.01 { (d.x as f64 / len, d.y as f64 / len) } else { (0.0, 0.0) }
             }).unwrap_or((0.0, 0.0));
 
-            game_map.place_sand_cloud(origin, turn_counter.0, dir, intent.radius + 1, radius_f * 0.5, radius_f);
+            let scan_radius = intent.radius + 1;
+            let base_radius = radius_f * 0.5;
+            let directional_scale = radius_f;
+            game_map.place_sand_cloud(origin, turn_counter.0, dir, scan_radius, base_radius, directional_scale);
             continue;
         }
 

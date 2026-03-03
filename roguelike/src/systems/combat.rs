@@ -18,6 +18,13 @@ fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, rang
     origin + GridVec::new(dx * scale, dy * scale)
 }
 
+/// Gun smoke scan radius (Chebyshev distance from the firing position).
+const SMOKE_SCAN_RADIUS: i32 = 2;
+/// Base effective radius for gun smoke (before directional bias).
+const SMOKE_BASE_RADIUS: f64 = 0.8;
+/// Additional radius in the firing direction (directional plume stretch).
+const SMOKE_DIRECTIONAL_SCALE: f64 = 2.0;
+
 /// Spawns a small cloud of gun smoke at the firing position.
 /// Places persistent SandCloud floor tiles on the map that block sight.
 /// Saves the previous floor type for restoration when smoke dissipates.
@@ -29,7 +36,7 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
     } else {
         (0.0, 0.0)
     };
-    game_map.place_sand_cloud(origin, turn, dir, 2, 0.8, 2.0);
+    game_map.place_sand_cloud(origin, turn, dir, SMOKE_SCAN_RADIUS, SMOKE_BASE_RADIUS, SMOKE_DIRECTIONAL_SCALE);
 }
 
 /// Resolves attack intents into damage events.

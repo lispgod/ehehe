@@ -221,6 +221,35 @@ fn has_clear_line_of_sight(origin: GridVec, target: GridVec, game_map: &GameMapR
     true
 }
 
+/// Returns `true` if a friendly (same-faction) entity lies on the Bresenham
+/// path between `origin` and `target`. Used to prevent NPCs from shooting
+/// through their allies.
+fn has_friendly_in_path(
+    origin: GridVec,
+    target: GridVec,
+    my_faction: Option<Faction>,
+    self_entity: Entity,
+    spatial: &SpatialIndex,
+    npc_factions: &Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
+) -> bool {
+    let Some(my_f) = my_faction else { return false; };
+    let path = origin.bresenham_line(target);
+    for &tile in &path[1..] {
+        if tile == target {
+            return false; // reached the target
+        }
+        for &ent in spatial.entities_at(&tile) {
+            if ent == self_entity { continue; }
+            if let Ok((_, _, Some(fac))) = npc_factions.get(ent) {
+                if !factions_are_hostile(my_f, *fac) {
+                    return true; // friendly entity in the path
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Returns `true` if two factions are hostile to each other.
 /// - Outlaws and Lawmen fight each other.
 /// - Wildlife attacks everyone.
@@ -402,6 +431,7 @@ pub fn ai_system(
         let my_faction = faction.copied();
 
         // Find the nearest hostile faction entity visible to this NPC.
+        // This includes the player if they are hostile (which they always are to Hostile entities).
         let faction_target: Option<(Entity, GridVec)> = if let Some(my_f) = my_faction {
             let mut best_dist = i32::MAX;
             let mut best = None;
@@ -428,10 +458,25 @@ pub fn ai_system(
             viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
         );
 
-        let chase_target: Option<(Entity, GridVec)> = if player_visible {
-            player_info.map(|(e, p)| (e, p.as_grid_vec()))
-        } else {
-            faction_target
+        // Target the closest hostile entity — not always the player.
+        // If the player is visible, compare distance to player vs nearest faction target.
+        // Faction targets are preferred only when strictly closer than the player.
+        let chase_target: Option<(Entity, GridVec)> = {
+            let player_option = if player_visible {
+                player_info.map(|(e, p)| (e, p.as_grid_vec()))
+            } else {
+                None
+            };
+            match (player_option, faction_target) {
+                (Some((pe, pv)), Some((fe, fv))) => {
+                    let pd = my_pos.chebyshev_distance(pv);
+                    let fd = my_pos.chebyshev_distance(fv);
+                    if fd < pd { Some((fe, fv)) } else { Some((pe, pv)) }
+                }
+                (Some(pt), None) => Some(pt),
+                (None, Some(ft)) => Some(ft),
+                (None, None) => None,
+            }
         };
 
         // Update memory when target is visible
@@ -719,34 +764,47 @@ pub fn ai_system(
                 let player_in_range = player_vec.is_some_and(|pv|
                     my_pos.chebyshev_distance(pv) <= sight_range
                 );
-                let target_info = if player_visible || player_in_range {
+                // Pick the closest hostile target (player or faction enemy).
+                let player_option = if player_visible || player_in_range {
                     player_info.map(|(e, p)| (e, p.as_grid_vec()))
-                } else if let Some(ft) = faction_target {
-                    Some(ft)
-                } else if let Some(ref mem) = ai_memory
-                    && let Some(remembered_pos) = mem.last_known_pos
-                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
-                    && my_pos != remembered_pos
-                {
-                    // Memory pursuit: navigate to remembered position.
-                    let step = a_star_first_step(my_pos, remembered_pos, |pos| {
-                        is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
-                    })
-                    .unwrap_or_else(|| (remembered_pos - my_pos).king_step());
-
-                    if !step.is_zero() {
-                        move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                    }
-                    energy.spend_action();
-                    continue;
                 } else {
-                    *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
-                    if let Some(ref mut mem) = ai_memory {
-                        mem.last_known_pos = None;
+                    None
+                };
+                let target_info = match (player_option, faction_target) {
+                    (Some((pe, pv)), Some((fe, fv))) => {
+                        let pd = my_pos.chebyshev_distance(pv);
+                        let fd = my_pos.chebyshev_distance(fv);
+                        if fd < pd { Some((fe, fv)) } else { Some((pe, pv)) }
                     }
-                    energy.spend_action();
-                    continue;
+                    (Some(pt), None) => Some(pt),
+                    (None, Some(ft)) => Some(ft),
+                    (None, None) => {
+                        if let Some(ref mem) = ai_memory
+                            && let Some(remembered_pos) = mem.last_known_pos
+                            && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                            && my_pos != remembered_pos
+                        {
+                            // Memory pursuit: navigate to remembered position.
+                            let step = a_star_first_step(my_pos, remembered_pos, |pos| {
+                                is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
+                            })
+                            .unwrap_or_else(|| (remembered_pos - my_pos).king_step());
+
+                            if !step.is_zero() {
+                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                            }
+                            energy.spend_action();
+                            continue;
+                        } else {
+                            *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
+                            if let Some(ref mut mem) = ai_memory {
+                                mem.last_known_pos = None;
+                            }
+                            energy.spend_action();
+                            continue;
+                        }
+                    }
                 };
 
                 let Some((target_entity, target_vec)) = target_info else {
@@ -886,9 +944,11 @@ pub fn ai_system(
                 }
 
                 // Ranged attack: fire guns via unified RangedAttackIntent
+                // Skip if a friendly entity is in the line of fire.
                 let mut used_gun = false;
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
                 {
                     if let Some(ref mut inv) = inventory {
                         let gun_ent = inv.items.iter().copied().find(|&ent| {

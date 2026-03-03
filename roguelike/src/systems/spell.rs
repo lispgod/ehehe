@@ -24,7 +24,6 @@ pub fn spell_system(
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
     seed: Res<MapSeed>,
-    mut spell_particles: ResMut<SpellParticles>,
     turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {

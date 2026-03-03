@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Faction, Health, HellGate, Hostile, Inventory, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, SpellParticles, TurnCounter};
+use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
 use crate::typeenums::{Floor, Furniture};
 use crate::typedefs::{CoordinateUnit, RatColor};
@@ -279,7 +279,6 @@ pub fn ranged_attack_system(
     mut combat_log: ResMut<CombatLog>,
     mut item_kind_query: Query<&mut ItemKind>,
     mut sound_events: ResMut<SoundEvents>,
-    mut spell_particles: ResMut<SpellParticles>,
     dynamic_rng: Res<DynamicRng>,
     seed: Res<MapSeed>,
     mut game_map: ResMut<GameMapResource>,
@@ -367,7 +366,6 @@ pub fn ai_ranged_attack_system(
     target_query: Query<&Position>,
     mut combat_log: ResMut<CombatLog>,
     mut sound_events: ResMut<SoundEvents>,
-    mut spell_particles: ResMut<SpellParticles>,
     mut game_map: ResMut<GameMapResource>,
     turn_counter: Res<TurnCounter>,
 ) {

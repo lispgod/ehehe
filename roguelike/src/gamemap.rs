@@ -161,6 +161,7 @@ impl GameMap {
     /// Finds a passable interior tile inside a saloon (building with a Piano).
     /// Scans the map for Piano furniture, then returns a nearby empty wood-plank tile.
     /// Returns `None` if no saloon is found.
+    /// Search is deterministic (left-to-right, top-to-bottom) for reproducible spawns.
     pub fn find_saloon_interior(&self) -> Option<GridVec> {
         for y in 1..self.height - 1 {
             for x in 1..self.width - 1 {

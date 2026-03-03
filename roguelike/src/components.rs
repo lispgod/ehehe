@@ -347,6 +347,7 @@ pub enum Caliber {
 impl Caliber {
     /// Returns the base damage for this caliber.
     /// Damage is equivalent to the caliber number: .31 = 31, .44 = 44, etc.
+    /// For .577, damage is truncated to 57 (hundredths) to stay in scale.
     #[inline]
     pub fn damage(&self) -> i32 {
         match self {

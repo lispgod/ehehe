@@ -1,4 +1,4 @@
-use crate::typeenums::{Floor, Furniture};
+use crate::typeenums::{Floor, Props};
 use crate::typedefs::{GraphicTriple, RatColor};
 use crate::voxel::dim;
 
@@ -60,48 +60,48 @@ impl GraphicElement for Floor {
     }
 }
 
-impl GraphicElement for Furniture {
+impl GraphicElement for Props {
     fn symbol(&self) -> String {
         match self {
-            Furniture::Wall => "#".into(),
-            Furniture::Tree => "T".into(),
-            Furniture::Bush => "%".into(),
-            Furniture::Rock => "o".into(),
-            Furniture::DeadTree => "t".into(),
-            Furniture::Bench => "H".into(),
-            Furniture::Barrel => "0".into(),
-            Furniture::Crate => "B".into(),
-            Furniture::Cactus => "Y".into(),
-            Furniture::HitchingPost => "F".into(),
-            Furniture::WaterTrough => "U".into(),
-            Furniture::Fence => "-".into(),
-            Furniture::Table => "n".into(),
-            Furniture::Chair => "h".into(),
-            Furniture::Piano => "M".into(),
-            Furniture::Sign => "]".into(),
-            Furniture::HayBale => "&".into(),
+            Props::Wall => "#".into(),
+            Props::Tree => "T".into(),
+            Props::Bush => "%".into(),
+            Props::Rock => "o".into(),
+            Props::DeadTree => "t".into(),
+            Props::Bench => "H".into(),
+            Props::Barrel => "0".into(),
+            Props::Crate => "B".into(),
+            Props::Cactus => "Y".into(),
+            Props::HitchingPost => "F".into(),
+            Props::WaterTrough => "U".into(),
+            Props::Fence => "-".into(),
+            Props::Table => "n".into(),
+            Props::Chair => "h".into(),
+            Props::Piano => "M".into(),
+            Props::Sign => "]".into(),
+            Props::HayBale => "&".into(),
         }
     }
 
     fn fg_color(&self) -> RatColor {
         match self {
-            Furniture::Wall => RatColor::Rgb(120, 90, 45),
-            Furniture::Tree => RatColor::Rgb(40, 100, 35),
-            Furniture::Bush => RatColor::Rgb(55, 110, 40),
-            Furniture::Rock => RatColor::Rgb(110, 105, 95),
-            Furniture::DeadTree => RatColor::Rgb(90, 70, 45),
-            Furniture::Bench => RatColor::Rgb(120, 80, 40),
-            Furniture::Barrel => RatColor::Rgb(120, 80, 40),
-            Furniture::Crate => RatColor::Rgb(130, 100, 50),
-            Furniture::Cactus => RatColor::Rgb(50, 100, 40),
-            Furniture::HitchingPost => RatColor::Rgb(105, 75, 38),
-            Furniture::WaterTrough => RatColor::Rgb(65, 110, 145),
-            Furniture::Fence => RatColor::Rgb(130, 100, 50),
-            Furniture::Table => RatColor::Rgb(120, 80, 40),
-            Furniture::Chair => RatColor::Rgb(105, 75, 38),
-            Furniture::Piano => RatColor::Rgb(50, 45, 40),
-            Furniture::Sign => RatColor::Rgb(150, 125, 70),
-            Furniture::HayBale => RatColor::Rgb(200, 180, 80),
+            Props::Wall => RatColor::Rgb(120, 90, 45),
+            Props::Tree => RatColor::Rgb(40, 100, 35),
+            Props::Bush => RatColor::Rgb(55, 110, 40),
+            Props::Rock => RatColor::Rgb(110, 105, 95),
+            Props::DeadTree => RatColor::Rgb(90, 70, 45),
+            Props::Bench => RatColor::Rgb(120, 80, 40),
+            Props::Barrel => RatColor::Rgb(120, 80, 40),
+            Props::Crate => RatColor::Rgb(130, 100, 50),
+            Props::Cactus => RatColor::Rgb(50, 100, 40),
+            Props::HitchingPost => RatColor::Rgb(105, 75, 38),
+            Props::WaterTrough => RatColor::Rgb(65, 110, 145),
+            Props::Fence => RatColor::Rgb(130, 100, 50),
+            Props::Table => RatColor::Rgb(120, 80, 40),
+            Props::Chair => RatColor::Rgb(105, 75, 38),
+            Props::Piano => RatColor::Rgb(50, 45, 40),
+            Props::Sign => RatColor::Rgb(150, 125, 70),
+            Props::HayBale => RatColor::Rgb(200, 180, 80),
         }
     }
 

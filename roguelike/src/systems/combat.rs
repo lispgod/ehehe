@@ -5,7 +5,7 @@ use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIn
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
-use crate::typeenums::{Floor, Furniture};
+use crate::typeenums::{Floor, Props};
 use crate::typedefs::{CoordinateUnit, RatColor};
 
 /// Computes the bullet endpoint by scaling a direction vector so the
@@ -49,7 +49,7 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
             }
             let pos = origin + GridVec::new(dx, dy);
             if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-                if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                if !matches!(voxel.props, Some(Props::Wall)) {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
             }
@@ -69,13 +69,20 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
 
 /// Resolves attack intents into damage events.
 ///
-/// Damage = attacker.attack.
-/// Uses `CombatStats::damage_against` for the formal damage model.
+/// Damage = attacker.attack + bonus from a random inventory item's blunt_damage.
+/// When an entity melee attacks (bump attack), a random item in their inventory
+/// provides bonus blunt damage (e.g., pistol-whipping with a gun, smashing with
+/// a bottle). Both players and NPCs use this system.
+/// Uses `CombatStats::damage_against` for the base damage model.
 /// Emits a `DamageEvent` for each successful hit and logs combat messages.
 pub fn combat_system(
     mut intents: MessageReader<AttackIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
     stats_query: Query<(&CombatStats, Option<&Name>, Option<&Position>)>,
+    inventory_query: Query<&Inventory>,
+    item_kind_query: Query<&ItemKind>,
+    dynamic_rng: Res<crate::resources::DynamicRng>,
+    seed: Res<crate::resources::MapSeed>,
     mut combat_log: ResMut<CombatLog>,
 ) {
     for intent in intents.read() {
@@ -86,13 +93,47 @@ pub fn combat_system(
             continue;
         };
 
-        let damage = attacker_stats.damage_against();
+        let base_damage = attacker_stats.damage_against();
         let a_name = display_name(attacker_name);
         let t_name = display_name(target_name);
         let pos = attacker_pos.map(|p| p.as_grid_vec());
 
+        // Add bonus damage from a random inventory item's blunt_damage.
+        let mut bonus = 0;
+        let mut bonus_item_name: Option<String> = None;
+        if let Ok(inv) = inventory_query.get(intent.attacker) {
+            if !inv.items.is_empty() {
+                let idx = dynamic_rng.random_index(
+                    seed.0,
+                    intent.attacker.to_bits() ^ 0xB1A7,
+                    inv.items.len(),
+                );
+                if let Ok(kind) = item_kind_query.get(inv.items[idx]) {
+                    let bd = kind.blunt_damage();
+                    if bd > 0 {
+                        bonus = bd;
+                        bonus_item_name = Some(match kind {
+                            ItemKind::Gun { name, .. } => name.clone(),
+                            ItemKind::Knife { .. } => "Knife".into(),
+                            ItemKind::Tomahawk { .. } => "Tomahawk".into(),
+                            ItemKind::Grenade { .. } => "Dynamite".into(),
+                            ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
+                            ItemKind::Molotov { .. } => "Molotov".into(),
+                            ItemKind::Bow { .. } => "Bow".into(),
+                        });
+                    }
+                }
+            }
+        }
+
+        let damage = base_damage + bonus;
+
         if damage > 0 {
-            combat_log.push_opt(format!("{a_name} hits {t_name} for {damage} damage"), pos);
+            if let Some(item_name) = bonus_item_name {
+                combat_log.push_opt(format!("{a_name} hits {t_name} with {item_name} for {damage} damage"), pos);
+            } else {
+                combat_log.push_opt(format!("{a_name} hits {t_name} for {damage} damage"), pos);
+            }
             damage_events.write(DamageEvent {
                 target: intent.target,
                 amount: damage,
@@ -457,8 +498,8 @@ pub fn melee_wide_system(
             }
         }
 
-        // Destroy adjacent destructible furniture (Chebyshev distance 1).
-        let mut furn_destroyed = 0;
+        // Destroy adjacent destructible props (Chebyshev distance 1).
+        let mut props_destroyed = 0;
         for dx in -1..=1i32 {
             for dy in -1..=1i32 {
                 if dx == 0 && dy == 0 {
@@ -466,24 +507,24 @@ pub fn melee_wide_system(
                 }
                 let tile = origin + GridVec::new(dx, dy);
                 if let Some(voxel) = game_map.0.get_voxel_at_mut(&tile)
-                    && let Some(ref furn) = voxel.furniture {
+                    && let Some(ref prop) = voxel.props {
                         let is_indestructible = matches!(
-                            furn,
-                            Furniture::Wall
-                            | Furniture::HitchingPost | Furniture::Rock
+                            prop,
+                            Props::Wall
+                            | Props::HitchingPost | Props::Rock
                         );
                         if !is_indestructible {
-                            voxel.furniture = None;
-                            furn_destroyed += 1;
+                            voxel.props = None;
+                            props_destroyed += 1;
                         }
                     }
             }
         }
-        if furn_destroyed > 0 {
-            combat_log.push(format!("{a_name} smashes {furn_destroyed} piece(s) of furniture!"));
+        if props_destroyed > 0 {
+            combat_log.push(format!("{a_name} smashes {props_destroyed} prop(s)!"));
         }
 
-        if hit_count == 0 && furn_destroyed == 0 {
+        if hit_count == 0 && props_destroyed == 0 {
             combat_log.push(format!("{a_name} roundhouse kicks but hits nothing!"));
         }
     }

@@ -4,7 +4,7 @@ use crate::components::{BlocksMovement, Health, Hostile, Player, Position, Stami
 use crate::events::{AttackIntent, MoveIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, InputState, SpatialIndex, TurnCounter, TurnState};
-use crate::typeenums::Furniture;
+use crate::typeenums::Props;
 
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability *and* the `SpatialIndex` for entities that block movement.
@@ -70,7 +70,7 @@ pub fn movement_system(
                 continue;
             }
 
-        // 1. Check map tile walkability (no blocking furniture).
+        // 1. Check map tile walkability (no blocking props).
         let tile_passable = game_map.0.is_passable(&target);
 
         // 2. Check spatial index for blocking entities at the target.
@@ -146,7 +146,7 @@ pub fn cactus_damage_system(
         // Check if standing adjacent to (or on) a cactus
         for neighbor in p.cardinal_neighbors() {
             if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
-                && matches!(voxel.furniture, Some(Furniture::Cactus)) {
+                && matches!(voxel.props, Some(Props::Cactus)) {
                     let actual = hp.apply_damage(CACTUS_DAMAGE);
                     if actual > 0 {
                         combat_log.push_at(

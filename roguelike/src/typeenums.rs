@@ -17,9 +17,9 @@ pub enum Floor {
     SandCloud,
 }
 
-/// Furniture (obstacles/structures) placed on tiles.
+/// Props (obstacles/structures) placed on tiles.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Furniture {
+pub enum Props {
     Wall,
     Tree,
     Bush,
@@ -40,58 +40,58 @@ pub enum Furniture {
     HayBale,
 }
 
-impl Furniture {
-    /// Returns `true` if this furniture blocks entity movement.
+impl Props {
+    /// Returns `true` if this prop blocks entity movement.
     /// Most solid objects block movement; low/open objects like fences and
     /// water troughs allow passage.
     pub fn blocks_movement(&self) -> bool {
-        !matches!(self, Furniture::Fence | Furniture::WaterTrough)
+        !matches!(self, Props::Fence | Props::WaterTrough)
     }
 
-    /// Returns `true` if this furniture blocks line-of-sight.
+    /// Returns `true` if this prop blocks line-of-sight.
     /// Tall opaque objects block vision; short or transparent objects do not.
     pub fn blocks_vision(&self) -> bool {
         match self {
             // Short/open objects: you can see over/through them
-            Furniture::Fence | Furniture::WaterTrough | Furniture::Bush
-            | Furniture::Bench | Furniture::Chair | Furniture::HayBale
-            | Furniture::Sign => false,
+            Props::Fence | Props::WaterTrough | Props::Bush
+            | Props::Bench | Props::Chair | Props::HayBale
+            | Props::Sign => false,
             _ => true,
         }
     }
 
-    /// Returns `true` if this furniture can be set on fire (destroyed by fire).
+    /// Returns `true` if this prop can be set on fire (destroyed by fire).
     pub fn is_flammable(&self) -> bool {
         matches!(
             self,
-            Furniture::Wall | Furniture::Tree | Furniture::DeadTree | Furniture::Bush
-            | Furniture::Barrel | Furniture::Crate | Furniture::Table
-            | Furniture::Chair | Furniture::Piano | Furniture::Bench
-            | Furniture::HayBale | Furniture::Sign | Furniture::Fence
+            Props::Wall | Props::Tree | Props::DeadTree | Props::Bush
+            | Props::Barrel | Props::Crate | Props::Table
+            | Props::Chair | Props::Piano | Props::Bench
+            | Props::HayBale | Props::Sign | Props::Fence
         )
     }
 }
 
-impl std::fmt::Display for Furniture {
+impl std::fmt::Display for Props {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Furniture::Wall => write!(f, "Wall"),
-            Furniture::Tree => write!(f, "Tree"),
-            Furniture::Bush => write!(f, "Bush"),
-            Furniture::Rock => write!(f, "Rock"),
-            Furniture::DeadTree => write!(f, "Dead Tree"),
-            Furniture::Bench => write!(f, "Bench"),
-            Furniture::Barrel => write!(f, "Barrel"),
-            Furniture::Crate => write!(f, "Crate"),
-            Furniture::Cactus => write!(f, "Cactus"),
-            Furniture::HitchingPost => write!(f, "Hitch Post"),
-            Furniture::WaterTrough => write!(f, "Water Trgh"),
-            Furniture::Fence => write!(f, "Fence"),
-            Furniture::Table => write!(f, "Table"),
-            Furniture::Chair => write!(f, "Chair"),
-            Furniture::Piano => write!(f, "Piano"),
-            Furniture::Sign => write!(f, "Sign"),
-            Furniture::HayBale => write!(f, "Hay Bale"),
+            Props::Wall => write!(f, "Wall"),
+            Props::Tree => write!(f, "Tree"),
+            Props::Bush => write!(f, "Bush"),
+            Props::Rock => write!(f, "Rock"),
+            Props::DeadTree => write!(f, "Dead Tree"),
+            Props::Bench => write!(f, "Bench"),
+            Props::Barrel => write!(f, "Barrel"),
+            Props::Crate => write!(f, "Crate"),
+            Props::Cactus => write!(f, "Cactus"),
+            Props::HitchingPost => write!(f, "Hitch Post"),
+            Props::WaterTrough => write!(f, "Water Trgh"),
+            Props::Fence => write!(f, "Fence"),
+            Props::Table => write!(f, "Table"),
+            Props::Chair => write!(f, "Chair"),
+            Props::Piano => write!(f, "Piano"),
+            Props::Sign => write!(f, "Sign"),
+            Props::HayBale => write!(f, "Hay Bale"),
         }
     }
 }

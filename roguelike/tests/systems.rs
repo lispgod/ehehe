@@ -34,6 +34,7 @@ fn test_app() -> App {
     app.init_resource::<InputState>();
     app.init_resource::<GodMode>();
     app.init_resource::<SpectatingAfterDeath>();
+    app.init_resource::<DynamicRng>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -571,6 +572,7 @@ fn test_app_with_spells() -> App {
     app.init_resource::<InputState>();
     app.init_resource::<GodMode>();
     app.init_resource::<SpectatingAfterDeath>();
+    app.init_resource::<DynamicRng>();
     app.init_state::<GameState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
     app.insert_resource(MapSeed(42));
@@ -1011,6 +1013,7 @@ fn spawn_test_player_with_gun(app: &mut App, x: i32, y: i32, attack: i32) -> (En
             caliber: Caliber::Cal36,
             attack,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         },
     )).id();
     let player = app.world_mut().spawn((
@@ -1101,6 +1104,7 @@ fn ranged_bullet_penetrates_multiple_enemies() {
             caliber: Caliber::Cal36,
             attack: 10,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         },
     )).id();
     let player = app.world_mut().spawn((
@@ -1447,6 +1451,7 @@ fn test_app_with_cactus() -> App {
     app.init_resource::<InputState>();
     app.init_resource::<GodMode>();
     app.init_resource::<SpectatingAfterDeath>();
+    app.init_resource::<DynamicRng>();
     app.init_state::<GameState>();
     app.add_sub_state::<TurnState>();
     app.insert_resource(GameMapResource(GameMap::new(120, 80, 42)));
@@ -1470,15 +1475,15 @@ fn test_app_with_cactus() -> App {
 fn place_cactus(app: &mut App, x: i32, y: i32) {
     let map = &mut app.world_mut().resource_mut::<GameMapResource>().0;
     if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-        voxel.furniture = Some(roguelike::typeenums::Furniture::Cactus);
+        voxel.props = Some(roguelike::typeenums::Props::Cactus);
     }
 }
 
-/// Clears furniture at a position to ensure it's passable.
+/// Clears props at a position to ensure it's passable.
 fn clear_tile(app: &mut App, x: i32, y: i32) {
     let map = &mut app.world_mut().resource_mut::<GameMapResource>().0;
     if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-        voxel.furniture = None;
+        voxel.props = None;
     }
 }
 
@@ -1884,7 +1889,7 @@ fn spawn_whiskey_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(180, 120, 60),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Whiskey { heal: 10 },
+        ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
     )).id()
 }
 
@@ -1898,7 +1903,7 @@ fn spawn_knife_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(192, 192, 210),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Knife { attack: 4 },
+        ItemKind::Knife { attack: 4, blunt_damage: 6 },
     )).id()
 }
 
@@ -1912,7 +1917,7 @@ fn spawn_grenade_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(255, 165, 0),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Grenade { damage: 8, radius: 2 },
+        ItemKind::Grenade { damage: 8, radius: 2, blunt_damage: 3 },
     )).id()
 }
 
@@ -1968,11 +1973,19 @@ fn ai_chasing_npc_moves_toward_player() {
     app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
     app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
 
+    // Pre-populate NPC viewshed with player position so it can see the player.
+    // The AI system now requires viewshed-based visibility (not raw distance).
+    app.world_mut().get_mut::<Viewshed>(npc).unwrap()
+        .visible_tiles.insert(GridVec::new(60, 40));
+
     let initial_pos = *app.world().get::<Position>(npc).unwrap();
 
     // Run a few ticks for AI to process
     for _ in 0..5 {
         app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        // Re-populate viewshed each tick since visibility_system may clear it
+        app.world_mut().get_mut::<Viewshed>(npc).unwrap()
+            .visible_tiles.insert(GridVec::new(60, 40));
         app.update();
     }
 
@@ -3508,6 +3521,7 @@ fn ai_ranged_attack_via_ranged_intent() {
             caliber: Caliber::Cal36,
             attack: 8,
             name: "Revolver".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
@@ -3568,6 +3582,7 @@ fn ai_kite_maintains_preferred_range() {
             caliber: Caliber::Cal44,
             attack: 10,
             name: "Rifle".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
@@ -3683,6 +3698,7 @@ fn ai_npc_reloads_empty_gun() {
             caliber: Caliber::Cal36,
             attack: 8,
             name: "Revolver".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);

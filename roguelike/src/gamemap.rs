@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
-use crate::typeenums::{Floor, Furniture};
+use crate::typeenums::{Floor, Props};
 use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT};
 use crate::voxel::Voxel;
 
@@ -45,7 +45,7 @@ impl GameMap {
     ///   4. **Landmarks** — a large Town Hall and oversized Grand Saloon.
     ///   5. **Parks** — small green parks with trees and benches scattered
     ///      throughout the town.
-    ///   6. **Street furniture** — benches, lamp posts, barrels, crates,
+    ///   6. **Street props** — benches, lamp posts, barrels, crates,
     ///      hitching posts, water troughs, signs placed along streets.
     ///   7. **Decorative elements** — cacti, dead trees, rocks in open areas.
     ///   8. **Spawn clearing** — guaranteed open area around the player spawn.
@@ -67,15 +67,15 @@ impl GameMap {
 
                 let floor = select_desert_floor(biome, detail);
 
-                let furniture = if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
-                    Some(Furniture::Wall)
+                let prop = if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
+                    Some(Props::Wall)
                 } else {
                     None
                 };
 
                 row.push(Voxel {
                     floor: Some(floor),
-                    furniture,
+                    props: prop,
                 });
             }
             voxels.push(row);
@@ -104,7 +104,7 @@ impl GameMap {
                     for x in 1..width - 1 {
                         if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
                             voxel.floor = Some(Floor::Dirt);
-                            voxel.furniture = None;
+                            voxel.props = None;
                         }
                     }
                 }
@@ -127,10 +127,10 @@ impl GameMap {
                 for x in (actual_cx - cross_half_width)..=(actual_cx + cross_half_width) {
                     for y in 1..height - 1 {
                         if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y))
-                            && !matches!(voxel.furniture, Some(Furniture::Wall))
+                            && !matches!(voxel.props, Some(Props::Wall))
                         {
                             voxel.floor = Some(Floor::Dirt);
-                            voxel.furniture = None;
+                            voxel.props = None;
                         }
                     }
                 }
@@ -153,9 +153,9 @@ impl GameMap {
         // ── Step 5: Small parks ─────────────────────────────────────
         place_parks(&mut map, width, height, seed);
 
-        // ── Step 6: Street furniture along every avenue ──────────────
+        // ── Step 6: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
-            place_street_furniture(&mut map, width, ay, avenue_half_width, seed);
+            place_street_props(&mut map, width, ay, avenue_half_width, seed);
         }
 
         // ── Step 7: Decorative elements in open areas ───────────────
@@ -187,17 +187,17 @@ impl GameMap {
         }
     }
 
-    /// Returns `true` if the tile at `point` is passable (no blocking furniture).
+    /// Returns `true` if the tile at `point` is passable (no blocking props).
     pub fn is_passable(&self, point: &MyPoint) -> bool {
         self.get_voxel_at(point)
-            .is_some_and(|v| match &v.furniture {
+            .is_some_and(|v| match &v.props {
                 Some(f) => !f.blocks_movement(),
                 None => true,
             })
     }
 
     /// Finds a passable interior tile inside a saloon (building with a Piano).
-    /// Scans the map for Piano furniture, then returns a nearby empty wood-plank tile.
+    /// Scans the map for Piano prop, then returns a nearby empty wood-plank tile.
     /// Returns `None` if no saloon is found.
     /// Search is deterministic (left-to-right, top-to-bottom) for reproducible spawns.
     pub fn find_saloon_interior(&self) -> Option<GridVec> {
@@ -205,14 +205,14 @@ impl GameMap {
             for x in 1..self.width - 1 {
                 let pos = GridVec::new(x, y);
                 if let Some(voxel) = self.get_voxel_at(&pos)
-                    && matches!(voxel.furniture, Some(Furniture::Piano))
+                    && matches!(voxel.props, Some(Props::Piano))
                 {
                     // Found a piano — look for an adjacent empty wood-plank tile
                     for dy in -2..=2i32 {
                         for dx in -2..=2i32 {
                             let candidate = pos + GridVec::new(dx, dy);
                             if let Some(v) = self.get_voxel_at(&candidate)
-                                && v.furniture.is_none()
+                                && v.props.is_none()
                                 && matches!(v.floor, Some(Floor::WoodPlanks))
                             {
                                 return Some(candidate);
@@ -407,7 +407,7 @@ fn generate_buildings(
 }
 
 /// Places a building on the map: walls around the perimeter, wood plank floor,
-/// and interior furniture based on building kind.
+/// and interior props based on building kind.
 fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
     let furn_seed = seed.wrapping_add(55555);
 
@@ -421,17 +421,17 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                     && x == b.x + b.w / 2;
 
                 if is_border && !is_door {
-                    voxel.furniture = Some(Furniture::Wall);
+                    voxel.props = Some(Props::Wall);
                     voxel.floor = Some(Floor::WoodPlanks);
                 } else {
-                    voxel.furniture = None;
+                    voxel.props = None;
                     voxel.floor = Some(Floor::WoodPlanks);
                 }
             }
         }
     }
 
-    // Place interior furniture based on building kind
+    // Place interior props based on building kind
     let interior_x = b.x + 1;
     let interior_y = b.y + 1;
     let iw = b.w - 2;
@@ -441,92 +441,92 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
         0 => {
             // House: table and chairs
             if iw >= 2 && ih >= 2 {
-                set_furniture(map, interior_x + 1, interior_y + 1, Furniture::Table);
-                set_furniture(map, interior_x, interior_y + 1, Furniture::Chair);
+                set_prop(map, interior_x + 1, interior_y + 1, Props::Table);
+                set_prop(map, interior_x, interior_y + 1, Props::Chair);
                 if iw >= 3 {
-                    set_furniture(map, interior_x + 2, interior_y + 1, Furniture::Chair);
+                    set_prop(map, interior_x + 2, interior_y + 1, Props::Chair);
                 }
                 if ih >= 3 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Barrel);
                 }
             }
         }
         1 => {
             // Saloon: piano, tables, chairs, barrels
             if iw >= 4 && ih >= 3 {
-                set_furniture(map, interior_x, interior_y, Furniture::Piano);
-                set_furniture(map, interior_x + 2, interior_y + 1, Furniture::Table);
-                set_furniture(map, interior_x + 1, interior_y + 1, Furniture::Chair);
-                set_furniture(map, interior_x + 3, interior_y + 1, Furniture::Chair);
+                set_prop(map, interior_x, interior_y, Props::Piano);
+                set_prop(map, interior_x + 2, interior_y + 1, Props::Table);
+                set_prop(map, interior_x + 1, interior_y + 1, Props::Chair);
+                set_prop(map, interior_x + 3, interior_y + 1, Props::Chair);
                 if iw >= 5 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
-                    set_furniture(map, interior_x + iw - 1, interior_y + 1, Furniture::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y + 1, Props::Barrel);
                 }
             }
         }
         2 => {
             // Stable: hitching posts, water trough, hay bales, some crates
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x, interior_y, Furniture::HitchingPost);
-                set_furniture(map, interior_x + 2, interior_y, Furniture::HitchingPost);
-                set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::WaterTrough);
+                set_prop(map, interior_x, interior_y, Props::HitchingPost);
+                set_prop(map, interior_x + 2, interior_y, Props::HitchingPost);
+                set_prop(map, interior_x + 1, interior_y + ih - 1, Props::WaterTrough);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Crate);
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::HayBale);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::HayBale);
                 }
                 if iw >= 5 {
-                    set_furniture(map, interior_x + iw - 2, interior_y, Furniture::HayBale);
+                    set_prop(map, interior_x + iw - 2, interior_y, Props::HayBale);
                 }
             }
         }
         3 => {
             // General store: barrels, crates, table
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x, interior_y, Furniture::Barrel);
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Crate);
+                set_prop(map, interior_x, interior_y, Props::Barrel);
+                set_prop(map, interior_x + 1, interior_y, Props::Crate);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Crate);
                 }
                 let noise = value_noise(b.x, b.y, furn_seed);
                 if noise > 0.5 && ih >= 3 {
-                    set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::Table);
+                    set_prop(map, interior_x + 1, interior_y + ih - 1, Props::Table);
                 }
             }
         }
         4 => {
             // Sheriff's office: table (desk), chair, barrel (lock-up), sign
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
-                set_furniture(map, interior_x, interior_y, Furniture::Chair);
+                set_prop(map, interior_x + 1, interior_y, Props::Table);
+                set_prop(map, interior_x, interior_y, Props::Chair);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Barrel);
                 }
                 if ih >= 3 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Sign);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Sign);
                 }
             }
         }
         5 => {
             // Post office: table (counter), crates (parcels), sign
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
-                set_furniture(map, interior_x, interior_y, Furniture::Crate);
+                set_prop(map, interior_x + 1, interior_y, Props::Table);
+                set_prop(map, interior_x, interior_y, Props::Crate);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Crate);
                 }
                 if ih >= 3 {
-                    set_furniture(map, interior_x, interior_y + ih - 1, Furniture::Sign);
+                    set_prop(map, interior_x, interior_y + ih - 1, Props::Sign);
                 }
             }
         }
         6 => {
             // Church: benches (pews) in rows, table (altar)
             if iw >= 3 && ih >= 3 {
-                set_furniture(map, interior_x + iw / 2, interior_y, Furniture::Table);
+                set_prop(map, interior_x + iw / 2, interior_y, Props::Table);
                 for row in 1..ih.min(4) {
-                    set_furniture(map, interior_x, interior_y + row, Furniture::Bench);
+                    set_prop(map, interior_x, interior_y + row, Props::Bench);
                     if iw >= 4 {
-                        set_furniture(map, interior_x + iw - 1, interior_y + row, Furniture::Bench);
+                        set_prop(map, interior_x + iw - 1, interior_y + row, Props::Bench);
                     }
                 }
             }
@@ -534,76 +534,76 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
         7 => {
             // Bank: table (counter), barrels (vault), crates (strongboxes)
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
-                set_furniture(map, interior_x, interior_y + ih - 1, Furniture::Barrel);
+                set_prop(map, interior_x + 1, interior_y, Props::Table);
+                set_prop(map, interior_x, interior_y + ih - 1, Props::Barrel);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Barrel);
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Crate);
                 }
             }
         }
         8 => {
-            // Hotel: table, chairs in rows (rooms suggested by furniture layout)
+            // Hotel: table, chairs in rows (rooms suggested by props layout)
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x, interior_y, Furniture::Table);
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Chair);
+                set_prop(map, interior_x, interior_y, Props::Table);
+                set_prop(map, interior_x + 1, interior_y, Props::Chair);
                 if ih >= 3 {
-                    set_furniture(map, interior_x, interior_y + 2, Furniture::Bench);
+                    set_prop(map, interior_x, interior_y + 2, Props::Bench);
                     if iw >= 4 {
-                        set_furniture(map, interior_x + iw - 1, interior_y + 2, Furniture::Bench);
+                        set_prop(map, interior_x + iw - 1, interior_y + 2, Props::Bench);
                     }
                 }
                 if iw >= 5 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Barrel);
                 }
             }
         }
         9 => {
             // Jail: barrels (cells), sign (wanted poster)
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x, interior_y, Furniture::Sign);
-                set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Barrel);
+                set_prop(map, interior_x, interior_y, Props::Sign);
+                set_prop(map, interior_x + iw - 1, interior_y, Props::Barrel);
                 if ih >= 3 {
-                    set_furniture(map, interior_x, interior_y + ih - 1, Furniture::Barrel);
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Barrel);
+                    set_prop(map, interior_x, interior_y + ih - 1, Props::Barrel);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Barrel);
                 }
             }
         }
         10 => {
             // Undertaker: tables (slabs), crates (coffins)
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x + 1, interior_y, Furniture::Table);
+                set_prop(map, interior_x + 1, interior_y, Props::Table);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + 3.min(iw - 1), interior_y, Furniture::Table);
+                    set_prop(map, interior_x + 3.min(iw - 1), interior_y, Props::Table);
                 }
-                set_furniture(map, interior_x, interior_y + ih - 1, Furniture::Crate);
+                set_prop(map, interior_x, interior_y + ih - 1, Props::Crate);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Crate);
                 }
             }
         }
         _ => {
             // Blacksmith: barrels (water quench), crates (supplies), hitching post (anvil stand-in)
             if iw >= 3 && ih >= 2 {
-                set_furniture(map, interior_x, interior_y, Furniture::HitchingPost);
-                set_furniture(map, interior_x + 1, interior_y + ih - 1, Furniture::Barrel);
+                set_prop(map, interior_x, interior_y, Props::HitchingPost);
+                set_prop(map, interior_x + 1, interior_y + ih - 1, Props::Barrel);
                 if iw >= 4 {
-                    set_furniture(map, interior_x + iw - 1, interior_y, Furniture::Crate);
-                    set_furniture(map, interior_x + iw - 1, interior_y + ih - 1, Furniture::WaterTrough);
+                    set_prop(map, interior_x + iw - 1, interior_y, Props::Crate);
+                    set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::WaterTrough);
                 }
             }
         }
     }
 }
 
-/// Helper: sets furniture at a position if within bounds, not occupied by a wall,
+/// Helper: sets a prop at a position if within bounds, not occupied by a wall,
 /// and not on a dirt road tile.
-fn set_furniture(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, furn: Furniture) {
+fn set_prop(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, prop: Props) {
     let pos = GridVec::new(x, y);
     if let Some(voxel) = map.get_voxel_at_mut(&pos)
-        && !matches!(voxel.furniture, Some(Furniture::Wall))
+        && !matches!(voxel.props, Some(Props::Wall))
         && !matches!(voxel.floor, Some(Floor::Dirt)) {
-            voxel.furniture = Some(furn);
+            voxel.props = Some(prop);
         }
 }
 
@@ -632,35 +632,35 @@ fn place_town_hall(map: &mut GameMap, width: CoordinateUnit, height: CoordinateU
                 let is_door = y == ty + th - 1 && x == tx + tw / 2;
                 let is_back_door = y == ty && x == tx + tw / 2;
                 if is_border && !is_door && !is_back_door {
-                    voxel.furniture = Some(Furniture::Wall);
+                    voxel.props = Some(Props::Wall);
                 } else {
-                    voxel.furniture = None;
+                    voxel.props = None;
                 }
                 voxel.floor = Some(Floor::WoodPlanks);
             }
         }
     }
 
-    // Interior furniture: long meeting table, chairs, signs
+    // Interior props: long meeting table, chairs, signs
     let ix = tx + 2;
     let iy = ty + 2;
     // Central table row
     for dx in 2..tw - 4 {
-        set_furniture(map, tx + dx, iy + 2, Furniture::Table);
+        set_prop(map, tx + dx, iy + 2, Props::Table);
     }
     // Chairs along table
     for dx in (2..tw - 4).step_by(2) {
-        set_furniture(map, tx + dx, iy + 1, Furniture::Chair);
-        set_furniture(map, tx + dx, iy + 3, Furniture::Chair);
+        set_prop(map, tx + dx, iy + 1, Props::Chair);
+        set_prop(map, tx + dx, iy + 3, Props::Chair);
     }
     // Signs on the walls
-    set_furniture(map, ix, iy, Furniture::Sign);
-    set_furniture(map, ix + 1, iy, Furniture::Sign);
+    set_prop(map, ix, iy, Props::Sign);
+    set_prop(map, ix + 1, iy, Props::Sign);
     // Barrels in corners
-    set_furniture(map, tx + 1, ty + 1, Furniture::Barrel);
-    set_furniture(map, tx + tw - 2, ty + 1, Furniture::Barrel);
-    set_furniture(map, tx + 1, ty + th - 2, Furniture::Crate);
-    set_furniture(map, tx + tw - 2, ty + th - 2, Furniture::Crate);
+    set_prop(map, tx + 1, ty + 1, Props::Barrel);
+    set_prop(map, tx + tw - 2, ty + 1, Props::Barrel);
+    set_prop(map, tx + 1, ty + th - 2, Props::Crate);
+    set_prop(map, tx + tw - 2, ty + th - 2, Props::Crate);
 }
 
 /// Places a Grand Saloon — a large 20×14 saloon with piano, many tables,
@@ -688,9 +688,9 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
                 let is_main_door = y == sy + sh - 1 && (x == sx + sw / 2 || x == sx + sw / 2 - 1);
                 let is_side_door = x == sx && y == sy + sh / 2;
                 if is_border && !is_main_door && !is_side_door {
-                    voxel.furniture = Some(Furniture::Wall);
+                    voxel.props = Some(Props::Wall);
                 } else {
-                    voxel.furniture = None;
+                    voxel.props = None;
                 }
                 voxel.floor = Some(Floor::WoodPlanks);
             }
@@ -698,10 +698,10 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     }
 
     // Interior: piano in corner, multiple table+chair clusters, barrel bar
-    set_furniture(map, sx + 1, sy + 1, Furniture::Piano);
+    set_prop(map, sx + 1, sy + 1, Props::Piano);
     // Bar (barrels along the back wall)
     for dx in 3..sw - 3 {
-        set_furniture(map, sx + dx, sy + 1, Furniture::Barrel);
+        set_prop(map, sx + dx, sy + 1, Props::Barrel);
     }
     // Tables and chairs in a grid pattern
     for row in 0..3 {
@@ -709,15 +709,15 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
             let tx = sx + 3 + col * 5;
             let ty = sy + 4 + row * 3;
             if tx + 2 < sx + sw - 1 && ty + 1 < sy + sh - 1 {
-                set_furniture(map, tx, ty, Furniture::Table);
-                set_furniture(map, tx - 1, ty, Furniture::Chair);
-                set_furniture(map, tx + 1, ty, Furniture::Chair);
+                set_prop(map, tx, ty, Props::Table);
+                set_prop(map, tx - 1, ty, Props::Chair);
+                set_prop(map, tx + 1, ty, Props::Chair);
             }
         }
     }
     // Corner barrels
-    set_furniture(map, sx + sw - 2, sy + 1, Furniture::Barrel);
-    set_furniture(map, sx + sw - 2, sy + sh - 2, Furniture::Crate);
+    set_prop(map, sx + sw - 2, sy + 1, Props::Barrel);
+    set_prop(map, sx + sw - 2, sy + sh - 2, Props::Crate);
 }
 
 /// Places 3-5 small parks throughout the town.
@@ -748,14 +748,14 @@ fn place_parks(
             continue;
         }
 
-        // Lay down grass floor and clear furniture
+        // Lay down grass floor and clear props
         for y in park_cy..park_cy + park_h {
             for x in park_cx..park_cx + park_w {
                 if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
                     // Don't overwrite border walls
-                    if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                    if !matches!(voxel.props, Some(Props::Wall)) {
                         voxel.floor = Some(Floor::Grass);
-                        voxel.furniture = None;
+                        voxel.props = None;
                     }
                 }
             }
@@ -763,32 +763,32 @@ fn place_parks(
 
         // Place trees around the edges
         for dx in (0..park_w).step_by(3) {
-            set_furniture(map, park_cx + dx, park_cy, Furniture::Tree);
-            set_furniture(map, park_cx + dx, park_cy + park_h - 1, Furniture::Tree);
+            set_prop(map, park_cx + dx, park_cy, Props::Tree);
+            set_prop(map, park_cx + dx, park_cy + park_h - 1, Props::Tree);
         }
         for dy in (0..park_h).step_by(3) {
-            set_furniture(map, park_cx, park_cy + dy, Furniture::Tree);
-            set_furniture(map, park_cx + park_w - 1, park_cy + dy, Furniture::Tree);
+            set_prop(map, park_cx, park_cy + dy, Props::Tree);
+            set_prop(map, park_cx + park_w - 1, park_cy + dy, Props::Tree);
         }
 
         // Benches in the interior
         if park_w >= 6 && park_h >= 4 {
-            set_furniture(map, park_cx + 2, park_cy + park_h / 2, Furniture::Bench);
-            set_furniture(map, park_cx + park_w - 3, park_cy + park_h / 2, Furniture::Bench);
+            set_prop(map, park_cx + 2, park_cy + park_h / 2, Props::Bench);
+            set_prop(map, park_cx + park_w - 3, park_cy + park_h / 2, Props::Bench);
         }
 
         // Water trough (fountain stand-in)
         if park_w >= 8 && park_h >= 6 {
-            set_furniture(map, park_cx + park_w / 2, park_cy + park_h / 2, Furniture::WaterTrough);
+            set_prop(map, park_cx + park_w / 2, park_cy + park_h / 2, Props::WaterTrough);
         }
 
         placed += 1;
     }
 }
 
-/// Places street furniture (benches, lamp posts, barrels, signs, hitching posts)
+/// Places street props (benches, lamp posts, barrels, signs, hitching posts)
 /// along the main street sidewalks.
-fn place_street_furniture(
+fn place_street_props(
     map: &mut GameMap,
     width: CoordinateUnit,
     street_y: CoordinateUnit,
@@ -801,28 +801,28 @@ fn place_street_furniture(
 
     for x in (4..width - 4).step_by(4) {
         let noise = value_noise(x, sidewalk_north, furn_seed);
-        let furn = match (noise * 6.0) as u32 {
-            0 => Furniture::HitchingPost,
-            1 => Furniture::Bench,
-            2 => Furniture::Barrel,
-            3 => Furniture::WaterTrough,
-            4 => Furniture::Sign,
-            _ => Furniture::Crate,
+        let prop = match (noise * 6.0) as u32 {
+            0 => Props::HitchingPost,
+            1 => Props::Bench,
+            2 => Props::Barrel,
+            3 => Props::WaterTrough,
+            4 => Props::Sign,
+            _ => Props::Crate,
         };
-        set_furniture(map, x, sidewalk_north, furn);
+        set_prop(map, x, sidewalk_north, prop);
     }
 
     for x in (6..width - 4).step_by(4) {
         let noise = value_noise(x, sidewalk_south, furn_seed.wrapping_add(1111));
-        let furn = match (noise * 6.0) as u32 {
-            0 => Furniture::Bench,
-            1 => Furniture::Crate,
-            2 => Furniture::WaterTrough,
-            3 => Furniture::Barrel,
-            4 => Furniture::HitchingPost,
-            _ => Furniture::Sign,
+        let prop = match (noise * 6.0) as u32 {
+            0 => Props::Bench,
+            1 => Props::Crate,
+            2 => Props::WaterTrough,
+            3 => Props::Barrel,
+            4 => Props::HitchingPost,
+            _ => Props::Sign,
         };
-        set_furniture(map, x, sidewalk_south, furn);
+        set_prop(map, x, sidewalk_south, prop);
     }
 }
 
@@ -840,9 +840,9 @@ fn place_desert_decorations(
     for y in 1..height - 1 {
         for x in 1..width - 1 {
             let pos = GridVec::new(x, y);
-            // Skip if already has furniture or is near spawn
+            // Skip if already has props or is near spawn
             if let Some(voxel) = map.get_voxel_at(&pos) {
-                if voxel.furniture.is_some() {
+                if voxel.props.is_some() {
                     continue;
                 }
                 if matches!(voxel.floor, Some(Floor::WoodPlanks)) {
@@ -871,23 +871,23 @@ fn place_desert_decorations(
             }
 
             let pick = value_noise(y, x, deco_seed.wrapping_add(44444));
-            let furn = if pick < 0.30 {
-                Furniture::Cactus
+            let prop = if pick < 0.30 {
+                Props::Cactus
             } else if pick < 0.50 {
-                Furniture::DeadTree
+                Props::DeadTree
             } else if pick < 0.65 {
-                Furniture::Rock
+                Props::Rock
             } else if pick < 0.80 {
-                Furniture::Bush
+                Props::Bush
             } else {
-                Furniture::HayBale
+                Props::HayBale
             };
-            set_furniture(map, x, y, furn);
+            set_prop(map, x, y, prop);
         }
     }
 }
 
-/// Clears all furniture within a given radius of a point.
+/// Clears all props within a given radius of a point.
 fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
     let radius_sq = radius * radius;
     let map_width = map.width;
@@ -901,7 +901,7 @@ fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
                     let is_border = pos.x == 0 || pos.y == 0
                         || pos.x == map_width - 1 || pos.y == map_height - 1;
                     if !is_border {
-                        voxel.furniture = None;
+                        voxel.props = None;
                     }
                 }
         }
@@ -933,22 +933,22 @@ mod tests {
         // Top and bottom rows
         for x in 0..20 {
             assert!(
-                map.voxels[0][x as usize].furniture.is_some(),
+                map.voxels[0][x as usize].props.is_some(),
                 "Bottom border at x={x} should have wall"
             );
             assert!(
-                map.voxels[14][x as usize].furniture.is_some(),
+                map.voxels[14][x as usize].props.is_some(),
                 "Top border at x={x} should have wall"
             );
         }
         // Left and right columns
         for y in 0..15 {
             assert!(
-                map.voxels[y as usize][0].furniture.is_some(),
+                map.voxels[y as usize][0].props.is_some(),
                 "Left border at y={y} should have wall"
             );
             assert!(
-                map.voxels[y as usize][19].furniture.is_some(),
+                map.voxels[y as usize][19].props.is_some(),
                 "Right border at y={y} should have wall"
             );
         }
@@ -1019,8 +1019,8 @@ mod tests {
                     "Floor mismatch at ({x}, {y})"
                 );
                 assert_eq!(
-                    map1.voxels[y][x].furniture, map2.voxels[y][x].furniture,
-                    "Furniture mismatch at ({x}, {y})"
+                    map1.voxels[y][x].props, map2.voxels[y][x].props,
+                    "Props mismatch at ({x}, {y})"
                 );
             }
         }
@@ -1033,7 +1033,7 @@ mod tests {
         let mut any_different = false;
         for y in 1..19 {
             for x in 1..29 {
-                if map1.voxels[y][x].furniture != map2.voxels[y][x].furniture {
+                if map1.voxels[y][x].props != map2.voxels[y][x].props {
                     any_different = true;
                     break;
                 }
@@ -1082,17 +1082,17 @@ mod tests {
     }
 
     #[test]
-    fn game_map_has_western_furniture() {
+    fn game_map_has_western_props() {
         let map = GameMap::new(120, 80, 42);
         let mut has_bench = false;
         let mut has_barrel = false;
         let mut has_cactus = false;
         for y in 0..80 {
             for x in 0..120 {
-                match &map.voxels[y][x].furniture {
-                    Some(Furniture::Bench) => has_bench = true,
-                    Some(Furniture::Barrel) => has_barrel = true,
-                    Some(Furniture::Cactus) => has_cactus = true,
+                match &map.voxels[y][x].props {
+                    Some(Props::Bench) => has_bench = true,
+                    Some(Props::Barrel) => has_barrel = true,
+                    Some(Props::Cactus) => has_cactus = true,
                     _ => {}
                 }
             }

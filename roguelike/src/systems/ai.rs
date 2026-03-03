@@ -7,7 +7,7 @@ use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovem
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
-use crate::typeenums::Furniture;
+use crate::typeenums::Props;
 
 // ───────────────────────── A* Pathfinding ──────────────────────────
 
@@ -132,12 +132,12 @@ pub fn a_star_first_step_pub(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
-/// Returns `true` if any cardinal neighbor of `pos` is a cactus.
+/// Returns `true` if any neighbor (all 8 directions) of `pos` is a cactus.
 /// Used by NPC pathfinding to avoid cactus-adjacent tiles.
 fn is_near_cactus(pos: GridVec, game_map: &GameMapResource) -> bool {
-    for neighbor in pos.cardinal_neighbors() {
+    for neighbor in pos.all_neighbors() {
         if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
-            && matches!(voxel.furniture, Some(Furniture::Cactus)) {
+            && matches!(voxel.props, Some(Props::Cactus)) {
                 return true;
             }
     }
@@ -195,7 +195,7 @@ fn rotate_look_dir(
 
 /// Checks line-of-sight between two points using Bresenham, ignoring
 /// the directional FOV cone.  Returns `true` when no vision-blocking
-/// furniture or sand cloud exists on the path (the endpoints are excluded from the
+/// props or sand cloud exists on the path (the endpoints are excluded from the
 /// obstruction check so the attacker can fire from / into a doorway).
 fn has_clear_line_of_sight(origin: GridVec, target: GridVec, game_map: &GameMapResource, sand_clouds: &HashSet<GridVec>) -> bool {
     let path = origin.bresenham_line(target);
@@ -211,7 +211,7 @@ fn has_clear_line_of_sight(origin: GridVec, target: GridVec, game_map: &GameMapR
                 if matches!(v.floor, Some(crate::typeenums::Floor::SandCloud)) {
                     return false;
                 }
-                if v.furniture.as_ref().is_some_and(|f| f.blocks_vision()) {
+                if v.props.as_ref().is_some_and(|f| f.blocks_vision()) {
                     return false;
                 }
             }
@@ -305,6 +305,22 @@ fn has_loaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut It
     })
 }
 
+/// Returns `true` if the NPC has a bow in inventory.
+fn has_bow(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    inventory.as_ref().is_some_and(|inv| {
+        inv.items.iter().any(|&ent| {
+            item_kinds.get(ent).ok().is_some_and(|k|
+                matches!(*k, ItemKind::Bow { .. })
+            )
+        })
+    })
+}
+
+/// Returns `true` if the NPC has a ranged weapon (loaded gun or bow).
+fn has_ranged_weapon(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    has_loaded_gun(inventory, item_kinds) || has_bow(inventory, item_kinds)
+}
+
 /// Returns `true` if the NPC should consider fleeing based on health and personality.
 fn should_flee(health: &Option<Mut<Health>>, personality: Option<&AiPersonality>, inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
     let Some(hp) = health else { return false; };
@@ -395,11 +411,12 @@ fn kite_direction(
 /// **Memory**: NPCs remember the last known position of their target. When
 /// sight is lost, they navigate to the remembered position before giving up.
 pub fn ai_system(
+    mut commands: Commands,
     mut ai_query: Query<
         (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
         Without<Player>,
     >,
-    player_query: Query<(Entity, &Position), With<Player>>,
+    player_query: Query<(Entity, &Position, &Health), With<Player>>,
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     floor_items: Query<(Entity, &Position), With<Item>>,
     hostile_positions: Query<(Entity, &Position), With<Hostile>>,
@@ -415,7 +432,13 @@ pub fn ai_system(
     (dynamic_rng, seed, spell_particles): (Res<crate::resources::DynamicRng>, Res<crate::resources::MapSeed>, Res<crate::resources::SpellParticles>),
 ) {
     let player_info = player_query.single().ok();
-    let player_vec = player_info.map(|(_, p)| p.as_grid_vec());
+    // When the player is dead, NPCs should no longer target them.
+    let player_alive = player_info.as_ref().is_some_and(|(_, _, hp)| !hp.is_dead());
+    let player_vec = if player_alive {
+        player_info.as_ref().map(|(_, p, _)| p.as_grid_vec())
+    } else {
+        None
+    };
 
     let sand_cloud_tiles: HashSet<GridVec> = spell_particles.particles.iter()
         .filter(|(_, life, delay, _)| *delay == 0 && *life > 0)
@@ -463,7 +486,7 @@ pub fn ai_system(
         // Faction targets are preferred only when strictly closer than the player.
         let chase_target: Option<(Entity, GridVec)> = {
             let player_option = if player_visible {
-                player_info.map(|(e, p)| (e, p.as_grid_vec()))
+                player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
             } else {
                 None
             };
@@ -760,13 +783,12 @@ pub fn ai_system(
                 energy.spend_action();
             }
             AiState::Chasing => {
-                let sight_range = viewshed.as_ref().map(|vs| vs.range).unwrap_or(8);
-                let player_in_range = player_vec.is_some_and(|pv|
-                    my_pos.chebyshev_distance(pv) <= sight_range
-                );
                 // Pick the closest hostile target (player or faction enemy).
-                let player_option = if player_visible || player_in_range {
-                    player_info.map(|(e, p)| (e, p.as_grid_vec()))
+                // Only use viewshed-based visibility (which respects walls via
+                // shadowcasting) — never raw distance alone. This prevents
+                // NPC line-of-sight from bleeding through walls.
+                let player_option = if player_visible {
+                    player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
                 } else {
                     None
                 };
@@ -843,7 +865,7 @@ pub fn ai_system(
                             let item_ent = inv.items[idx];
                             if let Ok(kind) = item_kinds.get(item_ent) {
                                 match *kind {
-                                    ItemKind::Grenade { damage: _, radius } => {
+                                    ItemKind::Grenade { damage: _, radius, .. } => {
                                         spell_intents.write(SpellCastIntent {
                                             caster: entity,
                                             radius,
@@ -852,7 +874,7 @@ pub fn ai_system(
                                         });
                                         used_throwable = true;
                                     }
-                                    ItemKind::Molotov { damage, radius } => {
+                                    ItemKind::Molotov { damage, radius, .. } => {
                                         molotov_intents.write(MolotovCastIntent {
                                             caster: entity,
                                             radius,
@@ -886,8 +908,8 @@ pub fn ai_system(
                             let item_ent = inv.items[idx];
                             if let Ok(kind) = item_kinds.get(item_ent) {
                                 let (dmg, range) = match *kind {
-                                    ItemKind::Knife { attack } => (attack, 12),
-                                    ItemKind::Tomahawk { attack } => (attack, 10),
+                                    ItemKind::Knife { attack, .. } => (attack, 12),
+                                    ItemKind::Tomahawk { attack, .. } => (attack, 10),
                                     _ => (0, 0),
                                 };
                                 if dmg > 0 {
@@ -987,6 +1009,44 @@ pub fn ai_system(
                     continue;
                 }
 
+                // Bow attack: fire an arrow projectile (unlimited ammo).
+                let mut used_bow = false;
+                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
+                {
+                    if let Some(ref inv) = inventory {
+                        let bow_ent = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Bow { .. })
+                            )
+                        });
+                        if let Some(bow_entity) = bow_ent {
+                            if let Ok(kind) = item_kinds.get(bow_entity) {
+                                if let ItemKind::Bow { attack: bow_atk, .. } = *kind {
+                                    let dx = target_vec.x - my_pos.x;
+                                    let dy = target_vec.y - my_pos.y;
+                                    let max_comp = dx.abs().max(dy.abs()).max(1);
+                                    let scale = AI_RANGED_ATTACK_RANGE.div_euclid(max_comp).max(1);
+                                    let endpoint = my_pos + GridVec::new(dx * scale, dy * scale);
+                                    crate::systems::projectile::spawn_arrow(
+                                        &mut commands,
+                                        my_pos,
+                                        endpoint,
+                                        bow_atk,
+                                        entity,
+                                    );
+                                    used_bow = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if used_bow {
+                    energy.spend_action();
+                    continue;
+                }
+
                 // Adjacent to target? Melee attack.
                 if dist == 1 {
                     attack_intents.write(AttackIntent {
@@ -999,7 +1059,7 @@ pub fn ai_system(
 
                 // Tactical range management (kiting) for ranged NPCs
                 let pref_range = personality.map(|p| p.preferred_range).unwrap_or(1);
-                let is_ranged_npc = pref_range > 1 && has_loaded_gun(&inventory, &item_kinds);
+                let is_ranged_npc = pref_range > 1 && has_ranged_weapon(&inventory, &item_kinds);
 
                 if is_ranged_npc && dist < pref_range {
                     if let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {

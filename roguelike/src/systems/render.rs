@@ -350,11 +350,12 @@ pub fn draw_system(
                             .and_then(|(_, k)| k)
                             .map_or("".to_string(), |k| match k {
                                 ItemKind::Gun { loaded, capacity, caliber, .. } => format!("{loaded}/{capacity} {caliber}"),
-                                ItemKind::Knife { attack } => format!("+{attack} atk"),
-                                ItemKind::Tomahawk { attack } => format!("+{attack} atk"),
-                                ItemKind::Grenade { damage, radius } => format!("{damage} dmg r{radius}"),
-                                ItemKind::Whiskey { heal } => format!("Heal {heal} HP"),
-                                ItemKind::Molotov { damage, radius } => format!("{damage} dmg r{radius} 🔥"),
+                                ItemKind::Knife { attack, .. } => format!("+{attack} atk"),
+                                ItemKind::Tomahawk { attack, .. } => format!("+{attack} atk"),
+                                ItemKind::Grenade { damage, radius, .. } => format!("{damage} dmg r{radius}"),
+                                ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
+                                ItemKind::Bow { .. } => "Bow".to_string(),
                             });
                         (name, desc)
                     })
@@ -362,21 +363,21 @@ pub fn draw_system(
             })
             .unwrap_or_default();
 
-        // Collect visible furniture types for the furniture legend.
+        // Collect visible prop types for the props legend.
         // Also includes smoke/sand clouds and fire as special entries.
-        let visible_furniture: Vec<(String, RatColor, String)> = {
+        let visible_props: Vec<(String, RatColor, String)> = {
             let mut seen = HashSet::new();
             let mut items = Vec::new();
             if let Some(vt) = visible_tiles {
                 for tile in vt {
                     if let Some(voxel) = game_map.0.get_voxel_at(tile) {
-                        if let Some(ref furn) = voxel.furniture {
-                            let name = format!("{furn}");
+                        if let Some(ref prop) = voxel.props {
+                            let name = format!("{prop}");
                             if seen.insert(name.clone()) {
-                                items.push((furn.symbol(), furn.fg_color(), name));
+                                items.push((prop.symbol(), prop.fg_color(), name));
                             }
                         }
-                        // Show smoke/sand clouds and fire in the furniture panel.
+                        // Show smoke/sand clouds and fire in the props panel.
                         if let Some(ref floor) = voxel.floor {
                             let entry: Option<(String, RatColor, String)> = match floor {
                                 crate::typeenums::Floor::SandCloud => {
@@ -406,7 +407,7 @@ pub fn draw_system(
             player_hp,
             player_stamina,
             &visible_entity_infos,
-            &visible_furniture,
+            &visible_props,
             &combat_log,
             &turn_counter,
             &kill_count,
@@ -480,34 +481,34 @@ pub fn draw_system(
     Ok(())
 }
 
-/// Renders the bottom panel with stats, central combat log, visible entities, and furniture legend.
-/// Layout: [Stats | Central Log | Furniture | Visible]
+/// Renders the bottom panel with stats, central combat log, visible entities, and props legend.
+/// Layout: [Stats | Central Log | Props | Visible]
 fn render_bottom_panel(
     frame: &mut ratatui::Frame,
     area: Rect,
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
     visible_entities: &[(String, RatColor, RatColor, String)],
-    visible_furniture: &[(String, RatColor, String)],
+    visible_props: &[(String, RatColor, String)],
     combat_log: &CombatLog,
     turn_counter: &TurnCounter,
     kill_count: &KillCount,
     collectibles: &Collectibles,
 ) {
-    // Split bottom panel into four horizontal columns: stats | log | furniture | visible
+    // Split bottom panel into four horizontal columns: stats | log | props | visible
     let horiz_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(22),   // Stats column (HP, Stamina)
             Constraint::Min(1),       // Central log (wide, fills remaining space)
-            Constraint::Length(18),   // Furniture legend column
+            Constraint::Length(18),   // Props legend column
             Constraint::Length(22),   // Visible entities column
         ])
         .split(area);
 
     let stats_area = horiz_chunks[0];
     let log_area = horiz_chunks[1];
-    let furniture_area = horiz_chunks[2];
+    let props_area = horiz_chunks[2];
     let visible_area = horiz_chunks[3];
 
     // ── Stats Column (left) ─────────────────────────────────────
@@ -533,8 +534,8 @@ fn render_bottom_panel(
         log_area,
     );
 
-    // ── Furniture Legend Column ─────────────────────────────────
-    render_furniture_column(frame, furniture_area, visible_furniture);
+    // ── Props Legend Column ─────────────────────────────────
+    render_props_column(frame, props_area, visible_props);
 
     // ── Visible Entities Column (right) ────────────────────────
     render_visible_column(frame, visible_area, visible_entities);
@@ -634,15 +635,15 @@ fn render_visible_column(
     );
 }
 
-/// Renders the furniture legend column showing visible furniture symbols and names.
-fn render_furniture_column(
+/// Renders the props legend column showing visible props symbols and names.
+fn render_props_column(
     frame: &mut ratatui::Frame,
     area: Rect,
-    visible_furniture: &[(String, RatColor, String)],
+    visible_props: &[(String, RatColor, String)],
 ) {
     let max_items = (area.height.saturating_sub(2)) as usize;
     let mut lines: Vec<Line> = Vec::new();
-    for (sym, fg, name) in visible_furniture.iter().take(max_items) {
+    for (sym, fg, name) in visible_props.iter().take(max_items) {
         lines.push(Line::from(vec![
             Span::from(format!(" {sym}")).fg(*fg),
             Span::from(format!(" {name}")).dark_gray(),
@@ -654,7 +655,7 @@ fn render_furniture_column(
 
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title("Furniture")),
+            .block(Block::default().borders(Borders::ALL).title("Props")),
         area,
     );
 }

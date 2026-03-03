@@ -76,7 +76,7 @@ pub fn end_world_turn(
 
 /// Fire system: spreads fire to adjacent flammable tiles and damages entities
 /// standing on fire. Fire tiles burn out deterministically after
-/// `FIRE_BURNOUT_TURNS` world turns, destroying any furniture and leaving
+/// `FIRE_BURNOUT_TURNS` world turns, destroying any props and leaving
 /// scorched earth.
 ///
 /// Runs every world turn during `WorldTurn`.
@@ -133,7 +133,7 @@ pub fn fire_system(
         if let Some(voxel) = game_map.0.get_voxel_at(&smoke_pos) {
             if !matches!(voxel.floor, Some(Floor::SandCloud))
                 && !matches!(voxel.floor, Some(Floor::Fire))
-                && !matches!(voxel.furniture, Some(crate::typeenums::Furniture::Wall))
+                && !matches!(voxel.props, Some(crate::typeenums::Props::Wall))
             {
                 let prev_floor = voxel.floor.clone();
                 game_map.0.sand_cloud_previous_floor.entry(smoke_pos).or_insert(prev_floor);
@@ -168,17 +168,17 @@ pub fn fire_system(
                         burnout_tiles.push(pos);
                     }
 
-                // Spread fire to adjacent flammable furniture and wooden floors.
+                // Spread fire to adjacent flammable props and wooden floors.
                 for neighbor in pos.cardinal_neighbors() {
                     if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor) {
                         // Skip tiles already on fire
                         if matches!(n_voxel.floor, Some(Floor::Fire)) {
                             continue;
                         }
-                        let has_flammable_furniture = n_voxel.furniture.as_ref()
+                        let has_flammable_prop = n_voxel.props.as_ref()
                             .is_some_and(|f| f.is_flammable());
                         let has_wood_floor = matches!(n_voxel.floor, Some(Floor::WoodPlanks));
-                        if has_flammable_furniture || has_wood_floor {
+                        if has_flammable_prop || has_wood_floor {
                             new_fire_tiles.push(neighbor);
                         }
                     }
@@ -190,15 +190,15 @@ pub fn fire_system(
     // Apply fire spread.
     for tile in new_fire_tiles {
         if let Some(voxel) = game_map.0.get_voxel_at_mut(&tile) {
-            voxel.furniture = None;
+            voxel.props = None;
             voxel.floor = Some(Floor::Fire);
         }
     }
 
-    // Apply burnout: destroy any remaining furniture and leave scorched earth.
+    // Apply burnout: destroy any remaining props and leave scorched earth.
     for tile in &burnout_tiles {
         if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
-            voxel.furniture = None;
+            voxel.props = None;
             voxel.floor = Some(Floor::ScorchedEarth);
         }
         game_map.0.fire_turns.remove(tile);
@@ -244,7 +244,7 @@ pub fn fire_system(
             let new_pos = *tile + dirs[dir_idx];
             if let Some(new_voxel) = game_map.0.get_voxel_at(&new_pos) {
                 if !matches!(new_voxel.floor, Some(Floor::SandCloud))
-                    && !matches!(new_voxel.furniture, Some(crate::typeenums::Furniture::Wall))
+                    && !matches!(new_voxel.props, Some(crate::typeenums::Props::Wall))
                     && !game_map.0.sand_cloud_turns.contains_key(&new_pos)
                 {
                     drift_ops.push((*tile, new_pos, *placed_turn));

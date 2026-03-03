@@ -98,7 +98,7 @@ pub struct ThrowItemIntent {
 }
 
 /// Fired when the player throws a molotov cocktail.
-/// Ignites all flammable furniture within `radius` tiles of the target.
+/// Ignites all flammable props within `radius` tiles of the target.
 #[derive(Message, Debug, Clone)]
 pub struct MolotovCastIntent {
     pub caster: Entity,

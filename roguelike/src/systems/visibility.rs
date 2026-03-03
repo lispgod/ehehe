@@ -201,7 +201,7 @@ fn is_opaque(game_map: &GameMapResource, point: MyPoint, sand_clouds: &HashSet<M
             if matches!(v.floor, Some(crate::typeenums::Floor::SandCloud)) {
                 return true;
             }
-            v.furniture.as_ref().is_some_and(|f| f.blocks_vision())
+            v.props.as_ref().is_some_and(|f| f.blocks_vision())
         }
         None => true, // off-map ⇒ opaque
     }

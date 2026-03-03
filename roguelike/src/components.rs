@@ -487,17 +487,36 @@ pub enum ItemKind {
         caliber: Caliber,
         attack: i32,
         name: String,
+        /// Blunt/thrown damage when used as a melee weapon or thrown.
+        blunt_damage: i32,
     },
     /// A throwing knife. Can be recovered after landing.
-    Knife { attack: i32 },
+    Knife { attack: i32, blunt_damage: i32 },
     /// A throwing tomahawk. Can be recovered after landing.
-    Tomahawk { attack: i32 },
+    Tomahawk { attack: i32, blunt_damage: i32 },
     /// A grenade (dynamite stick). Deals area damage.
-    Grenade { damage: i32, radius: i32 },
+    Grenade { damage: i32, radius: i32, blunt_damage: i32 },
     /// Whiskey bottle. Restores health when consumed.
-    Whiskey { heal: i32 },
+    Whiskey { heal: i32, blunt_damage: i32 },
     /// A molotov cocktail. Thrown toward cursor; sets a large area on fire.
-    Molotov { damage: i32, radius: i32 },
+    Molotov { damage: i32, radius: i32, blunt_damage: i32 },
+    /// A bow. Fires arrows. Used by Indians.
+    Bow { attack: i32, blunt_damage: i32 },
+}
+
+impl ItemKind {
+    /// Returns the blunt/thrown damage for this item.
+    pub fn blunt_damage(&self) -> i32 {
+        match self {
+            ItemKind::Gun { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Knife { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Tomahawk { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Grenade { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Whiskey { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Molotov { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Bow { blunt_damage, .. } => *blunt_damage,
+        }
+    }
 }
 
 /// Marker component for a thrown item (knife/tomahawk) that has landed
@@ -884,6 +903,7 @@ mod tests {
             caliber: Caliber::Cal36,
             attack: 5,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         };
         if let ItemKind::Gun { ref mut loaded, .. } = gun {
             *loaded -= 1;
@@ -899,6 +919,7 @@ mod tests {
             caliber: Caliber::Cal36,
             attack: 5,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         };
         if let ItemKind::Gun { loaded, .. } = gun {
             assert_eq!(loaded, 0);

@@ -382,7 +382,7 @@ pub fn input_system(
                                     combat_log.push("Gun is empty! Press R to reload.".into());
                                     handled = true;
                                 }
-                            } else if let ItemKind::Knife { attack } | ItemKind::Tomahawk { attack } = kind {
+                            } else if let ItemKind::Knife { attack, .. } | ItemKind::Tomahawk { attack, .. } = kind {
                                 let delta = cursor.pos - player_pos.as_grid_vec();
                                 if delta != crate::grid_vec::GridVec::ZERO {
                                     extra_world_ticks.0 = 1;
@@ -419,7 +419,7 @@ pub fn input_system(
                                     advance_turn(&mut next_turn_state);
                                 }
                                 handled = true;
-                            } else if let ItemKind::Molotov { damage, radius } = kind {
+                            } else if let ItemKind::Molotov { damage, radius, .. } = kind {
                                 // Throw molotov from this inventory slot toward the cursor.
                                 let has_stamina = player_stamina
                                     .map(|m| m.current >= SPELL_STAMINA_COST)
@@ -665,7 +665,7 @@ fn handle_throw_random(
 
     // Determine damage based on item type
     let damage = item_kind_query.get(item_entity).ok().map_or(2, |k| match k {
-        ItemKind::Knife { attack } | ItemKind::Tomahawk { attack } => *attack,
+        ItemKind::Knife { attack, .. } | ItemKind::Tomahawk { attack, .. } => *attack,
         ItemKind::Gun { attack, .. } => *attack / 2,
         _ => 2,
     });

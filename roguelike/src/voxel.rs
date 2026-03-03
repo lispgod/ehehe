@@ -1,5 +1,5 @@
 use crate::graphic_trait::GraphicElement;
-use crate::typeenums::{Floor, Furniture};
+use crate::typeenums::{Floor, Props};
 use crate::typedefs::{GraphicTriple, RatColor};
 
 /// A single cell in the game map grid.
@@ -9,27 +9,27 @@ use crate::typedefs::{GraphicTriple, RatColor};
 #[derive(Clone, Debug)]
 pub struct Voxel {
     pub floor: Option<Floor>,
-    pub furniture: Option<Furniture>,
+    pub props: Option<Props>,
 }
 
 impl Voxel {
     /// Converts this voxel to a GraphicTriple based on visibility.
-    /// Layers: floor → furniture. Unseen tiles are dimmed.
+    /// Layers: floor → props. Unseen tiles are dimmed.
     pub fn to_graphic(&self, visible: bool) -> GraphicTriple {
         let floor = match &self.floor {
             Some(fl) => fl.to_graphic_triple(),
             None => (" ".into(), RatColor::Black, RatColor::Black),
         };
 
-        let plus_furn: GraphicTriple = match &self.furniture {
-            Some(furn) => (furn.symbol(), furn.fg_color(), floor.2),
+        let plus_props: GraphicTriple = match &self.props {
+            Some(prop) => (prop.symbol(), prop.fg_color(), floor.2),
             None => floor,
         };
 
         if visible {
-            plus_furn
+            plus_props
         } else {
-            let mut dimmed = plus_furn;
+            let mut dimmed = plus_props;
             dimmed.1 = dim(dimmed.1, 0.3);
             dimmed.2 = dim(dimmed.2, 0.5);
             dimmed
@@ -52,7 +52,7 @@ pub fn dim(color: RatColor, factor: f32) -> RatColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::typeenums::{Floor, Furniture};
+    use crate::typeenums::{Floor, Props};
 
     #[test]
     fn dim_rgb_reduces_values() {
@@ -75,10 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn voxel_to_graphic_visible_no_furniture() {
+    fn voxel_to_graphic_visible_no_props() {
         let voxel = Voxel {
             floor: Some(Floor::Grass),
-            furniture: None,
+            props: None,
         };
         let graphic = voxel.to_graphic(true);
         // Should have the floor's symbol
@@ -86,13 +86,13 @@ mod tests {
     }
 
     #[test]
-    fn voxel_to_graphic_visible_with_furniture() {
+    fn voxel_to_graphic_visible_with_props() {
         let voxel = Voxel {
             floor: Some(Floor::Grass),
-            furniture: Some(Furniture::Tree),
+            props: Some(Props::Tree),
         };
         let graphic = voxel.to_graphic(true);
-        // Furniture symbol overrides floor symbol
+        // Props symbol overrides floor symbol
         assert_eq!(graphic.0, "T");
     }
 
@@ -100,7 +100,7 @@ mod tests {
     fn voxel_to_graphic_not_visible_is_dimmed() {
         let voxel = Voxel {
             floor: Some(Floor::Grass),
-            furniture: None,
+            props: None,
         };
         let visible = voxel.to_graphic(true);
         let dimmed = voxel.to_graphic(false);
@@ -112,7 +112,7 @@ mod tests {
     fn voxel_no_floor_shows_space() {
         let voxel = Voxel {
             floor: None,
-            furniture: None,
+            props: None,
         };
         let graphic = voxel.to_graphic(true);
         assert_eq!(graphic.0, " ");

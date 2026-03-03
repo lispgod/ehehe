@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::components::Faction;
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
-use crate::typeenums::{Floor, Props};
+use crate::typeenums::{Floor, HeightTier, Props, WallMaterial};
 use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT};
 use crate::voxel::Voxel;
 
@@ -28,6 +29,18 @@ pub struct GameMap {
     /// Stores the previous floor type before a sand cloud was placed.
     /// Used to restore the original floor when the cloud dissipates.
     pub sand_cloud_previous_floor: HashMap<GridVec, Option<Floor>>,
+    /// Construction material for each wall tile.
+    /// Only populated for tiles that have `Props::Wall`.
+    pub wall_materials: HashMap<GridVec, WallMaterial>,
+    /// Tiles flagged as breach points — shared walls between adjacent
+    /// buildings that are thinner and cheaper to breach.
+    pub breach_points: HashSet<GridVec>,
+    /// Height tier for each building tile (floor area).
+    /// Used to determine rooftop advantage and sight-line bonuses.
+    pub building_heights: HashMap<GridVec, HeightTier>,
+    /// Faction anchor buildings: (center position, faction, building name).
+    /// Factions seed from these defensible positions rather than randomly.
+    pub faction_anchors: Vec<(GridVec, Faction, String)>,
 }
 
 /// A rectangular building footprint used during town generation.
@@ -37,8 +50,13 @@ struct Building {
     w: CoordinateUnit,
     h: CoordinateUnit,
     /// What kind of building: 0=house, 1=saloon, 2=stable, 3=general store,
-    /// 4=sheriff's office, 5=post office.
+    /// 4=sheriff's office, 5=post office, 6=church, 7=bank, 8=hotel,
+    /// 9=jail, 10=undertaker, 11=blacksmith.
     kind: u32,
+    /// Construction material determining wall breachability and flammability.
+    material: WallMaterial,
+    /// Height tier — single story, double story, or tower.
+    height_tier: HeightTier,
 }
 
 impl GameMap {
@@ -94,6 +112,10 @@ impl GameMap {
             fire_turns: HashMap::new(),
             sand_cloud_turns: HashMap::new(),
             sand_cloud_previous_floor: HashMap::new(),
+            wall_materials: HashMap::new(),
+            breach_points: HashSet::new(),
+            building_heights: HashMap::new(),
+            faction_anchors: Vec::new(),
         };
 
         // ── Step 1b: Forest on outskirts ────────────────────────────
@@ -322,6 +344,11 @@ impl GameMap {
         // ── Step 4: Generate buildings filling city blocks ───────────
         let buildings = generate_buildings(width, height, seed, &avenue_ys, avenue_half_width);
 
+        // Detect shared walls between adjacent buildings before placing them.
+        // Two buildings share a wall when their perimeters overlap or are
+        // separated by at most 1 tile (narrow gap).
+        let shared_walls = detect_shared_walls(&buildings);
+
         for b in &buildings {
             // Don't place buildings on water
             let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
@@ -333,9 +360,39 @@ impl GameMap {
             place_building(&mut map, b, seed);
         }
 
+        // Mark shared walls as breach points and record wall materials
+        for &pos in &shared_walls {
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                if matches!(voxel.props, Some(Props::Wall)) {
+                    map.breach_points.insert(pos);
+                }
+            }
+        }
+
+        // Record wall materials and building heights for all placed buildings
+        for b in &buildings {
+            let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
+            if let Some(voxel) = map.get_voxel_at(&center) {
+                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                    continue;
+                }
+            }
+            record_building_metadata(&mut map, b);
+        }
+
+        // Place narrow alleys between adjacent buildings within blocks
+        place_alleys(&mut map, &buildings);
+
+        // ── Step 4b: Assign faction anchors from building kinds ──────
+        assign_faction_anchors(&mut map, &buildings);
+
         // ── Step 5: Landmark buildings ──────────────────────────────
+        place_mission(&mut map, width, height, seed);
         place_town_hall(&mut map, width, height, seed);
         place_grand_saloon(&mut map, width, height, seed);
+
+        // ── Step 5b: Town plaza (open killzone) ─────────────────────
+        place_town_plaza(&mut map, width, height, seed);
 
         // ── Step 6: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
@@ -365,6 +422,20 @@ impl GameMap {
 
         // ── Step 9: Spawn clearing (bottom-left) ───────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
+
+        // ── Cleanup: prune breach points for tiles no longer walls ──
+        // Landmark placement (mission, plaza, etc.) may overwrite
+        // previously detected shared walls.
+        let invalid_breach: Vec<GridVec> = map.breach_points.iter()
+            .filter(|pos| {
+                !map.get_voxel_at(pos)
+                    .is_some_and(|v| matches!(v.props, Some(Props::Wall)))
+            })
+            .copied()
+            .collect();
+        for pos in invalid_breach {
+            map.breach_points.remove(&pos);
+        }
 
         map
     }
@@ -674,23 +745,228 @@ fn generate_buildings(
                 // District-based building type
                 let district = get_district(cx + bw / 2, by + bh / 2, width, height, seed);
                 let kind = district_building_kind(district, kind_noise);
+                let kind = kind.min(BUILDING_TYPE_COUNT - 1);
+                let material = building_material(kind, noise);
+                let height_tier = building_height(kind, noise);
                 buildings.push(Building {
                     x: cx,
                     y: by,
                     w: bw,
                     h: bh,
-                    kind: kind.min(BUILDING_TYPE_COUNT - 1),
+                    kind,
+                    material,
+                    height_tier,
                 });
             }
 
-            // Gap between buildings
+            // Gap between buildings: narrow (0-2 tiles) to encourage shared
+            // walls and narrow alleys within the same block.
             let gap_noise = value_noise(cx + 1, bldg_index as i32, bldg_seed.wrapping_add(4444));
-            cx += bw + 3 + (gap_noise * 4.0) as CoordinateUnit;
+            cx += bw + (gap_noise * 3.0) as CoordinateUnit;
             bldg_index += 1;
         }
     }
 
     buildings
+}
+
+/// Determines the wall material for a building based on its kind and noise.
+/// Churches, banks, jails use stone; stables, houses use timber; rest adobe.
+fn building_material(kind: u32, noise: f64) -> WallMaterial {
+    match kind {
+        6 | 7 | 9 => WallMaterial::Stone,     // Church, Bank, Jail
+        0 | 2 | 11 => {                        // House, Stable, Blacksmith
+            if noise < 0.4 { WallMaterial::Timber } else { WallMaterial::Adobe }
+        }
+        _ => WallMaterial::Adobe,              // Saloon, Store, Sheriff, etc.
+    }
+}
+
+/// Determines the height tier for a building based on its kind and noise.
+/// Churches and banks tend to be taller; stables and houses single-story.
+fn building_height(kind: u32, noise: f64) -> HeightTier {
+    match kind {
+        6 => HeightTier::Tower,                // Church — bell tower
+        7 | 8 => HeightTier::DoubleStory,      // Bank, Hotel — two floors
+        1 => {                                  // Saloon — sometimes two-story
+            if noise > 0.5 { HeightTier::DoubleStory } else { HeightTier::SingleStory }
+        }
+        4 | 9 => {                              // Sheriff, Jail — sometimes watchtower
+            if noise > 0.7 { HeightTier::Tower } else { HeightTier::SingleStory }
+        }
+        _ => HeightTier::SingleStory,
+    }
+}
+
+/// Detects wall tiles that are shared between adjacent buildings or separated
+/// by only a narrow gap (0-1 tile). These are flagged as potential breach points.
+fn detect_shared_walls(buildings: &[Building]) -> HashSet<GridVec> {
+    let mut shared = HashSet::new();
+
+    for (i, a) in buildings.iter().enumerate() {
+        for b in &buildings[i + 1..] {
+            // Check if buildings are adjacent or share a wall.
+            // Horizontal adjacency (buildings side by side in same row)
+            if a.y < b.y + b.h && b.y < a.y + a.h {
+                // a's right edge touches or is 1 tile from b's left edge
+                let gap_right = b.x - (a.x + a.w);
+                if gap_right >= 0 && gap_right <= 1 {
+                    let overlap_y_min = a.y.max(b.y);
+                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
+                    for y in overlap_y_min..overlap_y_max {
+                        // Mark the right wall of a and left wall of b
+                        shared.insert(GridVec::new(a.x + a.w - 1, y));
+                        shared.insert(GridVec::new(b.x, y));
+                    }
+                }
+                // b's right edge touches or is 1 tile from a's left edge
+                let gap_left = a.x - (b.x + b.w);
+                if gap_left >= 0 && gap_left <= 1 {
+                    let overlap_y_min = a.y.max(b.y);
+                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
+                    for y in overlap_y_min..overlap_y_max {
+                        shared.insert(GridVec::new(b.x + b.w - 1, y));
+                        shared.insert(GridVec::new(a.x, y));
+                    }
+                }
+            }
+            // Vertical adjacency (buildings stacked in same column)
+            if a.x < b.x + b.w && b.x < a.x + a.w {
+                let gap_below = b.y - (a.y + a.h);
+                if gap_below >= 0 && gap_below <= 1 {
+                    let overlap_x_min = a.x.max(b.x);
+                    let overlap_x_max = (a.x + a.w).min(b.x + b.w);
+                    for x in overlap_x_min..overlap_x_max {
+                        shared.insert(GridVec::new(x, a.y + a.h - 1));
+                        shared.insert(GridVec::new(x, b.y));
+                    }
+                }
+                let gap_above = a.y - (b.y + b.h);
+                if gap_above >= 0 && gap_above <= 1 {
+                    let overlap_x_min = a.x.max(b.x);
+                    let overlap_x_max = (a.x + a.w).min(b.x + b.w);
+                    for x in overlap_x_min..overlap_x_max {
+                        shared.insert(GridVec::new(x, b.y + b.h - 1));
+                        shared.insert(GridVec::new(x, a.y));
+                    }
+                }
+            }
+        }
+    }
+
+    shared
+}
+
+/// Records wall material and height tier metadata for a placed building.
+fn record_building_metadata(map: &mut GameMap, b: &Building) {
+    for y in b.y..b.y + b.h {
+        for x in b.x..b.x + b.w {
+            let pos = GridVec::new(x, y);
+            let is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
+            if is_border {
+                // Record wall material for wall tiles
+                if let Some(voxel) = map.get_voxel_at(&pos) {
+                    if matches!(voxel.props, Some(Props::Wall)) {
+                        map.wall_materials.insert(pos, b.material);
+                    }
+                }
+            }
+            // Record height tier for all building tiles
+            map.building_heights.insert(pos, b.height_tier);
+        }
+    }
+}
+
+/// Places narrow alley floor tiles in the gaps between adjacent buildings
+/// within the same block. Alleys are shadowed ambush terrain.
+fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
+    for (i, a) in buildings.iter().enumerate() {
+        for b in &buildings[i + 1..] {
+            // Only horizontal adjacency with 1-2 tile gap
+            if a.y < b.y + b.h && b.y < a.y + a.h {
+                let gap = b.x as i64 - (a.x + a.w) as i64;
+                if gap >= 1 && gap <= 2 {
+                    let overlap_y_min = a.y.max(b.y);
+                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
+                    for y in overlap_y_min..overlap_y_max {
+                        for gx in 0..gap as CoordinateUnit {
+                            let pos = GridVec::new(a.x + a.w + gx, y);
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                                if voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                                    voxel.floor = Some(Floor::Alley);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Check reverse direction
+                let gap_rev = a.x as i64 - (b.x + b.w) as i64;
+                if gap_rev >= 1 && gap_rev <= 2 {
+                    let overlap_y_min = a.y.max(b.y);
+                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
+                    for y in overlap_y_min..overlap_y_max {
+                        for gx in 0..gap_rev as CoordinateUnit {
+                            let pos = GridVec::new(b.x + b.w + gx, y);
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                                if voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                                    voxel.floor = Some(Floor::Alley);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Assigns faction anchor buildings — each faction seeds from a specific
+/// defensible building type rather than spawning randomly.
+fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
+    // Map building kinds to factions:
+    // 1=Saloon → Outlaws, 2=Stable → Vaqueros, 4=Sheriff → Sheriff,
+    // 7=Bank → Lawmen, 8=Hotel → Civilians, 0=House → Indians (outskirts)
+    let mut used_kinds: HashSet<u32> = HashSet::new();
+
+    for b in buildings {
+        let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
+        let (faction, name) = match b.kind {
+            1 if !used_kinds.contains(&1) => {
+                used_kinds.insert(1);
+                (Faction::Outlaws, "Cantina".to_string())
+            }
+            2 if !used_kinds.contains(&2) => {
+                used_kinds.insert(2);
+                (Faction::Vaqueros, "Livery Stable".to_string())
+            }
+            4 if !used_kinds.contains(&4) => {
+                used_kinds.insert(4);
+                (Faction::Sheriff, "Marshal's Office".to_string())
+            }
+            7 if !used_kinds.contains(&7) => {
+                used_kinds.insert(7);
+                (Faction::Lawmen, "Bank".to_string())
+            }
+            8 if !used_kinds.contains(&8) => {
+                used_kinds.insert(8);
+                (Faction::Civilians, "Hotel".to_string())
+            }
+            0 if !used_kinds.contains(&100) => {
+                // Use first house on outskirts for Indians
+                let dist_to_center = center.distance_squared(GridVec::new(
+                    map.width / 2, map.height / 2
+                ));
+                if dist_to_center > (map.width / 4) * (map.width / 4) {
+                    used_kinds.insert(100);
+                    (Faction::Indians, "Hacienda".to_string())
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+        map.faction_anchors.push((center, faction, name));
+    }
 }
 
 /// Places a building on the map: walls around the perimeter, wood plank floor,
@@ -1049,6 +1325,162 @@ fn set_prop(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, prop: Props
         && !matches!(voxel.floor, Some(Floor::Dirt)) {
             voxel.props = Some(prop);
         }
+}
+
+/// Places the focal mission/church building near the center of the map.
+/// This is a large, thick-walled stone structure with a courtyard, bell tower,
+/// and multiple interior rooms that functions as a natural fortress and
+/// late-game combat anchor.
+fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let mw: CoordinateUnit = 24;
+    let mh: CoordinateUnit = 18;
+    if width < mw + 10 || height < mh + 10 {
+        return; // map too small for a mission
+    }
+    let m_seed = seed.wrapping_add(555666);
+    let cx = width / 2 + (value_noise(2, 2, m_seed) * 10.0) as CoordinateUnit - 5;
+    let cy = height / 2 + (value_noise(3, 3, m_seed) * 10.0) as CoordinateUnit - 5;
+    let mx = (cx - mw / 2).clamp(2, width - mw - 2);
+    let my = (cy - mh / 2).clamp(2, height - mh - 2);
+
+    // Lay down thick stone walls and interior
+    for y in my..my + mh {
+        for x in mx..mx + mw {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                let is_border = x == mx || x == mx + mw - 1 || y == my || y == my + mh - 1;
+                // Main entrance (south wall center)
+                let is_main_door = y == my + mh - 1 && (x == mx + mw / 2 || x == mx + mw / 2 - 1);
+                // Side entrance (east wall)
+                let is_side_door = x == mx + mw - 1 && y == my + mh / 2;
+                // Back entrance (north wall)
+                let is_back_door = y == my && x == mx + mw / 2;
+
+                if is_border && !is_main_door && !is_side_door && !is_back_door {
+                    voxel.props = Some(Props::Wall);
+                    voxel.floor = Some(Floor::WoodPlanks);
+                    map.wall_materials.insert(pos, WallMaterial::Stone);
+                } else {
+                    voxel.props = None;
+                    voxel.floor = Some(Floor::WoodPlanks);
+                }
+            }
+        }
+    }
+
+    // Interior dividing wall creating multiple rooms
+    // Nave (main hall) on left, side rooms on right
+    let divider_x = mx + mw * 2 / 3;
+    for y in my + 1..my + mh - 1 {
+        let pos = GridVec::new(divider_x, y);
+        // Door in the divider
+        if y != my + mh / 2 && y != my + mh / 3 {
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.props = Some(Props::Wall);
+                map.wall_materials.insert(pos, WallMaterial::Stone);
+                map.breach_points.insert(pos);
+            }
+        }
+    }
+
+    // Courtyard: open area in the center-right rooms (no roof)
+    let court_x = divider_x + 1;
+    let court_y = my + 2;
+    let court_w = (mx + mw - 1) - court_x - 1;
+    let court_h = mh / 2 - 2;
+    for dy in 0..court_h {
+        for dx in 0..court_w {
+            let pos = GridVec::new(court_x + dx, court_y + dy);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::Plaza);
+                voxel.props = None;
+            }
+        }
+    }
+
+    // Bell tower: 3×3 tower structure in top-left corner of mission
+    let tower_x = mx + 1;
+    let tower_y = my + 1;
+    for dy in 0..3i32 {
+        for dx in 0..3i32 {
+            let pos = GridVec::new(tower_x + dx, tower_y + dy);
+            map.building_heights.insert(pos, HeightTier::Tower);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::Rooftop);
+            }
+        }
+    }
+
+    // Record all mission tiles as Tower height
+    for y in my..my + mh {
+        for x in mx..mx + mw {
+            let pos = GridVec::new(x, y);
+            if !map.building_heights.contains_key(&pos) {
+                map.building_heights.insert(pos, HeightTier::DoubleStory);
+            }
+        }
+    }
+
+    // Interior props: altar, pews, signs
+    let ix = mx + 1;
+    let iy = my + 1;
+    // Altar at the north end of the nave
+    set_prop(map, ix + 4, iy, Props::Table);
+    set_prop(map, ix + 3, iy, Props::Sign);
+    set_prop(map, ix + 5, iy, Props::Sign);
+    // Pew rows in the nave
+    for row in 3..mh - 4 {
+        set_prop(map, ix + 2, iy + row, Props::Bench);
+        set_prop(map, ix + 6, iy + row, Props::Bench);
+    }
+    // Storage in side rooms
+    set_prop(map, divider_x + 2, my + mh / 2 + 2, Props::Barrel);
+    set_prop(map, divider_x + 3, my + mh / 2 + 2, Props::Crate);
+
+    // Register mission as a faction anchor (contested/neutral)
+    map.faction_anchors.push((
+        GridVec::new(mx + mw / 2, my + mh / 2),
+        Faction::Civilians,
+        "Mission".to_string(),
+    ));
+}
+
+/// Places a town plaza — an open killzone at the heart of the map.
+/// The plaza is flanked by buildings with window-facing tiles overlooking it.
+fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let pw: CoordinateUnit = 16;
+    let ph: CoordinateUnit = 12;
+    if width < pw + 20 || height < ph + 20 {
+        return;
+    }
+    let p_seed = seed.wrapping_add(777888);
+    // Place plaza slightly offset from exact center to avoid overlapping the mission
+    let cx = width / 2 + 15 + (value_noise(5, 5, p_seed) * 10.0) as CoordinateUnit;
+    let cy = height / 2 + 10 + (value_noise(6, 6, p_seed) * 10.0) as CoordinateUnit;
+    let px = (cx - pw / 2).clamp(2, width - pw - 2);
+    let py = (cy - ph / 2).clamp(2, height - ph - 2);
+
+    // Clear the plaza area — open exposed killzone
+    for y in py..py + ph {
+        for x in px..px + pw {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::Plaza);
+                voxel.props = None;
+            }
+        }
+    }
+
+    // Place a central fountain/monument (rock as focal point)
+    let center = GridVec::new(px + pw / 2, py + ph / 2);
+    if let Some(voxel) = map.get_voxel_at_mut(&center) {
+        voxel.props = Some(Props::Rock);
+    }
+    // Benches around the monument
+    set_prop(map, center.x - 2, center.y, Props::Bench);
+    set_prop(map, center.x + 2, center.y, Props::Bench);
+    set_prop(map, center.x, center.y - 2, Props::Bench);
+    set_prop(map, center.x, center.y + 2, Props::Bench);
 }
 
 /// Places a large Town Hall building near the center of the map.
@@ -1478,5 +1910,209 @@ mod tests {
         assert!(has_bench, "Map should contain benches");
         assert!(has_barrel, "Map should contain barrels");
         assert!(has_cactus, "Map should contain cacti");
+    }
+
+    #[test]
+    fn wall_material_breach_costs() {
+        assert_eq!(WallMaterial::Timber.breach_cost(), 1);
+        assert_eq!(WallMaterial::Adobe.breach_cost(), 2);
+        assert_eq!(WallMaterial::Stone.breach_cost(), 5);
+    }
+
+    #[test]
+    fn wall_material_flammability() {
+        assert!(WallMaterial::Timber.flammability() > WallMaterial::Adobe.flammability());
+        assert!(WallMaterial::Adobe.flammability() > WallMaterial::Stone.flammability());
+        assert_eq!(WallMaterial::Stone.flammability(), 0.0);
+    }
+
+    #[test]
+    fn height_tier_sight_bonuses() {
+        assert_eq!(HeightTier::SingleStory.sight_bonus(), 0);
+        assert!(HeightTier::DoubleStory.sight_bonus() > 0);
+        assert!(HeightTier::Tower.sight_bonus() > HeightTier::DoubleStory.sight_bonus());
+    }
+
+    #[test]
+    fn large_map_has_wall_materials() {
+        let map = GameMap::new(200, 140, 42);
+        assert!(
+            !map.wall_materials.is_empty(),
+            "Map should track wall materials for building walls"
+        );
+        // Should have at least two different material types
+        let has_adobe = map.wall_materials.values().any(|m| *m == WallMaterial::Adobe);
+        let has_timber = map.wall_materials.values().any(|m| *m == WallMaterial::Timber);
+        assert!(
+            has_adobe || has_timber,
+            "Map should have diverse wall materials"
+        );
+    }
+
+    #[test]
+    fn large_map_has_breach_points() {
+        let map = GameMap::new(400, 280, 42);
+        assert!(
+            !map.breach_points.is_empty(),
+            "Map should have breach points between adjacent buildings"
+        );
+    }
+
+    #[test]
+    fn large_map_has_building_heights() {
+        let map = GameMap::new(200, 140, 42);
+        assert!(
+            !map.building_heights.is_empty(),
+            "Map should track building height tiers"
+        );
+        let has_single = map.building_heights.values().any(|h| *h == HeightTier::SingleStory);
+        let has_double = map.building_heights.values().any(|h| *h == HeightTier::DoubleStory);
+        assert!(
+            has_single || has_double,
+            "Map should have diverse building heights"
+        );
+    }
+
+    #[test]
+    fn large_map_has_faction_anchors() {
+        let map = GameMap::new(400, 280, 42);
+        assert!(
+            !map.faction_anchors.is_empty(),
+            "Map should assign faction anchor buildings"
+        );
+    }
+
+    #[test]
+    fn large_map_has_alleys() {
+        let map = GameMap::new(400, 280, 42);
+        let mut alley_count = 0;
+        for y in 0..280 {
+            for x in 0..400 {
+                if matches!(map.voxels[y][x].floor, Some(Floor::Alley)) {
+                    alley_count += 1;
+                }
+            }
+        }
+        assert!(alley_count > 0, "Map should have alley tiles between buildings");
+    }
+
+    #[test]
+    fn large_map_has_plaza() {
+        let map = GameMap::new(400, 280, 42);
+        let mut plaza_count = 0;
+        for y in 0..280 {
+            for x in 0..400 {
+                if matches!(map.voxels[y][x].floor, Some(Floor::Plaza)) {
+                    plaza_count += 1;
+                }
+            }
+        }
+        assert!(plaza_count > 0, "Map should have plaza tiles");
+    }
+
+    #[test]
+    fn large_map_has_rooftop_tiles() {
+        let map = GameMap::new(400, 280, 42);
+        let mut rooftop_count = 0;
+        for y in 0..280 {
+            for x in 0..400 {
+                if matches!(map.voxels[y][x].floor, Some(Floor::Rooftop)) {
+                    rooftop_count += 1;
+                }
+            }
+        }
+        assert!(rooftop_count > 0, "Map should have rooftop tiles from bell tower");
+    }
+
+    #[test]
+    fn breach_points_are_wall_tiles() {
+        let map = GameMap::new(400, 280, 42);
+        for pos in &map.breach_points {
+            if let Some(voxel) = map.get_voxel_at(pos) {
+                assert!(
+                    matches!(voxel.props, Some(Props::Wall)),
+                    "Breach point at ({}, {}) should be a wall tile",
+                    pos.x, pos.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn building_material_assignment_is_deterministic() {
+        // Same kind + noise should always produce the same material
+        assert_eq!(building_material(6, 0.5), WallMaterial::Stone);  // Church
+        assert_eq!(building_material(7, 0.5), WallMaterial::Stone);  // Bank
+        assert_eq!(building_material(0, 0.2), WallMaterial::Timber); // House (low noise)
+        assert_eq!(building_material(0, 0.6), WallMaterial::Adobe);  // House (high noise)
+        assert_eq!(building_material(1, 0.5), WallMaterial::Adobe);  // Saloon
+    }
+
+    #[test]
+    fn building_height_assignment_is_deterministic() {
+        assert_eq!(building_height(6, 0.5), HeightTier::Tower);        // Church
+        assert_eq!(building_height(7, 0.5), HeightTier::DoubleStory);  // Bank
+        assert_eq!(building_height(8, 0.5), HeightTier::DoubleStory);  // Hotel
+        assert_eq!(building_height(0, 0.5), HeightTier::SingleStory);  // House
+        assert_eq!(building_height(2, 0.5), HeightTier::SingleStory);  // Stable
+    }
+
+    #[test]
+    fn shared_wall_detection_adjacent_buildings() {
+        // Two buildings touching side-by-side
+        let buildings = vec![
+            Building { x: 10, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Adobe, height_tier: HeightTier::SingleStory },
+            Building { x: 18, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Adobe, height_tier: HeightTier::SingleStory },
+        ];
+        let shared = detect_shared_walls(&buildings);
+        // The right wall of first building and left wall of second should be shared
+        assert!(!shared.is_empty(), "Adjacent buildings should have shared walls");
+        // Check specific wall tiles
+        assert!(shared.contains(&GridVec::new(17, 12)), "Right wall of first building should be shared");
+        assert!(shared.contains(&GridVec::new(18, 12)), "Left wall of second building should be shared");
+    }
+
+    #[test]
+    fn shared_wall_detection_gap_buildings() {
+        // Two buildings with a 1-tile gap
+        let buildings = vec![
+            Building { x: 10, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Timber, height_tier: HeightTier::SingleStory },
+            Building { x: 19, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Timber, height_tier: HeightTier::SingleStory },
+        ];
+        let shared = detect_shared_walls(&buildings);
+        assert!(!shared.is_empty(), "Buildings with 1-tile gap should still detect shared walls");
+    }
+
+    #[test]
+    fn shared_wall_detection_far_buildings() {
+        // Two buildings far apart — no shared walls
+        let buildings = vec![
+            Building { x: 10, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Adobe, height_tier: HeightTier::SingleStory },
+            Building { x: 50, y: 10, w: 8, h: 8, kind: 0, material: WallMaterial::Adobe, height_tier: HeightTier::SingleStory },
+        ];
+        let shared = detect_shared_walls(&buildings);
+        assert!(shared.is_empty(), "Distant buildings should not have shared walls");
+    }
+
+    #[test]
+    fn props_is_wall_helper() {
+        assert!(Props::Wall.is_wall());
+        assert!(!Props::Table.is_wall());
+        assert!(!Props::Barrel.is_wall());
+        assert!(!Props::VictoryGoal.is_wall());
+    }
+
+    #[test]
+    fn wall_materials_and_breach_points_deterministic() {
+        let map1 = GameMap::new(200, 140, 42);
+        let map2 = GameMap::new(200, 140, 42);
+        assert_eq!(map1.wall_materials.len(), map2.wall_materials.len(),
+            "Wall material count should be deterministic");
+        assert_eq!(map1.breach_points.len(), map2.breach_points.len(),
+            "Breach point count should be deterministic");
+        assert_eq!(map1.building_heights.len(), map2.building_heights.len(),
+            "Building heights count should be deterministic");
+        assert_eq!(map1.faction_anchors.len(), map2.faction_anchors.len(),
+            "Faction anchor count should be deterministic");
     }
 }

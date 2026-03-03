@@ -347,8 +347,8 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
 }
 
 /// Helper: spawns monsters in distinct faction groups across the map.
-/// Groups are placed at deterministic positions throughout the town,
-/// with each group containing NPCs of the same faction.
+/// Factions seed from defensible anchor buildings when available,
+/// with additional groups placed at deterministic grid positions.
 /// Many enemies are spawned to create a densely populated town.
 fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) {
     let group_seed = seed.wrapping_add(54321);
@@ -366,6 +366,55 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
         &[9, 10],   // Sheriff: Sheriff(9), Deputy(10)
     ];
 
+    // ── Faction anchor spawns ──────────────────────────────────────
+    // Each faction seeds from its defensible anchor building.
+    let anchor_radius = 8i32;
+    for (anchor_pos, faction, _name) in &map.0.faction_anchors {
+        let templates: &[usize] = match faction {
+            crate::components::Faction::Outlaws => &[2, 5],
+            crate::components::Faction::Vaqueros => &[3],
+            crate::components::Faction::Sheriff => &[9, 10],
+            crate::components::Faction::Lawmen => &[4],
+            crate::components::Faction::Civilians => &[6],
+            crate::components::Faction::Indians => &[7, 8],
+            crate::components::Faction::Wildlife => &[0, 1],
+        };
+
+        let anchor_group_size = 5 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(77777)) * 4.0) as i32;
+        let mut spawned = 0;
+        let mut leader_entity: Option<Entity> = None;
+        for dy in -anchor_radius..=anchor_radius {
+            for dx in -anchor_radius..=anchor_radius {
+                if spawned >= anchor_group_size { break; }
+                let pos = GridVec::new(anchor_pos.x + dx, anchor_pos.y + dy);
+                if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
+                if !map.0.is_passable(&pos) { continue; }
+                if let Some(voxel) = map.0.get_voxel_at(&pos) {
+                    if voxel.props.is_some() { continue; }
+                    if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
+                        continue;
+                    }
+                }
+                let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(88888));
+                if tile_noise > 0.40 { continue; }
+
+                let template_idx = templates[(spawned as usize) % templates.len()];
+                let template = &MONSTER_TEMPLATES[template_idx];
+                let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.25);
+
+                if spawned == 0 && !matches!(template.faction, crate::components::Faction::Wildlife) {
+                    commands.entity(ent).insert(GroupLeader);
+                    leader_entity = Some(ent);
+                } else if let Some(leader) = leader_entity {
+                    commands.entity(ent).insert(GroupFollower { leader });
+                }
+                spawned += 1;
+            }
+            if spawned >= anchor_group_size { break; }
+        }
+    }
+
+    // ── Grid-based spawns (additional groups) ──────────────────────
     // Dense grid: scan every 18 tiles (smaller cells = more groups).
     let cell_size = 18i32;
     let mut group_idx = 0u64;

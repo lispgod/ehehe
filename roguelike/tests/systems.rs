@@ -1470,15 +1470,15 @@ fn test_app_with_cactus() -> App {
 fn place_cactus(app: &mut App, x: i32, y: i32) {
     let map = &mut app.world_mut().resource_mut::<GameMapResource>().0;
     if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-        voxel.furniture = Some(roguelike::typeenums::Furniture::Cactus);
+        voxel.props = Some(roguelike::typeenums::Props::Cactus);
     }
 }
 
-/// Clears furniture at a position to ensure it's passable.
+/// Clears props at a position to ensure it's passable.
 fn clear_tile(app: &mut App, x: i32, y: i32) {
     let map = &mut app.world_mut().resource_mut::<GameMapResource>().0;
     if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-        voxel.furniture = None;
+        voxel.props = None;
     }
 }
 

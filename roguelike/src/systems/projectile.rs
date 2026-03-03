@@ -45,7 +45,7 @@ fn resolve_bullet_hit(
     let dx = (aim_point.x - tile.x) as f64;
     let dy = (aim_point.y - tile.y) as f64;
     let distance = (dx * dx + dy * dy).sqrt();
-    let hit_chance = (0.95 - distance * 0.04).clamp(0.15, 0.95);
+    let hit_chance = (0.98 - distance * 0.02).clamp(0.35, 0.98);
     let headshot_chance = 0.02 + if distance < 0.5 { 0.08 } else { 0.0 };
 
     let roll_seed = 7919_u64.wrapping_add(path_index as u64);

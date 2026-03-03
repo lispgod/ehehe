@@ -43,14 +43,16 @@ pub fn visibility_system(
         .collect();
 
     for (entity, pos, mut viewshed, ai_look_dir, faction) in &mut query {
-        if !viewshed.dirty {
+        let is_player = player_entity == Some(entity);
+        // Always recalculate player FOV every tick so newly placed smoke/sand
+        // clouds block vision immediately, not just after the player moves.
+        if !viewshed.dirty && !is_player {
             continue;
         }
 
         viewshed.visible_tiles.clear();
         let origin = pos.as_grid_vec();
 
-        let is_player = player_entity == Some(entity);
         let is_wildlife = faction.is_some_and(|f| matches!(f, Faction::Wildlife));
         let is_npc = !is_player && ai_look_dir.is_some();
 

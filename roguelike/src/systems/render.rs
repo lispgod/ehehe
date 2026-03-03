@@ -363,18 +363,37 @@ pub fn draw_system(
             .unwrap_or_default();
 
         // Collect visible furniture types for the furniture legend.
+        // Also includes smoke/sand clouds and fire as special entries.
         let visible_furniture: Vec<(String, RatColor, String)> = {
             let mut seen = HashSet::new();
             let mut items = Vec::new();
             if let Some(vt) = visible_tiles {
                 for tile in vt {
-                    if let Some(voxel) = game_map.0.get_voxel_at(tile)
-                        && let Some(ref furn) = voxel.furniture {
+                    if let Some(voxel) = game_map.0.get_voxel_at(tile) {
+                        if let Some(ref furn) = voxel.furniture {
                             let name = format!("{furn}");
                             if seen.insert(name.clone()) {
                                 items.push((furn.symbol(), furn.fg_color(), name));
                             }
                         }
+                        // Show smoke/sand clouds and fire in the furniture panel.
+                        if let Some(ref floor) = voxel.floor {
+                            let entry: Option<(String, RatColor, String)> = match floor {
+                                crate::typeenums::Floor::SandCloud => {
+                                    Some(("*".into(), RatColor::Rgb(210, 180, 120), "Smoke Cloud".into()))
+                                }
+                                crate::typeenums::Floor::Fire => {
+                                    Some(("^".into(), RatColor::Rgb(255, 140, 0), "Fire".into()))
+                                }
+                                _ => None,
+                            };
+                            if let Some((sym, fg, name)) = entry {
+                                if seen.insert(name.clone()) {
+                                    items.push((sym, fg, name));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             items

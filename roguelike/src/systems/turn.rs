@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{Health, Stamina, Player, Position};
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, DynamicRng, ExtraWorldTicks, GameMapResource, SoundEvents, SpectatingAfterDeath, TurnCounter, TurnState};
+use crate::resources::{CombatLog, DynamicRng, ExtraWorldTicks, GameMapResource, MapSeed, SoundEvents, SpectatingAfterDeath, TurnCounter, TurnState};
 use crate::typeenums::Floor;
 
 /// Stamina regenerated per world turn.
@@ -86,6 +86,8 @@ pub fn fire_system(
     mut health_query: Query<&mut Health>,
     position_query: Query<(Entity, &Position, Option<&crate::components::Name>)>,
     mut combat_log: ResMut<CombatLog>,
+    dynamic_rng: Res<DynamicRng>,
+    seed: Res<MapSeed>,
 ) {
     let map_width = game_map.0.width;
     let map_height = game_map.0.height;
@@ -105,13 +107,41 @@ pub fn fire_system(
     }
 
     // Register any new fire tiles that the tracker doesn't know about yet.
+    // Also randomly generate smoke from active fire tiles each tick.
+    let mut fire_smoke_tiles: Vec<GridVec> = Vec::new();
     for y in 1..map_height - 1 {
         for x in 1..map_width - 1 {
             let pos = GridVec::new(x, y);
             if let Some(voxel) = game_map.0.get_voxel_at(&pos)
                 && matches!(voxel.floor, Some(Floor::Fire)) {
                     game_map.0.fire_turns.entry(pos).or_insert(turn_counter.0);
+                    // ~30% chance per fire tile per tick to generate smoke.
+                    let smoke_roll = dynamic_rng.roll(seed.0, (pos.x as u64).wrapping_mul(9973).wrapping_add(pos.y as u64));
+                    if smoke_roll < 0.3 {
+                        fire_smoke_tiles.push(pos);
+                    }
                 }
+        }
+    }
+
+    // Place smoke clouds adjacent to fire tiles (smoke rises and drifts).
+    for fire_pos in fire_smoke_tiles {
+        let dirs = [GridVec::new(1, 0), GridVec::new(-1, 0), GridVec::new(0, 1), GridVec::new(0, -1),
+                     GridVec::new(1, 1), GridVec::new(-1, 1), GridVec::new(1, -1), GridVec::new(-1, -1)];
+        let dir_hash = dynamic_rng.random_index(seed.0, (fire_pos.x as u64).wrapping_add(fire_pos.y as u64).wrapping_mul(7), dirs.len());
+        let smoke_pos = fire_pos + dirs[dir_hash];
+        if let Some(voxel) = game_map.0.get_voxel_at(&smoke_pos) {
+            if !matches!(voxel.floor, Some(Floor::SandCloud))
+                && !matches!(voxel.floor, Some(Floor::Fire))
+                && !matches!(voxel.furniture, Some(crate::typeenums::Furniture::Wall))
+            {
+                let prev_floor = voxel.floor.clone();
+                game_map.0.sand_cloud_previous_floor.entry(smoke_pos).or_insert(prev_floor);
+                if let Some(v) = game_map.0.get_voxel_at_mut(&smoke_pos) {
+                    v.floor = Some(Floor::SandCloud);
+                }
+                game_map.0.sand_cloud_turns.insert(smoke_pos, turn_counter.0);
+            }
         }
     }
 

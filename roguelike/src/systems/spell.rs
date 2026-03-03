@@ -62,7 +62,7 @@ pub fn spell_system(
                     } else {
                         0.0
                     };
-                    let effective_radius = radius_f + 0.5 + dot.max(0.0) * 1.0;
+                    let effective_radius = radius_f * 0.5 + dot.max(0.0) * radius_f;
                     if dist > effective_radius {
                         continue;
                     }

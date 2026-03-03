@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CollectibleKind, CombatStats, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
+use crate::components::{Caliber, CollectibleKind, CombatStats, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
@@ -43,7 +43,7 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
             } else {
                 0.0
             };
-            let effective_radius = 1.5 + dot.max(0.0) * 1.0;
+            let effective_radius = 0.8 + dot.max(0.0) * 2.0;
             if dist > effective_radius {
                 continue;
             }
@@ -140,10 +140,12 @@ pub fn death_system(
     mut commands: Commands,
     query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
     player_entities: Query<Entity, With<Player>>,
+    item_query: Query<&ItemKind>,
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
     mut next_game_state: ResMut<NextState<GameState>>,
     seed: Res<MapSeed>,
+    spectating: Res<crate::resources::SpectatingAfterDeath>,
 ) {
     let player_entity = player_entities.single().ok();
 
@@ -156,7 +158,11 @@ pub fn death_system(
         combat_log.push_opt(format!("{label} has been slain!"), pos.map(|p| p.as_grid_vec()));
 
         // If the player died, transition to Dead state (don't despawn so UI can read stats).
+        // Skip re-triggering death when spectating — the player stays dead but watching.
         if is_player.is_some() {
+            if spectating.0 {
+                continue;
+            }
             combat_log.push("You have fallen... Press T to continue watching, Q to quit, or R to restart.".into());
             next_game_state.set(GameState::Dead);
             continue; // don't despawn the player
@@ -184,9 +190,10 @@ pub fn death_system(
             }
 
         // Loot drop: non-wildlife entities with a LootTable may also drop collectible supplies.
+        // Ammo drops now match the caliber of any gun the NPC was carrying.
         if !is_wildlife
             && let (Some(_lt), Some(p)) = (loot_table, pos) {
-                // Drop collectible supplies (caps + random ammo).
+                // Drop collectible supplies (caps + powder + matching ammo).
                 let coll_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 1), p.y, seed.0.wrapping_add(33333));
                 if coll_roll < 0.5 {
                     let caps_amount = ((coll_roll * 20.0) as i32).max(1);
@@ -198,15 +205,46 @@ pub fn death_system(
                         CollectibleKind::Caps(caps_amount),
                     ));
                 }
-                let ammo_roll = value_noise(p.y.wrapping_add(kill_count.0 as i32 + 1), p.x, seed.0.wrapping_add(44444));
-                if ammo_roll < 0.3 {
-                    let amount = ((ammo_roll * 15.0) as i32).max(1);
+                // Drop powder (needed for reloading).
+                let powder_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 2), p.y, seed.0.wrapping_add(55555));
+                if powder_roll < 0.4 {
+                    let amount = ((powder_roll * 10.0) as i32).max(1);
                     commands.spawn((
                         Position { x: p.x, y: p.y },
                         Item,
-                        Name(format!("{amount}x .36 Bullets")),
+                        Name(format!("{amount}x Powder")),
+                        Renderable { symbol: "·".into(), fg: RatColor::Rgb(140, 140, 140), bg: RatColor::Black },
+                        CollectibleKind::Powder(amount),
+                    ));
+                }
+                // Drop ammo matching the NPC's gun caliber, if they had one.
+                let ammo_roll = value_noise(p.y.wrapping_add(kill_count.0 as i32 + 1), p.x, seed.0.wrapping_add(44444));
+                if ammo_roll < 0.4 {
+                    let amount = ((ammo_roll * 15.0) as i32).max(1);
+                    // Find the caliber of the NPC's gun from their inventory.
+                    let npc_caliber = inventory.and_then(|inv| {
+                        inv.items.iter().find_map(|&ent| {
+                            item_query.get(ent).ok().and_then(|k| {
+                                if let ItemKind::Gun { caliber, .. } = k { Some(*caliber) } else { None }
+                            })
+                        })
+                    });
+                    let (cal_name, collectible) = match npc_caliber {
+                        Some(Caliber::Cal31) => (".31", CollectibleKind::Bullets31(amount)),
+                        Some(Caliber::Cal36) => (".36", CollectibleKind::Bullets36(amount)),
+                        Some(Caliber::Cal44) => (".44", CollectibleKind::Bullets44(amount)),
+                        Some(Caliber::Cal50) => (".50", CollectibleKind::Bullets50(amount)),
+                        Some(Caliber::Cal58) => (".58", CollectibleKind::Bullets58(amount)),
+                        Some(Caliber::Cal577) => (".577", CollectibleKind::Bullets577(amount)),
+                        Some(Caliber::Cal69) => (".69", CollectibleKind::Bullets69(amount)),
+                        None => (".36", CollectibleKind::Bullets36(amount)),
+                    };
+                    commands.spawn((
+                        Position { x: p.x, y: p.y },
+                        Item,
+                        Name(format!("{amount}x {cal_name} Bullets")),
                         Renderable { symbol: "·".into(), fg: RatColor::Rgb(180, 180, 180), bg: RatColor::Black },
-                        CollectibleKind::Bullets36(amount),
+                        collectible,
                     ));
                 }
             }

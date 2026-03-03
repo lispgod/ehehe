@@ -34,9 +34,49 @@ const LAST_NAMES: &[&str] = &[
     "Braddock", "Pickett", "Stanton", "Thornton", "Wainwright",
 ];
 
-/// Generates a procedural 1850s cowboy-themed name from position hash.
+// ── Faction-specific name pools ──────────────────────────────────
+
+const INDIAN_FIRST_NAMES: &[&str] = &[
+    "Chayton", "Takoda", "Ahanu", "Koda", "Enapay",
+    "Makya", "Tohopka", "Nashoba", "Akecheta", "Wahkan",
+    "Hototo", "Kitchi", "Mato", "Nayati", "Ohanzee",
+    "Tashunka", "Wicasa", "Tatanka", "Kohana", "Kuruk",
+];
+
+const INDIAN_LAST_NAMES: &[&str] = &[
+    "Red Cloud", "Black Elk", "Iron Hawk", "Tall Bull", "Crow Dog",
+    "Running Bear", "Stone Wolf", "Grey Eagle", "Swift Arrow", "Thunder Horse",
+    "Sitting Bear", "Lone Wolf", "Two Moons", "Rain Walker", "Night Sky",
+];
+
+const VAQUERO_FIRST_NAMES: &[&str] = &[
+    "Carlos", "Miguel", "Diego", "Rafael", "Alejandro",
+    "Fernando", "Santiago", "Joaquin", "Esteban", "Mateo",
+    "Rodrigo", "Emilio", "Ignacio", "Salvador", "Teodoro",
+    "Guillermo", "Cristobal", "Hernando", "Arturo", "Benito",
+];
+
+const VAQUERO_LAST_NAMES: &[&str] = &[
+    "Montoya", "Vega", "Salazar", "Guerrero", "Delgado",
+    "Reyes", "Espinoza", "Castillo", "Navarro", "Fuentes",
+    "Herrera", "Rojas", "Mendoza", "Villarreal", "Coronado",
+];
+
+const SHERIFF_FIRST_NAMES: &[&str] = &[
+    "William", "James", "Thomas", "Robert", "Charles",
+    "Henry", "Edward", "Samuel", "Benjamin", "Franklin",
+    "Theodore", "Abraham", "Ulysses", "Andrew", "John",
+];
+
+const SHERIFF_LAST_NAMES: &[&str] = &[
+    "Bassett", "Tilghman", "Hickok", "Wallace", "Masterson",
+    "Garrett", "Heck", "Reeves", "Selman", "Breckinridge",
+    "Plummer", "Canton", "Stoudenmire", "Courtright", "Allison",
+];
+
+/// Generates a procedural faction-appropriate name from position hash.
 /// About 30% of NPCs get a nickname (e.g., "Dusty" Silas Crowley).
-fn generate_npc_name(x: i32, y: i32) -> String {
+fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
     /// Out of 10, how many NPCs receive a nickname prefix.
     const NICKNAME_CHANCE: usize = 3;
 
@@ -45,8 +85,15 @@ fn generate_npc_name(x: i32, y: i32) -> String {
     let hash3 = (x.wrapping_mul(2903) ^ y.wrapping_mul(3571)).unsigned_abs() as usize;
     let hash4 = (x.wrapping_mul(5381) ^ y.wrapping_mul(9103)).unsigned_abs() as usize;
 
-    let first = FIRST_NAMES[hash1 % FIRST_NAMES.len()];
-    let last = LAST_NAMES[hash2 % LAST_NAMES.len()];
+    let (first_pool, last_pool) = match faction {
+        Faction::Indians => (INDIAN_FIRST_NAMES, INDIAN_LAST_NAMES),
+        Faction::Vaqueros => (VAQUERO_FIRST_NAMES, VAQUERO_LAST_NAMES),
+        Faction::Sheriff => (SHERIFF_FIRST_NAMES, SHERIFF_LAST_NAMES),
+        _ => (FIRST_NAMES, LAST_NAMES),
+    };
+
+    let first = first_pool[hash1 % first_pool.len()];
+    let last = last_pool[hash2 % last_pool.len()];
 
     if hash3 % 10 < NICKNAME_CHANCE {
         let nick = NICKNAMES[hash4 % NICKNAMES.len()];
@@ -95,7 +142,7 @@ pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     MonsterTemplate { name: "Civilian", symbol: "T", fg: RatColor::Rgb(180, 180, 220), health: 60, attack: 2, speed: 28, sight_range: 8, faction: Faction::Civilians, has_gun: false },
     // Tier 7: Indians — native warriors
     MonsterTemplate { name: "Indian Brave", symbol: "I", fg: RatColor::Rgb(180, 100, 60), health: 120, attack: 5, speed: 40, sight_range: 12, faction: Faction::Indians, has_gun: false },
-    MonsterTemplate { name: "Indian Scout", symbol: "i", fg: RatColor::Rgb(150, 90, 50), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Indians, has_gun: false },
+    MonsterTemplate { name: "Indian Scout", symbol: "I", fg: RatColor::Rgb(150, 90, 50), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Indians, has_gun: false },
     // Tier 8: Sheriff and deputies
     MonsterTemplate { name: "Sheriff", symbol: "S", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Sheriff, has_gun: true },
     MonsterTemplate { name: "Deputy", symbol: "D", fg: RatColor::Rgb(200, 180, 100), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Sheriff, has_gun: true },
@@ -204,7 +251,7 @@ pub fn spawn_monster(
     let npc_name: String = if matches!(template.faction, Faction::Wildlife) {
         template.name.into()
     } else {
-        generate_npc_name(x, y)
+        generate_npc_name(x, y, &template.faction)
     };
 
     // Compute personality based on faction and position hash.

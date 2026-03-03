@@ -596,10 +596,10 @@ const BUILDING_TYPE_COUNT: u32 = 12;
 const DISTRICT_RESIDENTIAL: u32 = 0;
 const DISTRICT_COMMERCIAL: u32 = 1;
 const DISTRICT_LIVERY: u32 = 2;
-/// Cantina-row district — saloons, hotels, entertainment.
-const DISTRICT_CANTINA: u32 = 3;
 
 /// Number of distinct district types.
+/// District 3 is the cantina row (saloons, hotels, entertainment)
+/// and is handled by the catch-all arm of `district_building_kind`.
 const DISTRICT_COUNT: u32 = 4;
 
 /// Assigns a district type based on position using Voronoi-style partitioning.
@@ -651,8 +651,8 @@ fn district_building_kind(district: u32, noise: f64) -> u32 {
             else if noise < 0.80 { 3 }   // General Store
             else { 10 }                   // Undertaker
         }
-        DISTRICT_CANTINA.. => {
-            // Cantina row: saloons, hotels
+        // Cantina row (district 3) / catch-all: saloons, hotels.
+        _ => {
             if noise < 0.40 { 1 }        // Saloon
             else if noise < 0.65 { 8 }   // Hotel
             else if noise < 0.80 { 0 }   // House
@@ -1023,7 +1023,10 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                     false
                 };
 
-                // Rounded corners: skip corner walls
+                // Rounded corners: skip corner walls.
+                // True when the tile is within `corner_radius` of both a
+                // horizontal and a vertical building edge (i.e. in any of the
+                // four corner regions).
                 let is_corner = if shape_type == SHAPE_ROUNDED {
                     (b.x + b.w - 1 - x < corner_radius || x - b.x < corner_radius)
                         && (b.y + b.h - 1 - y < corner_radius || y - b.y < corner_radius)

@@ -181,12 +181,64 @@ pub fn fire_system(
         .collect();
 
     for tile in &expired_clouds {
+        // Retrieve the saved floor before mutating the voxel.
+        let previous = game_map.0.sand_cloud_previous_floor.remove(tile);
         if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
             if matches!(voxel.floor, Some(Floor::SandCloud)) {
-                // Restore to sand (desert default).
-                voxel.floor = Some(Floor::Sand);
+                voxel.floor = previous.unwrap_or(Some(Floor::Sand));
             }
         }
         game_map.0.sand_cloud_turns.remove(tile);
+    }
+
+    // ── Sand cloud drift ────────────────────────────────────────────
+    // Every 3 turns, some edge cloud tiles shift by 1 tile for a slow
+    // drifting effect. Uses a deterministic hash to pick which tiles move.
+    if turn_counter.0.is_multiple_of(3) {
+        let active_clouds: Vec<(GridVec, u32)> = game_map.0.sand_cloud_turns.iter()
+            .map(|(&pos, &turn)| (pos, turn))
+            .collect();
+
+        // Collect drift operations: (old_pos, new_pos, placed_turn)
+        // Primes 7919 and 6271 provide good hash distribution; modulo 5 = 20% drift probability.
+        let dirs = [GridVec::new(1, 0), GridVec::new(-1, 0), GridVec::new(0, 1), GridVec::new(0, -1)];
+        let mut drift_ops: Vec<(GridVec, GridVec, u32)> = Vec::new();
+        for (tile, placed_turn) in &active_clouds {
+            let hash = (tile.x.wrapping_mul(7919) ^ tile.y.wrapping_mul(6271))
+                .wrapping_add(turn_counter.0 as i32) as u32;
+            if hash % 5 != 0 {
+                continue;
+            }
+            let dir_idx = (hash / 5) as usize % 4;
+            let new_pos = *tile + dirs[dir_idx];
+            if let Some(new_voxel) = game_map.0.get_voxel_at(&new_pos) {
+                if !matches!(new_voxel.floor, Some(Floor::SandCloud))
+                    && !matches!(new_voxel.furniture, Some(crate::typeenums::Furniture::Wall))
+                    && !game_map.0.sand_cloud_turns.contains_key(&new_pos)
+                {
+                    drift_ops.push((*tile, new_pos, *placed_turn));
+                }
+            }
+        }
+        // Apply drift operations.
+        for (old_pos, new_pos, placed_turn) in drift_ops {
+            // Read the new position's current floor before modifying.
+            let new_floor = game_map.0.get_voxel_at(&new_pos).and_then(|v| v.floor.clone());
+            // Restore old position.
+            let previous = game_map.0.sand_cloud_previous_floor.remove(&old_pos);
+            if let Some(voxel) = game_map.0.get_voxel_at_mut(&old_pos) {
+                if matches!(voxel.floor, Some(Floor::SandCloud)) {
+                    voxel.floor = previous.unwrap_or(Some(Floor::Sand));
+                }
+            }
+            game_map.0.sand_cloud_turns.remove(&old_pos);
+            // Place cloud at new position.
+            game_map.0.sand_cloud_previous_floor.entry(new_pos)
+                .or_insert(new_floor);
+            if let Some(voxel) = game_map.0.get_voxel_at_mut(&new_pos) {
+                voxel.floor = Some(Floor::SandCloud);
+            }
+            game_map.0.sand_cloud_turns.insert(new_pos, placed_turn);
+        }
     }
 }

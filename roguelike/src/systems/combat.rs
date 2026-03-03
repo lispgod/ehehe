@@ -20,24 +20,56 @@ fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, rang
 
 /// Spawns a small cloud of gun smoke at the firing position.
 /// Places persistent SandCloud floor tiles on the map that block sight.
-fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32) {
-    // Smoke cloud: small 3×3 area centered on the firing position
-    for dx in -1..=1i32 {
-        for dy in -1..=1i32 {
+/// Saves the previous floor type for restoration when smoke dissipates.
+/// The smoke is biased in the firing direction for a more natural plume.
+fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, fire_dx: i32, fire_dy: i32) {
+    // Normalize firing direction for directional bias.
+    let flen = ((fire_dx as f64).powi(2) + (fire_dy as f64).powi(2)).sqrt();
+    let (ndx, ndy) = if flen > 0.01 {
+        (fire_dx as f64 / flen, fire_dy as f64 / flen)
+    } else {
+        (0.0, 0.0)
+    };
+
+    // First pass: collect positions and their current floor types.
+    let mut tiles_to_cloud: Vec<(GridVec, Option<Floor>)> = Vec::new();
+    for dx in -2..=2i32 {
+        for dy in -2..=2i32 {
+            let fx = dx as f64;
+            let fy = dy as f64;
+            let dist = (fx * fx + fy * fy).sqrt();
+            let dot = if dist > 0.01 {
+                (fx * ndx + fy * ndy) / dist
+            } else {
+                0.0
+            };
+            let effective_radius = 1.5 + dot.max(0.0) * 1.0;
+            if dist > effective_radius {
+                continue;
+            }
             let pos = origin + GridVec::new(dx, dy);
-            if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+            if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
                 if !matches!(voxel.furniture, Some(Furniture::Wall)) {
-                    voxel.floor = Some(Floor::SandCloud);
-                    game_map.0.sand_cloud_turns.insert(pos, turn);
+                    tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
             }
         }
+    }
+    // Second pass: apply changes.
+    for (pos, prev_floor) in tiles_to_cloud {
+        if !game_map.0.sand_cloud_previous_floor.contains_key(&pos) {
+            game_map.0.sand_cloud_previous_floor.insert(pos, prev_floor);
+        }
+        if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+            voxel.floor = Some(Floor::SandCloud);
+        }
+        game_map.0.sand_cloud_turns.insert(pos, turn);
     }
 }
 
 /// Resolves attack intents into damage events.
 ///
-/// Damage = max(0, attacker.attack − target.defense).
+/// Damage = attacker.attack (defense has been removed).
 /// Uses `CombatStats::damage_against` for the formal damage model.
 /// Emits a `DamageEvent` for each successful hit and logs combat messages.
 pub fn combat_system(
@@ -212,7 +244,6 @@ pub fn npc_level_up_system(
             while exp.ready_to_level() {
                 let new_level = exp.advance_level(&mut level);
                 stats.attack += 1;
-                stats.defense += 1;
                 hp.max += 3;
                 hp.current = hp.max;
                 let k_name = display_name(killer_name);
@@ -249,12 +280,11 @@ pub fn level_up_system(
         let new_level = exp.advance_level(&mut level);
         // Stat bonuses per level.
         stats.attack += 1;
-        stats.defense += 1;
         hp.max += 5;
         stamina.max += 5;
         combat_log.push(format!(
-            "LEVEL UP! Now level {new_level}! ATK {} DEF {} HP {} STA {}",
-            stats.attack, stats.defense, hp.max, stamina.max
+            "LEVEL UP! Now level {new_level}! ATK {} HP {} STA {}",
+            stats.attack, hp.max, stamina.max
         ));
     }
 }
@@ -344,7 +374,7 @@ pub fn ranged_attack_system(
         sound_events.add(origin);
 
         // Spawn gun smoke at the firing position (persists and blocks sight).
-        spawn_gun_smoke(&mut game_map, origin, turn_counter.0);
+        spawn_gun_smoke(&mut game_map, origin, turn_counter.0, dx, dy);
 
         // Spawn a bullet projectile entity that will travel along the path.
         crate::systems::projectile::spawn_bullet(
@@ -398,7 +428,7 @@ pub fn ai_ranged_attack_system(
         sound_events.add(origin);
 
         // Spawn gun smoke at the firing position (persists and blocks sight).
-        spawn_gun_smoke(&mut game_map, origin, turn_counter.0);
+        spawn_gun_smoke(&mut game_map, origin, turn_counter.0, dx, dy);
 
         // Spawn a bullet projectile entity.
         crate::systems::projectile::spawn_bullet(

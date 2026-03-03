@@ -76,22 +76,23 @@ pub struct MonsterTemplate {
 }
 
 /// Shared monster templates used by both initial and wave spawning.
-/// Each enemy type has its own movement speed:
-/// - Coyote: 140 (very fast — acts ~1.4x per tick)
-/// - Rattlesnake: 60 (slow — acts every ~1.7 ticks)
-/// - Outlaw: 90, Vaquero: 85, Cowboy: 80, Gunslinger: 100
+/// NPC speeds are tuned so that movement frequency roughly matches the
+/// player's movement rate (1 action per 3 world ticks).
+/// - Coyote: 50 (fast — acts ~every 2 ticks)
+/// - Rattlesnake: 20 (slow — acts every ~5 ticks)
+/// - Outlaw: 34, Vaquero: 32, Cowboy: 30, Gunslinger: 38
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Tier 1: Wildlife (lowercase symbols — animals)
-    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, defense: 0, speed: 140, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
-    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, defense: 1, speed: 60, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, defense: 0, speed: 50, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, ammo: 0 },
+    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, defense: 0, speed: 20, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, ammo: 0 },
     // Tier 2: Outlaws (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, defense: 0, speed: 90, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
+    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, defense: 0, speed: 34, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, ammo: 0 },
     // Tier 3: Vaqueros (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, defense: 0, speed: 85, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
+    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, defense: 0, speed: 32, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, ammo: 0 },
     // Tier 4: Lawmen (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, defense: 0, speed: 80, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
+    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, defense: 0, speed: 30, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, ammo: 10 },
     // Tier 5: Outlaws - Gunslinger (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, defense: 0, speed: 100, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
+    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, defense: 0, speed: 38, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, ammo: 15 },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,

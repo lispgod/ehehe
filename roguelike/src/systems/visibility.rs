@@ -119,6 +119,11 @@ pub fn visibility_system(
                 if diff == GridVec::ZERO {
                     return true; // always see own tile
                 }
+                // Keyhole effect: tiles directly adjacent (Chebyshev ≤ 1)
+                // are always visible for the player.
+                if is_player && diff.x.abs() <= 1 && diff.y.abs() <= 1 {
+                    return true;
+                }
                 let (dx, dy) = (diff.x as f64, diff.y as f64);
                 let len = (dx * dx + dy * dy).sqrt();
                 let dot = (dx * cdx + dy * cdy) / (len * cursor_len);
@@ -139,8 +144,9 @@ pub fn visibility_system(
 /// - Returns `(effective_range, cos_threshold)`.
 ///
 /// When cursor is close: range = FOV_MIN_RADIUS (36), cos_threshold ≈ -1 (360°).
-/// At cursor distance 2: range ≈ 60, cos_threshold ≈ 0.0 (forward hemisphere).
-/// When cursor is far: range = FOV_MAX_RANGE (120), cos_threshold ≈ 0.99 (narrow ~10° cone).
+/// At cursor distance 6: range ≈ 108, cos_threshold ≈ 0.0 (forward hemisphere).
+/// When cursor is far (~12 tiles): range = FOV_MAX_RANGE (120), cos_threshold ≈ 0.65 (cone ~50°).
+/// The FOV is always at least 3 tiles wide around the player.
 pub fn compute_fov_params(cursor_dir: Option<GridVec>) -> (CoordinateUnit, f64) {
     let Some(dir) = cursor_dir else {
         return (FOV_MIN_RADIUS, -1.0); // full circle
@@ -155,11 +161,13 @@ pub fn compute_fov_params(cursor_dir: Option<GridVec>) -> (CoordinateUnit, f64) 
     // At dist=2: range ≈ 60. Caps at FOV_MAX_RANGE (120).
     let range = (FOV_MIN_RADIUS as f64 + dist * 12.0).min(FOV_MAX_RANGE as f64);
 
-    // Cone narrows aggressively. Reaches max narrowing at dist ≈ 6.
-    // At dist=2: cos ≈ 0.0 (forward hemisphere, no vision behind).
-    // At dist=6+: cos ≈ 0.99 (narrow ~10° cone).
-    let cone_t = (dist / 6.0).min(1.0);
-    let cos_threshold = -1.0 + cone_t * 1.99;
+    // Cone narrows gradually. Reaches max narrowing at dist ≈ 12.
+    // At dist=4: cos ≈ -0.33 (broad cone, nearly hemisphere).
+    // At dist=8: cos ≈ 0.33 (moderate cone ~70°).
+    // At dist=12+: cos ≈ 0.65 (cone ~50° full width).
+    // The max cos of 0.65 ensures the FOV is always at least ~3 tiles wide.
+    let cone_t = (dist / 12.0).min(1.0);
+    let cos_threshold = -1.0 + cone_t * 1.65;
 
     (range as CoordinateUnit, cos_threshold)
 }

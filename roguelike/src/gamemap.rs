@@ -17,6 +17,9 @@ pub struct GameMap {
     /// Tracks the world turn at which each sand cloud tile was placed.
     /// Sand clouds dissipate after `SAND_CLOUD_LIFETIME` world turns.
     pub sand_cloud_turns: HashMap<GridVec, u32>,
+    /// Stores the previous floor type before a sand cloud was placed.
+    /// Used to restore the original floor when the cloud dissipates.
+    pub sand_cloud_previous_floor: HashMap<GridVec, Option<Floor>>,
 }
 
 /// A rectangular building footprint used during town generation.
@@ -80,6 +83,7 @@ impl GameMap {
             voxels,
             fire_turns: HashMap::new(),
             sand_cloud_turns: HashMap::new(),
+            sand_cloud_previous_floor: HashMap::new(),
         };
 
         // ── Step 2: Main street (horizontal dirt road) ──────────────

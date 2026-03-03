@@ -203,9 +203,9 @@ fn player_bump_attack_damages_monster() {
     });
     app.update();
 
-    // Player attack=5, Monster defense=1 → damage=4
+    // Player attack=5, defense ignored → damage=5
     let monster_health = app.world().get::<Health>(monster).unwrap();
-    assert_eq!(monster_health.current, 6, "Monster should have taken 4 damage (5 atk - 1 def)");
+    assert_eq!(monster_health.current, 5, "Monster should have taken 5 damage");
 }
 
 #[test]
@@ -224,15 +224,15 @@ fn monster_bump_attack_damages_player() {
     });
     app.update();
 
-    // Monster attack=3, Player defense=2 → damage=1
+    // Monster attack=3, defense ignored → damage=3
     let player_health = app.world().get::<Health>(player).unwrap();
-    assert_eq!(player_health.current, 29, "Player should have taken 1 damage (3 atk - 2 def)");
+    assert_eq!(player_health.current, 27, "Player should have taken 3 damage");
 }
 
 #[test]
-fn no_damage_when_defense_exceeds_attack() {
+fn low_attack_still_deals_damage() {
     let mut app = test_app();
-    // Spawn player with very high defense
+    // Spawn player with high defense (ignored in damage model)
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
         Player,
@@ -254,7 +254,7 @@ fn no_damage_when_defense_exceeds_attack() {
 
     app.update();
 
-    // Monster attacks player: attack=2, defense=10 → damage=0
+    // Monster attacks player: attack=2, defense ignored → damage=2
     app.world_mut().write_message(MoveIntent {
         entity: monster,
         dx: -1,
@@ -263,7 +263,7 @@ fn no_damage_when_defense_exceeds_attack() {
     app.update();
 
     let player_health = app.world().get::<Health>(player).unwrap();
-    assert_eq!(player_health.current, 30, "Player should take no damage from weak monster");
+    assert_eq!(player_health.current, 28, "Player should take 2 damage from weak monster");
 }
 
 // ─── Death system tests ──────────────────────────────────────────
@@ -413,10 +413,10 @@ fn combat_log_no_damage_message() {
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
-        CombatStats { attack: 1, defense: 0 },
+        CombatStats { attack: 0, defense: 0 },
     )).id();
 
-    // Monster with defense >= player attack
+    // Monster (defense irrelevant; player attack is 0 so no damage)
     let _monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
         Hostile,
@@ -497,7 +497,7 @@ fn multiple_attacks_accumulate_damage() {
 
     app.update();
 
-    // First attack: 5 - 1 = 4 damage → 10 - 4 = 6 HP
+    // First attack: 5 damage (defense ignored) → 10 - 5 = 5 HP
     app.world_mut().write_message(MoveIntent {
         entity: player,
         dx: 1,
@@ -506,7 +506,7 @@ fn multiple_attacks_accumulate_damage() {
     app.update();
 
     let hp1 = app.world().get::<Health>(monster).unwrap().current;
-    assert_eq!(hp1, 6);
+    assert_eq!(hp1, 5);
 
     // Second attack
     app.world_mut().write_message(MoveIntent {
@@ -516,8 +516,8 @@ fn multiple_attacks_accumulate_damage() {
     });
     app.update();
 
-    let hp2 = app.world().get::<Health>(monster).unwrap().current;
-    assert_eq!(hp2, 2, "Second attack should further reduce HP");
+    let hp2 = app.world().get::<Health>(monster);
+    assert!(hp2.is_none(), "Second attack should kill the monster");
 }
 
 #[test]
@@ -858,9 +858,9 @@ fn player_can_bump_attack_hell_gate() {
     });
     app.update();
 
-    // Player attack=5, Gate defense=3 → damage=2
+    // Player attack=5, defense ignored → damage=5
     let gate_health = app.world().get::<Health>(gate).unwrap();
-    assert_eq!(gate_health.current, 98, "Gate should have taken 2 damage (5 atk - 3 def)");
+    assert_eq!(gate_health.current, 95, "Gate should have taken 5 damage");
 }
 
 #[test]
@@ -2483,8 +2483,8 @@ fn multiple_monsters_can_attack_player_in_sequence() {
     app.update();
 
     let hp = app.world().get::<Health>(player).unwrap();
-    // Monster attack=3, player defense=2 → 1 damage each = 2 total
-    assert_eq!(hp.current, 28,
+    // Monster attack=3, defense ignored → 3 damage each = 6 total
+    assert_eq!(hp.current, 24,
         "Player should take damage from both monsters, HP is {}", hp.current);
 }
 
@@ -2835,7 +2835,7 @@ fn health_heal_from_zero() {
 
 #[test]
 fn compute_damage_large_values() {
-    assert_eq!(compute_damage(1000, 999), 1);
+    assert_eq!(compute_damage(1000, 999), 1000);
     assert_eq!(compute_damage(1000, 0), 1000);
     assert_eq!(compute_damage(0, 1000), 0);
 }

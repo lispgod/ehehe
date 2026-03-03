@@ -20,36 +20,69 @@ const SPELL_STAMINA_COST: i32 = 10;
 pub fn spell_system(
     mut commands: Commands,
     mut intents: MessageReader<SpellCastIntent>,
-    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>)>,
+    mut caster_query: Query<(&CombatStats, Option<&Name>, Option<&mut Stamina>, Option<&mut Inventory>, Option<&Position>)>,
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,
     seed: Res<MapSeed>,
     turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
-        let Ok((caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
+        let Ok((caster_stats, caster_name, stamina, inventory, caster_pos)) = caster_query.get_mut(intent.caster) else {
             continue;
         };
 
         // Sand throw (sentinel: grenade_index == usize::MAX) — creates persistent
         // sand cloud tiles on the map that block line of sight.
+        // The cloud is circular but biased to spread toward the target
+        // direction (plume shape away from the caster).
         if intent.grenade_index == usize::MAX {
             if let Some(mut stamina) = stamina {
                 stamina.spend(5); // Sand throw costs 5 stamina
             }
             // Place persistent SandCloud floor tiles on the map.
             let origin = intent.target;
-            for dx in -intent.radius..=intent.radius {
-                for dy in -intent.radius..=intent.radius {
+            let radius_f = intent.radius as f64;
+            // Compute direction from caster to target for directional bias.
+            let caster_vec = caster_pos.map(|p| p.as_grid_vec());
+            let dir = caster_vec.map(|cv| {
+                let d = origin - cv;
+                let len = ((d.x as f64).powi(2) + (d.y as f64).powi(2)).sqrt();
+                if len > 0.01 { (d.x as f64 / len, d.y as f64 / len) } else { (0.0, 0.0) }
+            }).unwrap_or((0.0, 0.0));
+
+            // First pass: collect tiles and their current floors.
+            let mut tiles_to_cloud: Vec<(crate::grid_vec::GridVec, Option<Floor>)> = Vec::new();
+            for dx in -(intent.radius + 1)..=(intent.radius + 1) {
+                for dy in -(intent.radius + 1)..=(intent.radius + 1) {
+                    let fx = dx as f64;
+                    let fy = dy as f64;
+                    let dist = (fx * fx + fy * fy).sqrt();
+                    let dot = if dist > 0.01 {
+                        (fx * dir.0 + fy * dir.1) / dist
+                    } else {
+                        0.0
+                    };
+                    let effective_radius = radius_f + 0.5 + dot.max(0.0) * 1.0;
+                    if dist > effective_radius {
+                        continue;
+                    }
                     let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
-                        // Only place sand cloud on passable tiles without walls
+                    if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
                         if !matches!(voxel.furniture, Some(Furniture::Wall)) {
-                            voxel.floor = Some(Floor::SandCloud);
-                            game_map.0.sand_cloud_turns.insert(pos, turn_counter.0);
+                            tiles_to_cloud.push((pos, voxel.floor.clone()));
                         }
                     }
                 }
+            }
+            // Second pass: apply changes.
+            for (pos, prev_floor) in tiles_to_cloud {
+                if !game_map.0.sand_cloud_previous_floor.contains_key(&pos) {
+                    game_map.0.sand_cloud_previous_floor.insert(pos, prev_floor);
+                }
+                if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+                    voxel.floor = Some(Floor::SandCloud);
+                }
+                game_map.0.sand_cloud_turns.insert(pos, turn_counter.0);
             }
             continue;
         }

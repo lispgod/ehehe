@@ -132,10 +132,10 @@ pub fn a_star_first_step_pub(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
-/// Returns `true` if any cardinal neighbor of `pos` is a cactus.
+/// Returns `true` if any neighbor (all 8 directions) of `pos` is a cactus.
 /// Used by NPC pathfinding to avoid cactus-adjacent tiles.
 fn is_near_cactus(pos: GridVec, game_map: &GameMapResource) -> bool {
-    for neighbor in pos.cardinal_neighbors() {
+    for neighbor in pos.all_neighbors() {
         if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
             && matches!(voxel.props, Some(Props::Cactus)) {
                 return true;
@@ -848,7 +848,7 @@ pub fn ai_system(
                             let item_ent = inv.items[idx];
                             if let Ok(kind) = item_kinds.get(item_ent) {
                                 match *kind {
-                                    ItemKind::Grenade { damage: _, radius } => {
+                                    ItemKind::Grenade { damage: _, radius, .. } => {
                                         spell_intents.write(SpellCastIntent {
                                             caster: entity,
                                             radius,
@@ -857,7 +857,7 @@ pub fn ai_system(
                                         });
                                         used_throwable = true;
                                     }
-                                    ItemKind::Molotov { damage, radius } => {
+                                    ItemKind::Molotov { damage, radius, .. } => {
                                         molotov_intents.write(MolotovCastIntent {
                                             caster: entity,
                                             radius,
@@ -891,8 +891,8 @@ pub fn ai_system(
                             let item_ent = inv.items[idx];
                             if let Ok(kind) = item_kinds.get(item_ent) {
                                 let (dmg, range) = match *kind {
-                                    ItemKind::Knife { attack } => (attack, 12),
-                                    ItemKind::Tomahawk { attack } => (attack, 10),
+                                    ItemKind::Knife { attack, .. } => (attack, 12),
+                                    ItemKind::Tomahawk { attack, .. } => (attack, 10),
                                     _ => (0, 0),
                                 };
                                 if dmg > 0 {

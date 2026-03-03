@@ -244,6 +244,7 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
             caliber,
             attack: caliber.damage(),
             name: "Colt Pocket".into(),
+            blunt_damage: 5,
         },
     )).id();
 
@@ -256,7 +257,7 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
             fg: RatColor::Rgb(192, 192, 210),
             bg: RatColor::Black,
         },
-        ItemKind::Knife { attack: 4 },
+        ItemKind::Knife { attack: 4, blunt_damage: 6 },
     )).id();
 
     // Spawn starting whiskey
@@ -268,7 +269,7 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
             fg: RatColor::Rgb(180, 120, 60),
             bg: RatColor::Black,
         },
-        ItemKind::Whiskey { heal: 10 },
+        ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
     )).id();
 
     // Spawn starting molotov cocktail
@@ -280,7 +281,7 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
             fg: RatColor::Rgb(255, 100, 0),
             bg: RatColor::Black,
         },
-        ItemKind::Molotov { damage: 6, radius: 4 },
+        ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
     )).id();
 
     commands.spawn((

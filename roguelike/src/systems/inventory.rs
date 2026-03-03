@@ -95,7 +95,7 @@ pub fn use_item_system(
         // This borrows the inner value immutably first; if we need to mutate
         // (e.g. increment loaded rounds), we call `get_mut` on a second query.
         match kind {
-            ItemKind::Whiskey { heal } => {
+            ItemKind::Whiskey { heal, .. } => {
                 let heal = *heal;
                 if let Ok(mut hp) = health_query.get_mut(intent.user) {
                     let healed = hp.heal(heal);
@@ -142,6 +142,7 @@ pub fn use_item_system(
             ItemKind::Molotov { .. } => {
                 combat_log.push("Readied molotov — aim and press slot key to throw".into());
             }
+            ItemKind::Bow { .. } => {}
         }
     }
 }

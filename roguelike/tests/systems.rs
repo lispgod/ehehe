@@ -1011,6 +1011,7 @@ fn spawn_test_player_with_gun(app: &mut App, x: i32, y: i32, attack: i32) -> (En
             caliber: Caliber::Cal36,
             attack,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         },
     )).id();
     let player = app.world_mut().spawn((
@@ -1101,6 +1102,7 @@ fn ranged_bullet_penetrates_multiple_enemies() {
             caliber: Caliber::Cal36,
             attack: 10,
             name: "Test Gun".into(),
+            blunt_damage: 5,
         },
     )).id();
     let player = app.world_mut().spawn((
@@ -1884,7 +1886,7 @@ fn spawn_whiskey_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(180, 120, 60),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Whiskey { heal: 10 },
+        ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
     )).id()
 }
 
@@ -1898,7 +1900,7 @@ fn spawn_knife_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(192, 192, 210),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Knife { attack: 4 },
+        ItemKind::Knife { attack: 4, blunt_damage: 6 },
     )).id()
 }
 
@@ -1912,7 +1914,7 @@ fn spawn_grenade_item(app: &mut App) -> Entity {
             fg: roguelike::typedefs::RatColor::Rgb(255, 165, 0),
             bg: roguelike::typedefs::RatColor::Black,
         },
-        ItemKind::Grenade { damage: 8, radius: 2 },
+        ItemKind::Grenade { damage: 8, radius: 2, blunt_damage: 3 },
     )).id()
 }
 
@@ -3516,6 +3518,7 @@ fn ai_ranged_attack_via_ranged_intent() {
             caliber: Caliber::Cal36,
             attack: 8,
             name: "Revolver".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
@@ -3576,6 +3579,7 @@ fn ai_kite_maintains_preferred_range() {
             caliber: Caliber::Cal44,
             attack: 10,
             name: "Rifle".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
@@ -3691,6 +3695,7 @@ fn ai_npc_reloads_empty_gun() {
             caliber: Caliber::Cal36,
             attack: 8,
             name: "Revolver".into(),
+            blunt_damage: 5,
         },
     )).id();
     app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);

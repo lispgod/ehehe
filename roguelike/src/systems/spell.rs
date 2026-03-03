@@ -176,7 +176,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
             Item,
             Name("Whiskey Bottle".into()),
             Renderable { symbol: "w".into(), fg: RatColor::Rgb(180, 120, 60), bg: RatColor::Black },
-            ItemKind::Whiskey { heal: 10 },
+            ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
         ));
     } else if roll < 0.5 {
         commands.spawn((
@@ -184,7 +184,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
             Item,
             Name("Bowie Knife".into()),
             Renderable { symbol: "/".into(), fg: RatColor::Rgb(192, 192, 210), bg: RatColor::Black },
-            ItemKind::Knife { attack: 4 },
+            ItemKind::Knife { attack: 4, blunt_damage: 6 },
         ));
     } else if roll < 0.65 {
         commands.spawn((
@@ -192,7 +192,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
             Item,
             Name("Dynamite Stick".into()),
             Renderable { symbol: "*".into(), fg: RatColor::Rgb(255, 165, 0), bg: RatColor::Black },
-            ItemKind::Grenade { damage: 8, radius: 2 },
+            ItemKind::Grenade { damage: 8, radius: 2, blunt_damage: 3 },
         ));
     }
     // else: no drop (35% chance)

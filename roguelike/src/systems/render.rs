@@ -350,11 +350,12 @@ pub fn draw_system(
                             .and_then(|(_, k)| k)
                             .map_or("".to_string(), |k| match k {
                                 ItemKind::Gun { loaded, capacity, caliber, .. } => format!("{loaded}/{capacity} {caliber}"),
-                                ItemKind::Knife { attack } => format!("+{attack} atk"),
-                                ItemKind::Tomahawk { attack } => format!("+{attack} atk"),
-                                ItemKind::Grenade { damage, radius } => format!("{damage} dmg r{radius}"),
-                                ItemKind::Whiskey { heal } => format!("Heal {heal} HP"),
-                                ItemKind::Molotov { damage, radius } => format!("{damage} dmg r{radius} 🔥"),
+                                ItemKind::Knife { attack, .. } => format!("+{attack} atk"),
+                                ItemKind::Tomahawk { attack, .. } => format!("+{attack} atk"),
+                                ItemKind::Grenade { damage, radius, .. } => format!("{damage} dmg r{radius}"),
+                                ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
+                                ItemKind::Bow { .. } => "Bow".to_string(),
                             });
                         (name, desc)
                     })

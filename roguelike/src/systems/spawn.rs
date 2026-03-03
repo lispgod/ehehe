@@ -211,6 +211,7 @@ pub fn spawn_monster(
                 caliber,
                 attack: caliber.damage(),
                 name: String::from(gun_name),
+                blunt_damage: 5,
             },
         )).id();
         inv_items.push(gun);
@@ -228,7 +229,7 @@ pub fn spawn_monster(
                     fg: RatColor::Rgb(255, 165, 0),
                     bg: RatColor::Black,
                 },
-                ItemKind::Grenade { damage: 8, radius: 2 },
+                ItemKind::Grenade { damage: 8, radius: 2, blunt_damage: 3 },
             )).id();
             inv_items.push(dynamite);
         } else if item_hash.is_multiple_of(7) {
@@ -240,7 +241,7 @@ pub fn spawn_monster(
                     fg: RatColor::Rgb(255, 100, 0),
                     bg: RatColor::Black,
                 },
-                ItemKind::Molotov { damage: 6, radius: 4 },
+                ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
             )).id();
             inv_items.push(molotov);
         }

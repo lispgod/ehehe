@@ -159,6 +159,13 @@ pub fn display_name(name: Option<&Name>) -> &str {
     name.map_or("???", |n| &n.0)
 }
 
+/// Returns the display string of an optional `Name`, falling back to `"item"`.
+/// Used for item pickup/drop/use messages where "item" is the natural default.
+#[inline]
+pub fn item_display_name(name: Option<&Name>) -> &str {
+    name.map_or("item", |n| &n.0)
+}
+
 /// Movement speed: determines how much energy an entity gains each world tick.
 ///
 /// In the energy-based turn model, an entity acts when its accumulated energy
@@ -246,20 +253,12 @@ pub struct PatrolOrigin(pub GridVec);
 /// When an NPC loses sight of its target, it navigates to the remembered
 /// position before returning to patrol/idle.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub struct AiMemory {
     /// Last known position of the chase target.
     pub last_known_pos: Option<GridVec>,
     /// Turn number when the target was last seen.
     pub last_seen_turn: u32,
-}
-
-impl Default for AiMemory {
-    fn default() -> Self {
-        Self {
-            last_known_pos: None,
-            last_seen_turn: 0,
-        }
-    }
 }
 
 /// Marks an NPC as a group leader. When the leader dies, followers become
@@ -300,7 +299,6 @@ impl Default for AiPersonality {
 /// Used by bump-to-attack: moving into a hostile entity's tile triggers combat.
 #[derive(Component, Debug)]
 pub struct Hostile;
-
 
 /// Faction affiliation for group-based spawning.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -522,6 +520,20 @@ impl ItemKind {
             ItemKind::WaterBucket { blunt_damage, .. } => *blunt_damage,
         }
     }
+
+    /// Returns a human-readable display name for this item kind.
+    pub fn display_name(&self) -> String {
+        match self {
+            ItemKind::Gun { name, .. } => name.clone(),
+            ItemKind::Knife { .. } => "Knife".into(),
+            ItemKind::Tomahawk { .. } => "Tomahawk".into(),
+            ItemKind::Grenade { .. } => "Dynamite".into(),
+            ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
+            ItemKind::Molotov { .. } => "Molotov".into(),
+            ItemKind::Bow { .. } => "Bow".into(),
+            ItemKind::WaterBucket { .. } => "Water Bucket".into(),
+        }
+    }
 }
 
 /// Marker component for a thrown item (knife/tomahawk) that has landed
@@ -533,6 +545,18 @@ pub struct Thrown;
 #[derive(Component, Debug, Default)]
 pub struct Inventory {
     pub items: Vec<Entity>,
+}
+
+impl Inventory {
+    /// Removes and returns the item at `index`, or `None` if out of bounds.
+    #[inline]
+    pub fn remove_at(&mut self, index: usize) -> Option<Entity> {
+        if index < self.items.len() {
+            Some(self.items.remove(index))
+        } else {
+            None
+        }
+    }
 }
 
 /// Loot table component: when this entity dies, it may drop items.
@@ -560,11 +584,6 @@ pub enum CollectibleKind {
 /// Used to attribute the killing blow for kill counting.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastDamageSource(pub Entity);
-
-/// Procedurally generated outfit description for an entity.
-/// Used for flavour text in the UI instead of discrete equipment items.
-#[derive(Component, Clone, Debug)]
-pub struct Outfit(pub String);
 
 #[cfg(test)]
 mod tests {

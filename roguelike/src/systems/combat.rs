@@ -48,18 +48,15 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
                 continue;
             }
             let pos = origin + GridVec::new(dx, dy);
-            if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-                if !matches!(voxel.props, Some(Props::Wall)) {
+            if let Some(voxel) = game_map.0.get_voxel_at(&pos)
+                && !matches!(voxel.props, Some(Props::Wall)) {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
-            }
         }
     }
     // Second pass: apply changes.
     for (pos, prev_floor) in tiles_to_cloud {
-        if !game_map.0.sand_cloud_previous_floor.contains_key(&pos) {
-            game_map.0.sand_cloud_previous_floor.insert(pos, prev_floor);
-        }
+        game_map.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
         if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
             voxel.floor = Some(Floor::SandCloud);
         }
@@ -101,8 +98,8 @@ pub fn combat_system(
         // Add bonus damage from a random inventory item's blunt_damage.
         let mut bonus = 0;
         let mut bonus_item_name: Option<String> = None;
-        if let Ok(inv) = inventory_query.get(intent.attacker) {
-            if !inv.items.is_empty() {
+        if let Ok(inv) = inventory_query.get(intent.attacker)
+            && !inv.items.is_empty() {
                 let idx = dynamic_rng.random_index(
                     seed.0,
                     intent.attacker.to_bits() ^ 0xB1A7,
@@ -112,20 +109,10 @@ pub fn combat_system(
                     let bd = kind.blunt_damage();
                     if bd > 0 {
                         bonus = bd;
-                        bonus_item_name = Some(match kind {
-                            ItemKind::Gun { name, .. } => name.clone(),
-                            ItemKind::Knife { .. } => "Knife".into(),
-                            ItemKind::Tomahawk { .. } => "Tomahawk".into(),
-                            ItemKind::Grenade { .. } => "Dynamite".into(),
-                            ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
-                            ItemKind::Molotov { .. } => "Molotov".into(),
-                            ItemKind::Bow { .. } => "Bow".into(),
-                            ItemKind::WaterBucket { .. } => "Water Bucket".into(),
-                        });
+                        bonus_item_name = Some(kind.display_name());
                     }
                 }
             }
-        }
 
         let damage = base_damage + bonus;
 
@@ -292,8 +279,8 @@ pub fn death_system(
             }
 
         // Spawn a corpse marker for human (non-wildlife) NPCs.
-        if !is_wildlife {
-            if let Some(p) = pos {
+        if !is_wildlife
+            && let Some(p) = pos {
                 commands.spawn((
                     Position { x: p.x, y: p.y },
                     Name(format!("{label}'s corpse")),
@@ -304,7 +291,6 @@ pub fn death_system(
                     },
                 ));
             }
-        }
 
         commands.entity(entity).despawn();
     }
@@ -438,16 +424,14 @@ pub fn ai_ranged_attack_system(
         if let Some(inv) = inventory {
             let mut fired = false;
             for &item_ent in &inv.items {
-                if let Ok(mut kind) = item_kind_query.get_mut(item_ent) {
-                    if let ItemKind::Gun { ref mut loaded, attack, .. } = *kind {
-                        if *loaded > 0 {
+                if let Ok(mut kind) = item_kind_query.get_mut(item_ent)
+                    && let ItemKind::Gun { ref mut loaded, attack, .. } = *kind
+                        && *loaded > 0 {
                             *loaded -= 1;
                             damage = attack;
                             fired = true;
                             break;
                         }
-                    }
-                }
             }
             if !fired {
                 // No loaded gun — NPC can't fire this turn.

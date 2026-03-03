@@ -130,8 +130,8 @@ pub fn fire_system(
                      GridVec::new(1, 1), GridVec::new(-1, 1), GridVec::new(1, -1), GridVec::new(-1, -1)];
         let dir_hash = dynamic_rng.random_index(seed.0, (fire_pos.x as u64).wrapping_add(fire_pos.y as u64).wrapping_mul(7), dirs.len());
         let smoke_pos = fire_pos + dirs[dir_hash];
-        if let Some(voxel) = game_map.0.get_voxel_at(&smoke_pos) {
-            if !matches!(voxel.floor, Some(Floor::SandCloud))
+        if let Some(voxel) = game_map.0.get_voxel_at(&smoke_pos)
+            && !matches!(voxel.floor, Some(Floor::SandCloud))
                 && !matches!(voxel.floor, Some(Floor::Fire))
                 && !matches!(voxel.props, Some(crate::typeenums::Props::Wall))
             {
@@ -142,7 +142,6 @@ pub fn fire_system(
                 }
                 game_map.0.sand_cloud_turns.insert(smoke_pos, turn_counter.0);
             }
-        }
     }
 
     // Spread fire and burn out old fire tiles every FIRE_SPREAD_INTERVAL turns.
@@ -214,11 +213,10 @@ pub fn fire_system(
     for tile in &expired_clouds {
         // Retrieve the saved floor before mutating the voxel.
         let previous = game_map.0.sand_cloud_previous_floor.remove(tile);
-        if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
-            if matches!(voxel.floor, Some(Floor::SandCloud)) {
+        if let Some(voxel) = game_map.0.get_voxel_at_mut(tile)
+            && matches!(voxel.floor, Some(Floor::SandCloud)) {
                 voxel.floor = previous.unwrap_or(Some(Floor::Sand));
             }
-        }
         game_map.0.sand_cloud_turns.remove(tile);
     }
 
@@ -237,19 +235,18 @@ pub fn fire_system(
         for (tile, placed_turn) in &active_clouds {
             let hash = (tile.x.wrapping_mul(7919) ^ tile.y.wrapping_mul(6271))
                 .wrapping_add(turn_counter.0 as i32) as u32;
-            if hash % 5 != 0 {
+            if !hash.is_multiple_of(5) {
                 continue;
             }
             let dir_idx = (hash / 5) as usize % 4;
             let new_pos = *tile + dirs[dir_idx];
-            if let Some(new_voxel) = game_map.0.get_voxel_at(&new_pos) {
-                if !matches!(new_voxel.floor, Some(Floor::SandCloud))
+            if let Some(new_voxel) = game_map.0.get_voxel_at(&new_pos)
+                && !matches!(new_voxel.floor, Some(Floor::SandCloud))
                     && !matches!(new_voxel.props, Some(crate::typeenums::Props::Wall))
                     && !game_map.0.sand_cloud_turns.contains_key(&new_pos)
                 {
                     drift_ops.push((*tile, new_pos, *placed_turn));
                 }
-            }
         }
         // Apply drift operations.
         for (old_pos, new_pos, placed_turn) in drift_ops {
@@ -257,11 +254,10 @@ pub fn fire_system(
             let new_floor = game_map.0.get_voxel_at(&new_pos).and_then(|v| v.floor.clone());
             // Restore old position.
             let previous = game_map.0.sand_cloud_previous_floor.remove(&old_pos);
-            if let Some(voxel) = game_map.0.get_voxel_at_mut(&old_pos) {
-                if matches!(voxel.floor, Some(Floor::SandCloud)) {
+            if let Some(voxel) = game_map.0.get_voxel_at_mut(&old_pos)
+                && matches!(voxel.floor, Some(Floor::SandCloud)) {
                     voxel.floor = previous.unwrap_or(Some(Floor::Sand));
                 }
-            }
             game_map.0.sand_cloud_turns.remove(&old_pos);
             // Place cloud at new position.
             game_map.0.sand_cloud_previous_floor.entry(new_pos)

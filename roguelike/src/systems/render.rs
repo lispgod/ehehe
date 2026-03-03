@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
-use crate::components::{Faction, Health, Hostile, Inventory, ItemKind, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed};
+use crate::components::{Faction, Health, Hostile, Inventory, ItemKind, Projectile, Stamina, Name, Player, Position, Renderable, Viewshed, display_name, item_display_name};
 use crate::graphic_trait::GraphicElement;
 use crate::grid_vec::GridVec;
 use crate::resources::{
@@ -26,7 +26,6 @@ const SMOKE_PARTICLE_MAX_LIFETIME: f32 = 10.0;
 
 /// Minimum intensity for explosion particles so they remain visible.
 const MIN_EXPLOSION_INTENSITY: f32 = 0.15;
-
 
 /// Ticks and renders combat particles each frame. Also computes which
 /// sound indicators should be visible on the map from `SoundEvents`.
@@ -231,7 +230,7 @@ pub fn draw_system(
                         (renderable.symbol.clone(), renderable.fg, bg);
 
                     // Collect for visible entities panel.
-                    let full_name = name.map_or("???".to_string(), |n| n.0.clone());
+                    let full_name = display_name(name).to_string();
                     visible_entity_infos.push((
                         renderable.symbol.clone(),
                         renderable.fg,
@@ -409,8 +408,8 @@ pub fn draw_system(
                         let name = item_query
                             .get(ent)
                             .ok()
-                            .and_then(|(n, _)| n)
-                            .map_or("item".to_string(), |n| n.0.clone());
+                            .and_then(|(n, _)| n);
+                        let name_str = item_display_name(name).to_string();
                         let desc = item_query
                             .get(ent)
                             .ok()
@@ -425,7 +424,7 @@ pub fn draw_system(
                                 ItemKind::Bow { .. } => "Bow".to_string(),
                                 ItemKind::WaterBucket { uses, radius, .. } => format!("{uses} uses r{radius} 💧"),
                             });
-                        (name, desc)
+                        (name_str, desc)
                     })
                     .collect()
             })
@@ -456,11 +455,10 @@ pub fn draw_system(
                                 }
                                 _ => None,
                             };
-                            if let Some((sym, fg, name)) = entry {
-                                if seen.insert(name.clone()) {
+                            if let Some((sym, fg, name)) = entry
+                                && seen.insert(name.clone()) {
                                     items.push((sym, fg, name));
                                 }
-                            }
                         }
                     }
                 }

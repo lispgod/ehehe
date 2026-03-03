@@ -67,18 +67,15 @@ pub fn spell_system(
                         continue;
                     }
                     let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-                        if !matches!(voxel.props, Some(Props::Wall)) {
+                    if let Some(voxel) = game_map.0.get_voxel_at(&pos)
+                        && !matches!(voxel.props, Some(Props::Wall)) {
                             tiles_to_cloud.push((pos, voxel.floor.clone()));
                         }
-                    }
                 }
             }
             // Second pass: apply changes.
             for (pos, prev_floor) in tiles_to_cloud {
-                if !game_map.0.sand_cloud_previous_floor.contains_key(&pos) {
-                    game_map.0.sand_cloud_previous_floor.insert(pos, prev_floor);
-                }
+                game_map.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
                 if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
                     voxel.floor = Some(Floor::SandCloud);
                 }
@@ -96,8 +93,7 @@ pub fn spell_system(
 
         // Consume the grenade item from inventory.
         if let Some(mut inv) = inventory
-            && intent.grenade_index < inv.items.len() {
-                let grenade_entity = inv.items.remove(intent.grenade_index);
+            && let Some(grenade_entity) = inv.remove_at(intent.grenade_index) {
                 commands.entity(grenade_entity).despawn();
             }
 
@@ -143,8 +139,7 @@ pub fn molotov_system(
 
         // Consume the molotov item from inventory.
         if let Some(mut inv) = inventory
-            && intent.item_index < inv.items.len() {
-                let molotov_entity = inv.items.remove(intent.item_index);
+            && let Some(molotov_entity) = inv.remove_at(intent.item_index) {
                 commands.entity(molotov_entity).despawn();
             }
 
@@ -210,18 +205,15 @@ fn spawn_molotov_smoke(game_map: &mut GameMapResource, origin: crate::grid_vec::
                 continue;
             }
             let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-            if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-                if !matches!(voxel.props, Some(Props::Wall))
+            if let Some(voxel) = game_map.0.get_voxel_at(&pos)
+                && !matches!(voxel.props, Some(Props::Wall))
                     && !matches!(voxel.floor, Some(Floor::Fire)) {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
-            }
         }
     }
     for (pos, prev_floor) in tiles_to_cloud {
-        if !game_map.0.sand_cloud_previous_floor.contains_key(&pos) {
-            game_map.0.sand_cloud_previous_floor.insert(pos, prev_floor);
-        }
+        game_map.0.sand_cloud_previous_floor.entry(pos).or_insert(prev_floor);
         if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
             voxel.floor = Some(Floor::SandCloud);
         }
@@ -350,7 +342,7 @@ fn detonate_dynamite(
     radius: i32,
     source: Entity,
 ) {
-    combat_log.push(format!("Dynamite explodes!"));
+    combat_log.push("Dynamite explodes!".to_string());
 
     crate::systems::projectile::spawn_shrapnel(commands, origin, radius, damage, source);
 
@@ -475,20 +467,17 @@ pub fn water_bucket_system(
             let pos = center + GridVec::new(dx, dy);
             // Remove fire tracking
             game_map.0.fire_turns.remove(&pos);
-            if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
-                if !matches!(voxel.props, Some(Props::Wall)) {
+            if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos)
+                && !matches!(voxel.props, Some(Props::Wall)) {
                     voxel.floor = Some(Floor::ShallowWater);
                 }
-            }
         }
     }
 
     // Decrement uses on the water bucket
-    if let Some(&item_entity) = inv.items.get(idx) {
-        if let Ok(mut kind) = item_kind_query.get_mut(item_entity) {
-            if let ItemKind::WaterBucket { ref mut uses, .. } = *kind {
+    if let Some(&item_entity) = inv.items.get(idx)
+        && let Ok(mut kind) = item_kind_query.get_mut(item_entity)
+            && let ItemKind::WaterBucket { ref mut uses, .. } = *kind {
                 *uses -= 1;
             }
-        }
-    }
 }

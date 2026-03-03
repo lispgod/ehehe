@@ -10,11 +10,6 @@ use crate::voxel::Voxel;
 /// Side length of a map chunk (tiles). Used for chunk-based spatial queries.
 pub const CHUNK_SIZE: CoordinateUnit = 16;
 
-/// Returns the chunk coordinates for a given world position.
-pub fn chunk_coords(pos: &GridVec) -> (CoordinateUnit, CoordinateUnit) {
-    (pos.x.div_euclid(CHUNK_SIZE), pos.y.div_euclid(CHUNK_SIZE))
-}
-
 /// The game map: a simple 2D grid of voxels.
 pub struct GameMap {
     pub width: CoordinateUnit,
@@ -189,14 +184,12 @@ impl GameMap {
                         voxel.floor = Some(Floor::ShallowWater);
                         voxel.props = None;
                     }
-                } else if dist < river_width + beach_width {
-                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                        if !matches!(voxel.props, Some(Props::Wall)) {
+                } else if dist < river_width + beach_width
+                    && let Some(voxel) = map.get_voxel_at_mut(&pos)
+                        && !matches!(voxel.props, Some(Props::Wall)) {
                             voxel.floor = Some(Floor::Beach);
                             voxel.props = None;
                         }
-                    }
-                }
             }
         }
 
@@ -217,14 +210,12 @@ impl GameMap {
                 if y <= 0 || y >= height - 1 { continue; }
                 for x in 1..width - 1 {
                     let pos = GridVec::new(x, y);
-                    if let Some(voxel) = map.get_voxel_at(&pos) {
-                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    if let Some(voxel) = map.get_voxel_at(&pos)
+                        && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
+                            && let Some(voxel) = map.get_voxel_at_mut(&pos) {
                                 voxel.floor = Some(Floor::Bridge);
                                 voxel.props = None;
                             }
-                        }
-                    }
                 }
             }
         }
@@ -352,31 +343,28 @@ impl GameMap {
         for b in &buildings {
             // Don't place buildings on water
             let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
-            if let Some(voxel) = map.get_voxel_at(&center) {
-                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+            if let Some(voxel) = map.get_voxel_at(&center)
+                && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                     continue;
                 }
-            }
             place_building(&mut map, b, seed);
         }
 
         // Mark shared walls as breach points and record wall materials
         for &pos in &shared_walls {
-            if let Some(voxel) = map.get_voxel_at(&pos) {
-                if matches!(voxel.props, Some(Props::Wall)) {
+            if let Some(voxel) = map.get_voxel_at(&pos)
+                && matches!(voxel.props, Some(Props::Wall)) {
                     map.breach_points.insert(pos);
                 }
-            }
         }
 
         // Record wall materials and building heights for all placed buildings
         for b in &buildings {
             let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
-            if let Some(voxel) = map.get_voxel_at(&center) {
-                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+            if let Some(voxel) = map.get_voxel_at(&center)
+                && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                     continue;
                 }
-            }
             record_building_metadata(&mut map, b);
         }
 
@@ -608,11 +596,10 @@ const BUILDING_TYPE_COUNT: u32 = 12;
 const DISTRICT_RESIDENTIAL: u32 = 0;
 const DISTRICT_COMMERCIAL: u32 = 1;
 const DISTRICT_LIVERY: u32 = 2;
-/// Cantina-row district — saloons, hotels, entertainment.
-#[allow(dead_code)]
-const DISTRICT_CANTINA: u32 = 3;
 
 /// Number of distinct district types.
+/// District 3 is the cantina row (saloons, hotels, entertainment)
+/// and is handled by the catch-all arm of `district_building_kind`.
 const DISTRICT_COUNT: u32 = 4;
 
 /// Assigns a district type based on position using Voronoi-style partitioning.
@@ -664,8 +651,8 @@ fn district_building_kind(district: u32, noise: f64) -> u32 {
             else if noise < 0.80 { 3 }   // General Store
             else { 10 }                   // Undertaker
         }
+        // Cantina row (district 3) / catch-all: saloons, hotels.
         _ => {
-            // Cantina row: saloons, hotels
             if noise < 0.40 { 1 }        // Saloon
             else if noise < 0.65 { 8 }   // Hotel
             else if noise < 0.80 { 0 }   // House
@@ -808,7 +795,7 @@ fn detect_shared_walls(buildings: &[Building]) -> HashSet<GridVec> {
             if a.y < b.y + b.h && b.y < a.y + a.h {
                 // a's right edge touches or is 1 tile from b's left edge
                 let gap_right = b.x - (a.x + a.w);
-                if gap_right >= 0 && gap_right <= 1 {
+                if (0..=1).contains(&gap_right) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -819,7 +806,7 @@ fn detect_shared_walls(buildings: &[Building]) -> HashSet<GridVec> {
                 }
                 // b's right edge touches or is 1 tile from a's left edge
                 let gap_left = a.x - (b.x + b.w);
-                if gap_left >= 0 && gap_left <= 1 {
+                if (0..=1).contains(&gap_left) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -831,7 +818,7 @@ fn detect_shared_walls(buildings: &[Building]) -> HashSet<GridVec> {
             // Vertical adjacency (buildings stacked in same column)
             if a.x < b.x + b.w && b.x < a.x + a.w {
                 let gap_below = b.y - (a.y + a.h);
-                if gap_below >= 0 && gap_below <= 1 {
+                if (0..=1).contains(&gap_below) {
                     let overlap_x_min = a.x.max(b.x);
                     let overlap_x_max = (a.x + a.w).min(b.x + b.w);
                     for x in overlap_x_min..overlap_x_max {
@@ -840,7 +827,7 @@ fn detect_shared_walls(buildings: &[Building]) -> HashSet<GridVec> {
                     }
                 }
                 let gap_above = a.y - (b.y + b.h);
-                if gap_above >= 0 && gap_above <= 1 {
+                if (0..=1).contains(&gap_above) {
                     let overlap_x_min = a.x.max(b.x);
                     let overlap_x_max = (a.x + a.w).min(b.x + b.w);
                     for x in overlap_x_min..overlap_x_max {
@@ -863,11 +850,10 @@ fn record_building_metadata(map: &mut GameMap, b: &Building) {
             let is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
             if is_border {
                 // Record wall material for wall tiles
-                if let Some(voxel) = map.get_voxel_at(&pos) {
-                    if matches!(voxel.props, Some(Props::Wall)) {
+                if let Some(voxel) = map.get_voxel_at(&pos)
+                    && matches!(voxel.props, Some(Props::Wall)) {
                         map.wall_materials.insert(pos, b.material);
                     }
-                }
             }
             // Record height tier for all building tiles
             map.building_heights.insert(pos, b.height_tier);
@@ -883,33 +869,31 @@ fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
             // Only horizontal adjacency with 1-2 tile gap
             if a.y < b.y + b.h && b.y < a.y + a.h {
                 let gap = b.x as i64 - (a.x + a.w) as i64;
-                if gap >= 1 && gap <= 2 {
+                if (1..=2).contains(&gap) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
                         for gx in 0..gap as CoordinateUnit {
                             let pos = GridVec::new(a.x + a.w + gx, y);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                                if voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
+                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
                                     voxel.floor = Some(Floor::Alley);
                                 }
-                            }
                         }
                     }
                 }
                 // Check reverse direction
                 let gap_rev = a.x as i64 - (b.x + b.w) as i64;
-                if gap_rev >= 1 && gap_rev <= 2 {
+                if (1..=2).contains(&gap_rev) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
                         for gx in 0..gap_rev as CoordinateUnit {
                             let pos = GridVec::new(b.x + b.w + gx, y);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                                if voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
+                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
                                     voxel.floor = Some(Floor::Alley);
                                 }
-                            }
                         }
                     }
                 }
@@ -1039,12 +1023,13 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                     false
                 };
 
-                // Rounded corners: skip corner walls
+                // Rounded corners: skip corner walls.
+                // True when the tile is within `corner_radius` of both a
+                // horizontal and a vertical building edge (i.e. in any of the
+                // four corner regions).
                 let is_corner = if shape_type == SHAPE_ROUNDED {
-                    (x - b.x < corner_radius && y - b.y < corner_radius)
-                    || (x - b.x < corner_radius && b.y + b.h - 1 - y < corner_radius)
-                    || (b.x + b.w - 1 - x < corner_radius && y - b.y < corner_radius)
-                    || (b.x + b.w - 1 - x < corner_radius && b.y + b.h - 1 - y < corner_radius)
+                    (b.x + b.w - 1 - x < corner_radius || x - b.x < corner_radius)
+                        && (b.y + b.h - 1 - y < corner_radius || y - b.y < corner_radius)
                 } else {
                     false
                 };
@@ -1373,13 +1358,12 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
     for y in my + 1..my + mh - 1 {
         let pos = GridVec::new(divider_x, y);
         // Door in the divider
-        if y != my + mh / 2 && y != my + mh / 3 {
-            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+        if y != my + mh / 2 && y != my + mh / 3
+            && let Some(voxel) = map.get_voxel_at_mut(&pos) {
                 voxel.props = Some(Props::Wall);
                 map.wall_materials.insert(pos, WallMaterial::Stone);
                 map.breach_points.insert(pos);
             }
-        }
     }
 
     // Courtyard: open area in the center-right rooms (no roof)
@@ -1414,9 +1398,7 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
     for y in my..my + mh {
         for x in mx..mx + mw {
             let pos = GridVec::new(x, y);
-            if !map.building_heights.contains_key(&pos) {
-                map.building_heights.insert(pos, HeightTier::DoubleStory);
-            }
+            map.building_heights.entry(pos).or_insert(HeightTier::DoubleStory);
         }
     }
 
@@ -1882,11 +1864,10 @@ fn place_railroad(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
         // Gravel bed on either side of the track
         for &dy in &[-1i32, 1] {
             let side_pos = GridVec::new(x, y + dy);
-            if let Some(voxel) = map.get_voxel_at_mut(&side_pos) {
-                if voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+            if let Some(voxel) = map.get_voxel_at_mut(&side_pos)
+                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
                     voxel.floor = Some(Floor::Gravel);
                 }
-            }
         }
     }
 }
@@ -1939,13 +1920,12 @@ fn place_lamp_posts(map: &mut GameMap, height: CoordinateUnit, street_x: Coordin
         for &dx in &[-3i32, 3] {
             let x = street_x + dx;
             let pos = GridVec::new(x, y);
-            if let Some(voxel) = map.get_voxel_at(&pos) {
-                if voxel.props.is_none()
+            if let Some(voxel) = map.get_voxel_at(&pos)
+                && voxel.props.is_none()
                     && matches!(voxel.floor, Some(Floor::Sidewalk) | Some(Floor::Dirt) | Some(Floor::Sand))
                 {
                     set_prop(map, x, y, Props::LampPost);
                 }
-            }
         }
     }
 }

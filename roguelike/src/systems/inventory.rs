@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     CollectibleKind, Health, Hostile, Inventory, Item, ItemKind, Name, Player, Position,
-    Thrown, display_name,
+    Thrown, display_name, item_display_name,
 };
 use crate::events::{DropItemIntent, PickupItemIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
@@ -33,13 +33,8 @@ pub fn pickup_system(
         let mut picked_up = false;
 
         for &ent in entities_here {
-            if items_query.get(ent).is_ok() {
-                let item_name = items_query
-                    .get(ent)
-                    .ok()
-                    .and_then(|(_, _, n)| n)
-                    .map_or("item", |n| n.0.as_str())
-                    .to_string();
+            if let Ok((_, _, name)) = items_query.get(ent) {
+                let item_name = item_display_name(name);
 
                 // Add to inventory.
                 if let Ok(mut inv) = inventory_query.get_mut(intent.picker) {
@@ -89,7 +84,7 @@ pub fn use_item_system(
             continue;
         };
 
-        let item_name = name.map_or("item", |n| n.0.as_str()).to_string();
+        let item_name = item_display_name(name);
 
         // Dereference Bevy's `Mut<ItemKind>` wrapper to pattern match.
         // This borrows the inner value immutably first; if we need to mutate
@@ -101,16 +96,12 @@ pub fn use_item_system(
                     let healed = hp.heal(heal);
                     combat_log.push(format!("Used {item_name}, healed {healed} HP"));
                 }
-                if intent.item_index < inv.items.len() {
-                    inv.items.remove(intent.item_index);
-                }
+                inv.remove_at(intent.item_index);
                 commands.entity(item_entity).despawn();
             }
             ItemKind::Grenade { .. } => {
                 combat_log.push(format!("Used {item_name}!"));
-                if intent.item_index < inv.items.len() {
-                    inv.items.remove(intent.item_index);
-                }
+                inv.remove_at(intent.item_index);
                 commands.entity(item_entity).despawn();
             }
             ItemKind::Gun { loaded, capacity, caliber, name: gun_name, .. } => {
@@ -248,7 +239,7 @@ pub fn auto_pickup_system(
             continue;
         };
 
-        let name_str = item_name.map_or("item", |n| n.0.as_str()).to_string();
+        let name_str = item_display_name(item_name);
 
         // Handle collectible items: add to Collectibles resource instead of inventory.
         if let Some(kind) = coll_kind {
@@ -280,17 +271,14 @@ pub fn drop_item_system(
             continue;
         };
 
-        if intent.item_index >= inv.items.len() {
+        let Some(item_entity) = inv.remove_at(intent.item_index) else {
             combat_log.push("No item in that slot.".into());
             continue;
-        }
+        };
 
-        let item_entity = inv.items.remove(intent.item_index);
-        let item_name = name_query
-            .get(item_entity)
-            .ok()
-            .flatten()
-            .map_or("item".to_string(), |n| n.0.clone());
+        let item_name = item_display_name(
+            name_query.get(item_entity).ok().flatten()
+        );
 
         commands
             .entity(item_entity)
@@ -325,11 +313,9 @@ pub fn throw_system(
             continue;
         }
 
-        let item_name = name_query
-            .get(intent.item_entity)
-            .ok()
-            .flatten()
-            .map_or("item".to_string(), |n| n.0.clone());
+        let item_name = item_display_name(
+            name_query.get(intent.item_entity).ok().flatten()
+        );
 
         let origin = player_pos.as_grid_vec();
         let endpoint = origin + GridVec::new(intent.dx * intent.range, intent.dy * intent.range);

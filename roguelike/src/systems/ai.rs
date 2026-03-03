@@ -137,11 +137,10 @@ const AI_RANGED_ATTACK_RANGE: i32 = 15;
 /// adjacent to these hazards during pathfinding.
 fn is_near_danger(pos: GridVec, game_map: &GameMapResource) -> bool {
     // Check the tile itself for fire or sand/smoke clouds.
-    if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
-        if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::SandCloud)) {
+    if let Some(voxel) = game_map.0.get_voxel_at(&pos)
+        && matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::SandCloud)) {
             return true;
         }
-    }
     // Check all 8 neighbors for cactus or fire.
     for neighbor in pos.all_neighbors() {
         if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
@@ -252,11 +251,10 @@ fn has_friendly_in_path(
         }
         for &ent in spatial.entities_at(&tile) {
             if ent == self_entity { continue; }
-            if let Ok((_, _, Some(fac))) = npc_factions.get(ent) {
-                if !factions_are_hostile(my_f, *fac) {
+            if let Ok((_, _, Some(fac))) = npc_factions.get(ent)
+                && !factions_are_hostile(my_f, *fac) {
                     return true; // friendly entity in the path
                 }
-            }
         }
     }
     false
@@ -477,14 +475,13 @@ pub fn ai_system(
     for (_, _pos_ref, ai_state, _, _, faction_opt, _, _, _, _, _, _, mem_opt, _) in &ai_query {
         if !matches!(*ai_state, AiState::Chasing) { continue; }
         let Some(&f) = faction_opt else { continue; };
-        if let Some(ref mem) = mem_opt {
-            if let Some(known) = mem.last_known_pos {
+        if let Some(mem) = mem_opt
+            && let Some(known) = mem.last_known_pos {
                 let age = turn_counter.0.saturating_sub(mem.last_seen_turn);
                 if age < MEMORY_DURATION {
                     faction_alerts.entry(f).or_default().push(known);
                 }
             }
-        }
     }
 
     for (entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
@@ -545,35 +542,30 @@ pub fn ai_system(
         };
 
         // Update memory when target is visible
-        if let Some((_, tv)) = chase_target {
-            if let Some(ref mut mem) = ai_memory {
+        if let Some((_, tv)) = chase_target
+            && let Some(ref mut mem) = ai_memory {
                 mem.last_known_pos = Some(tv);
                 mem.last_seen_turn = turn_counter.0;
             }
-        }
 
         // Allied target sharing: if this NPC has no direct target but a
         // nearby ally of the same faction is chasing something, adopt
         // that target into memory so we converge on the threat.
-        if chase_target.is_none() {
-            if let Some(my_f) = my_faction {
-                if let Some(alerts) = faction_alerts.get(&my_f) {
+        if chase_target.is_none()
+            && let Some(my_f) = my_faction
+                && let Some(alerts) = faction_alerts.get(&my_f) {
                     let nearest_alert: Option<&GridVec> = alerts.iter()
                         .filter(|&&alert_pos| my_pos.chebyshev_distance(alert_pos) <= ALLY_SHARE_RANGE)
                         .min_by_key(|&&alert_pos| my_pos.chebyshev_distance(alert_pos));
-                    if let Some(&alert_pos) = nearest_alert {
-                        if let Some(ref mut mem) = ai_memory {
-                            if mem.last_known_pos.is_none()
-                                || turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION
+                    if let Some(&alert_pos) = nearest_alert
+                        && let Some(ref mut mem) = ai_memory
+                            && (mem.last_known_pos.is_none()
+                                || turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION)
                             {
                                 mem.last_known_pos = Some(alert_pos);
                                 mem.last_seen_turn = turn_counter.0;
                             }
-                        }
-                    }
                 }
-            }
-        }
 
         // Find the nearest visible floor item for scavenging.
         let nearest_item: Option<(Entity, GridVec)> = {
@@ -715,11 +707,10 @@ pub fn ai_system(
                         }
                     energy.spend_action();
                 } else {
-                    if let Some(ref mut mem) = ai_memory {
-                        if turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
+                    if let Some(ref mut mem) = ai_memory
+                        && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
                             mem.last_known_pos = None;
                         }
-                    }
                     rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                 }
@@ -761,11 +752,10 @@ pub fn ai_system(
                     continue;
                 }
 
-                if let Some(ref mut mem) = ai_memory {
-                    if turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
+                if let Some(ref mut mem) = ai_memory
+                    && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
                         mem.last_known_pos = None;
                     }
-                }
 
                 let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
 
@@ -824,7 +814,7 @@ pub fn ai_system(
             }
             AiState::Fleeing => {
                 let threat_pos = chase_target.map(|(_, tv)| tv)
-                    .or_else(|| player_vec);
+                    .or(player_vec);
 
                 if let Some(tp) = threat_pos {
                     if let Some(dir) = flee_direction(my_pos, tp, entity, &game_map, &spatial, &blockers) {
@@ -1036,8 +1026,7 @@ pub fn ai_system(
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
                     && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
-                {
-                    if let Some(ref mut inv) = inventory {
+                    && let Some(ref mut inv) = inventory {
                         let gun_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
@@ -1068,11 +1057,10 @@ pub fn ai_system(
                                     }
                         }
                     }
-                }
                 // Proactive reload: if not in LOS or out of range but have
                 // an empty gun, reload while closing distance.
-                if !used_gun && dist > 2 {
-                    if let Some(ref mut inv) = inventory {
+                if !used_gun && dist > 2
+                    && let Some(ref mut inv) = inventory {
                         let empty_gun = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded == 0 && *capacity > 0)
@@ -1085,7 +1073,6 @@ pub fn ai_system(
                                     used_gun = true;
                                 }
                     }
-                }
                 if used_gun {
                     energy.spend_action();
                     continue;
@@ -1096,16 +1083,15 @@ pub fn ai_system(
                 if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
                     && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
-                {
-                    if let Some(ref inv) = inventory {
+                    && let Some(ref inv) = inventory {
                         let bow_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Bow { .. })
                             )
                         });
-                        if let Some(bow_entity) = bow_ent {
-                            if let Ok(kind) = item_kinds.get(bow_entity) {
-                                if let ItemKind::Bow { attack: bow_atk, .. } = *kind {
+                        if let Some(bow_entity) = bow_ent
+                            && let Ok(kind) = item_kinds.get(bow_entity)
+                                && let ItemKind::Bow { attack: bow_atk, .. } = *kind {
                                     let dx = target_vec.x - my_pos.x;
                                     let dy = target_vec.y - my_pos.y;
                                     let max_comp = dx.abs().max(dy.abs()).max(1);
@@ -1120,10 +1106,7 @@ pub fn ai_system(
                                     );
                                     used_bow = true;
                                 }
-                            }
-                        }
                     }
-                }
                 if used_bow {
                     energy.spend_action();
                     continue;
@@ -1143,14 +1126,13 @@ pub fn ai_system(
                 let pref_range = personality.map(|p| p.preferred_range).unwrap_or(1);
                 let is_ranged_npc = pref_range > 1 && has_ranged_weapon(&inventory, &item_kinds);
 
-                if is_ranged_npc && dist < pref_range {
-                    if let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {
+                if is_ranged_npc && dist < pref_range
+                    && let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {
                         move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
                         update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
                         energy.spend_action();
                         continue;
                     }
-                }
 
                 // A* pathfinding toward target.
                 // Occasionally attempt to flank by adding a perpendicular

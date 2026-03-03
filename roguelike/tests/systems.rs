@@ -1409,7 +1409,7 @@ fn fov_range_increases_with_cursor_distance() {
 
     // At distance 2, range should be approximately 104 (80 base + 2*12 growth)
     let (range_mid, _) = visibility::compute_fov_params(Some(GridVec::new(2, 0)));
-    assert!(range_mid >= 95 && range_mid <= 115,
+    assert!((95..=115).contains(&range_mid),
         "At cursor distance 2, range should be ~104, got {}", range_mid);
 }
 
@@ -3011,7 +3011,7 @@ fn dynamic_rng_range_zero_to_one() {
     let rng = DynamicRng { tick: 0 };
     for key in 0..100 {
         let val = rng.roll(42, key);
-        assert!(val >= 0.0 && val < 1.0,
+        assert!((0.0..1.0).contains(&val),
             "RNG value should be in [0, 1), got {}", val);
     }
 }
@@ -3093,50 +3093,28 @@ fn bullet_speed_is_slow_enough_to_be_visible() {
     // Bullets advance ~12 tiles per game turn and freeze in mid-air
     // between turns (projectile_system skips AwaitingInput frames).
     // This makes them clearly visible as a blinking dot between player actions.
-    assert!(
-        projectile::BULLET_TILES_PER_TICK <= 15,
-        "Bullets should travel at most 15 tiles per tick for visibility, got {}",
-        projectile::BULLET_TILES_PER_TICK,
-    );
-    assert!(
-        projectile::BULLET_TILES_PER_TICK >= 8,
-        "Bullets should travel at least 8 tiles per tick to feel fast, got {}",
-        projectile::BULLET_TILES_PER_TICK,
-    );
+    const { assert!(projectile::BULLET_TILES_PER_TICK <= 15) };
+    const { assert!(projectile::BULLET_TILES_PER_TICK >= 8) };
 }
 
 #[test]
 fn shrapnel_speed_is_slow_enough_to_be_visible() {
-    assert!(
-        projectile::SHRAPNEL_TILES_PER_TICK <= 1,
-        "Shrapnel should travel at most 1 tile per tick for visibility, got {}",
-        projectile::SHRAPNEL_TILES_PER_TICK,
-    );
+    const { assert!(projectile::SHRAPNEL_TILES_PER_TICK <= 1) };
 }
 
 #[test]
 fn thrown_speed_is_slow_enough_to_be_visible() {
-    assert!(
-        projectile::THROWN_TILES_PER_TICK <= 2,
-        "Thrown items should travel at most 2 tiles per tick for visibility, got {}",
-        projectile::THROWN_TILES_PER_TICK,
-    );
+    const { assert!(projectile::THROWN_TILES_PER_TICK <= 2) };
 }
 
 #[test]
 fn bullet_faster_than_shrapnel() {
-    assert!(
-        projectile::BULLET_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK,
-        "Bullets should be faster than shrapnel",
-    );
+    const { assert!(projectile::BULLET_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK) };
 }
 
 #[test]
 fn thrown_faster_than_shrapnel() {
-    assert!(
-        projectile::THROWN_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK,
-        "Thrown items should be faster than shrapnel",
-    );
+    const { assert!(projectile::THROWN_TILES_PER_TICK > projectile::SHRAPNEL_TILES_PER_TICK) };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3558,16 +3536,14 @@ fn ai_ranged_attack_via_ranged_intent() {
 
     // The gun ammo should have decreased
     let inv = app.world().get::<Inventory>(npc).unwrap();
-    if let Some(&gun_ent) = inv.items.first() {
-        if let Some(kind) = app.world().get::<ItemKind>(gun_ent) {
-            if let ItemKind::Gun { loaded, .. } = kind {
+    if let Some(&gun_ent) = inv.items.first()
+        && let Some(kind) = app.world().get::<ItemKind>(gun_ent)
+            && let ItemKind::Gun { loaded, .. } = kind {
                 assert!(
                     *loaded < 6,
                     "Gun should have fewer rounds after firing",
                 );
             }
-        }
-    }
 }
 
 #[test]

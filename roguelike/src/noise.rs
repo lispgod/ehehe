@@ -201,9 +201,9 @@ mod tests {
         for x in -5..5 {
             for y in -5..5 {
                 let (r, g, b) = tile_color_noise(100, 100, 100, x, y, 2);
-                assert!(r >= 98 && r <= 102, "r={r} out of ±2 range for ({x},{y})");
-                assert!(g >= 98 && g <= 102, "g={g} out of ±2 range for ({x},{y})");
-                assert!(b >= 98 && b <= 102, "b={b} out of ±2 range for ({x},{y})");
+                assert!((98..=102).contains(&r), "r={r} out of ±2 range for ({x},{y})");
+                assert!((98..=102).contains(&g), "g={g} out of ±2 range for ({x},{y})");
+                assert!((98..=102).contains(&b), "b={b} out of ±2 range for ({x},{y})");
             }
         }
     }

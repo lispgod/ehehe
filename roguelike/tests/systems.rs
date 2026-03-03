@@ -1672,12 +1672,12 @@ fn sand_particles_created_with_sand_flag() {
     for dx in -2..=2 {
         for dy in -2..=2 {
             let pos = origin + GridVec::new(dx, dy);
-            particles.particles.push((pos, 12, 0, true));
+            particles.particles.push((pos, 12, 0, true, 0, 0));
         }
     }
 
     // All particles should have is_sand=true
-    assert!(particles.particles.iter().all(|(_, _, _, is_sand)| *is_sand),
+    assert!(particles.particles.iter().all(|(_, _, _, is_sand, _, _)| *is_sand),
         "Sand particles should have is_sand flag set");
 
     // Should have 25 particles (5×5 grid)
@@ -1688,7 +1688,7 @@ fn sand_particles_created_with_sand_flag() {
 fn sand_particles_persist_for_12_ticks() {
     let mut particles = SpellParticles::default();
     let origin = GridVec::new(10, 10);
-    particles.particles.push((origin, 12, 0, true));
+    particles.particles.push((origin, 12, 0, true, 0, 0));
 
     // Tick 11 times - particle should still exist
     for _ in 0..11 {
@@ -1710,7 +1710,7 @@ fn explosion_particles_are_not_sand() {
     particles.add_aoe(origin, 6);
 
     // All AoE particles should have is_sand=false
-    assert!(particles.particles.iter().all(|(_, _, _, is_sand)| !*is_sand),
+    assert!(particles.particles.iter().all(|(_, _, _, is_sand, _, _)| !*is_sand),
         "Explosion particles should NOT have is_sand flag set");
 }
 
@@ -1720,13 +1720,13 @@ fn sand_and_explosion_particles_coexist() {
     let origin = GridVec::new(10, 10);
 
     // Add sand particles
-    particles.particles.push((origin, 12, 0, true));
+    particles.particles.push((origin, 12, 0, true, 0, 0));
 
     // Add explosion particles
     particles.add_aoe(origin + GridVec::new(5, 5), 6);
 
-    let sand_count = particles.particles.iter().filter(|(_, _, _, is_sand)| *is_sand).count();
-    let explosion_count = particles.particles.iter().filter(|(_, _, _, is_sand)| !*is_sand).count();
+    let sand_count = particles.particles.iter().filter(|(_, _, _, is_sand, _, _)| *is_sand).count();
+    let explosion_count = particles.particles.iter().filter(|(_, _, _, is_sand, _, _)| !*is_sand).count();
 
     assert_eq!(sand_count, 1, "Should have 1 sand particle");
     assert!(explosion_count > 0, "Should have explosion particles");
@@ -1736,7 +1736,7 @@ fn sand_and_explosion_particles_coexist() {
 fn particles_tick_respects_delay() {
     let mut particles = SpellParticles::default();
     // Particle with delay=3
-    particles.particles.push((GridVec::new(0, 0), 6, 3, false));
+    particles.particles.push((GridVec::new(0, 0), 6, 3, false, 0, 0));
 
     // After 2 ticks, delay should be reduced but particle still waiting
     particles.tick();
@@ -2755,7 +2755,7 @@ fn spell_particles_respect_max_limit() {
 fn spell_particles_all_expire_eventually() {
     let mut particles = SpellParticles::default();
     particles.add_aoe(GridVec::new(10, 10), 6);
-    particles.particles.push((GridVec::new(0, 0), 12, 0, true));
+    particles.particles.push((GridVec::new(0, 0), 12, 0, true, 0, 0));
 
     // Tick enough times for all particles to expire
     for _ in 0..50 {
@@ -3599,7 +3599,7 @@ fn ai_kite_maintains_preferred_range() {
     // Block line of sight with a sand cloud between NPC and player so gun can't fire,
     // forcing the kite logic to trigger instead.
     app.world_mut().resource_mut::<SpellParticles>().particles.push(
-        (GridVec::new(51, 40), 5, 0, false),
+        (GridVec::new(51, 40), 5, 0, false, 0, 0),
     );
 
     let initial_dist = 2; // NPC at 52, player at 50

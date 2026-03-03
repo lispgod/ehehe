@@ -153,10 +153,10 @@ pub fn projectile_system(
 ) {
     // Projectiles only advance during actual game turns (PlayerTurn / WorldTurn).
     // During AwaitingInput they freeze in mid-air with the blinking render.
-    if let Some(ref ts) = turn_state {
-        if *ts.get() == crate::resources::TurnState::AwaitingInput {
-            return;
-        }
+    let is_awaiting = turn_state.as_ref()
+        .is_some_and(|ts| *ts.get() == crate::resources::TurnState::AwaitingInput);
+    if is_awaiting {
+        return;
     }
     // Build a lookup of hostile entities by position for O(1) hit detection.
     let mut target_by_pos: std::collections::HashMap<GridVec, Vec<(Entity, String, i32)>> =

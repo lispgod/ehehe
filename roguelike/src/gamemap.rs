@@ -151,7 +151,7 @@ impl GameMap {
         place_grand_saloon(&mut map, width, height, seed);
 
         // ── Step 5: Small parks ─────────────────────────────────────
-        place_parks(&mut map, width, height, seed, &cross_xs, &avenue_ys);
+        place_parks(&mut map, width, height, seed);
 
         // ── Step 6: Street furniture along every avenue ──────────────
         for &ay in &avenue_ys {
@@ -727,8 +727,6 @@ fn place_parks(
     width: CoordinateUnit,
     height: CoordinateUnit,
     seed: NoiseSeed,
-    _cross_xs: &[CoordinateUnit],
-    _avenue_ys: &[CoordinateUnit],
 ) {
     let park_seed = seed.wrapping_add(555666);
     let park_count = 3 + (value_noise(0, 0, park_seed) * 3.0) as i32; // 3-5 parks

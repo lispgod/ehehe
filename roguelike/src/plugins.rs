@@ -429,7 +429,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
         };
 
         let mut spawned = 0;
-        let near_group_size = 3 + (value_noise(i, 1, near_seed) * 3.0) as i32;
+        let near_group_size = 3 + (value_noise(i, 1, near_seed) * 3.0) as i32; // 3-5 per cluster
         for dy in -4..=4i32 {
             for dx in -4..=4i32 {
                 if spawned >= near_group_size {

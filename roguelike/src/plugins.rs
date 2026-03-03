@@ -13,7 +13,7 @@ use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{
     BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameMapResource, GameState, InputState,
-    KillCount, MapSeed, PendingExp, PendingNpcExp, RestartRequested, SoundEvents, SpectatingAfterDeath, SpatialIndex, SpellParticles, TurnCounter,
+    KillCount, MapSeed, RestartRequested, SoundEvents, SpectatingAfterDeath, SpatialIndex, SpellParticles, TurnCounter,
     TurnState,
 };
 use crate::systems::{ai, camera, combat, input, inventory, movement, projectile, render, spawn, spatial_index, spell, turn, visibility};
@@ -93,8 +93,6 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<CombatLog>()
             .init_resource::<TurnCounter>()
             .init_resource::<KillCount>()
-            .init_resource::<PendingExp>()
-            .init_resource::<PendingNpcExp>()
             .init_resource::<SpellParticles>()
             .init_resource::<InputState>()
             .init_resource::<RestartRequested>()
@@ -423,7 +421,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
 
                     let template_idx = templates[(spawned as usize) % templates.len()];
                     let template = &MONSTER_TEMPLATES[template_idx];
-                    spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0, 0.25);
+                    spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0, 0.25);
                     spawned += 1;
                 }
                 if spawned >= group_size {
@@ -442,7 +440,6 @@ fn restart_system(
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
     mut turn_counter: ResMut<TurnCounter>,
-    mut pending_exp: ResMut<PendingExp>,
     mut spell_particles: ResMut<SpellParticles>,
     mut input_state: ResMut<InputState>,
     mut next_game_state: ResMut<NextState<GameState>>,
@@ -465,7 +462,6 @@ fn restart_system(
     combat_log.clear();
     kill_count.0 = 0;
     turn_counter.0 = 0;
-    pending_exp.0 = 0;
     spell_particles.particles.clear();
     *input_state = InputState::default();
     *game_map = GameMapResource(GameMap::new(400, 280, seed.0));

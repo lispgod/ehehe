@@ -132,7 +132,7 @@ pub fn spell_system(
                             // Sturdy non-destructible objects survive explosions.
                             let is_indestructible = matches!(
                                 furn,
-                                Furniture::Wall | Furniture::LampPost
+                                Furniture::Wall
                                 | Furniture::HitchingPost
                             );
                             if is_water_trough {

@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Name, Player, Position, Renderable, display_name};
+use crate::components::{CollectibleKind, CombatStats, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, TurnCounter};
+use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
 use crate::typeenums::{Floor, Furniture};
 use crate::typedefs::{CoordinateUnit, RatColor};
@@ -130,27 +130,24 @@ pub fn apply_damage_system(
 }
 
 /// Despawns entities whose health has reached zero.
-/// Logs a death message, increments the kill counter for hostile entities,
-/// awards EXP to the PendingExp resource only when the player dealt the killing
-/// blow, drops the entity's entire inventory on the ground, and removes the entity.
+/// Logs a death message, increments the kill counter for hostile entities
+/// killed by the player, drops the entity's entire inventory on the ground,
+/// and removes the entity.
 /// Animals (Wildlife faction) drop nothing. Non-wildlife NPCs drop their full
 /// inventory including guns with ammo.
 /// If the player dies, transitions to the Dead state.
-/// NPCs that kill other entities also gain stat bonuses (enemy level-up).
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&ExpReward>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
     player_entities: Query<Entity, With<Player>>,
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
     mut next_game_state: ResMut<NextState<GameState>>,
     seed: Res<MapSeed>,
-    mut pending_exp: ResMut<PendingExp>,
-    mut pending_npc_exp: ResMut<PendingNpcExp>,
 ) {
     let player_entity = player_entities.single().ok();
 
-    for (entity, health, name, hostile, pos, loot_table, is_player, exp_reward, last_damage_source, inventory, faction) in &query {
+    for (entity, health, name, hostile, pos, loot_table, is_player, last_damage_source, inventory, faction) in &query {
         if !health.is_dead() {
             continue;
         }
@@ -171,13 +168,6 @@ pub fn death_system(
             );
             if player_killed {
                 kill_count.0 += 1;
-                if let Some(reward) = exp_reward {
-                    pending_exp.0 += reward.0;
-                }
-            } else if let Some(lds) = last_damage_source {
-                // NPC killed this entity — queue EXP for enemy level-up.
-                let reward = exp_reward.map(|er| er.0).unwrap_or(5);
-                pending_npc_exp.entries.push((lds.0, reward));
             }
         }
         let is_wildlife = faction.is_some_and(|f| matches!(f, Faction::Wildlife));
@@ -222,64 +212,6 @@ pub fn death_system(
             }
 
         commands.entity(entity).despawn();
-    }
-}
-
-/// Applies pending NPC EXP and handles NPC level-ups.
-/// Runs after the death system each frame.
-pub fn npc_level_up_system(
-    mut npc_query: Query<(&mut Experience, &mut Level, &mut CombatStats, &mut Health, Option<&Name>, Option<&Position>), (With<Hostile>, Without<Player>)>,
-    mut pending_npc_exp: ResMut<PendingNpcExp>,
-    mut combat_log: ResMut<CombatLog>,
-) {
-    for (killer_entity, reward) in pending_npc_exp.entries.drain(..) {
-        if let Ok((mut exp, mut level, mut stats, mut hp, killer_name, killer_pos)) = npc_query.get_mut(killer_entity) {
-            exp.current += reward;
-            while exp.ready_to_level() {
-                let new_level = exp.advance_level(&mut level);
-                stats.attack += 1;
-                hp.max += 3;
-                hp.current = hp.max;
-                let k_name = display_name(killer_name);
-                if let Some(p) = killer_pos {
-                    combat_log.push_at(format!("{k_name} levels up to {new_level}!"), p.as_grid_vec());
-                }
-            }
-        }
-    }
-}
-
-/// Applies pending EXP to the player and handles level-ups.
-/// Runs after the death system each frame.
-pub fn level_up_system(
-    mut player_query: Query<(&mut Experience, &mut Level, &mut CombatStats, &mut Health, &mut Stamina), With<Player>>,
-    mut pending_exp: ResMut<PendingExp>,
-    mut combat_log: ResMut<CombatLog>,
-) {
-    if pending_exp.0 <= 0 {
-        return;
-    }
-
-    let Ok((mut exp, mut level, mut stats, mut hp, mut stamina)) = player_query.single_mut() else {
-        pending_exp.0 = 0;
-        return;
-    };
-
-    exp.current += pending_exp.0;
-    combat_log.push(format!("+{} EXP", pending_exp.0));
-    pending_exp.0 = 0;
-
-    // Check for level-up(s).
-    while exp.ready_to_level() {
-        let new_level = exp.advance_level(&mut level);
-        // Stat bonuses per level.
-        stats.attack += 1;
-        hp.max += 5;
-        stamina.max += 5;
-        combat_log.push(format!(
-            "LEVEL UP! Now level {new_level}! ATK {} HP {} STA {}",
-            stats.attack, hp.max, stamina.max
-        ));
     }
 }
 
@@ -478,7 +410,7 @@ pub fn melee_wide_system(
                     && let Some(ref furn) = voxel.furniture {
                         let is_indestructible = matches!(
                             furn,
-                            Furniture::Wall | Furniture::LampPost
+                            Furniture::Wall
                             | Furniture::HitchingPost | Furniture::Rock
                         );
                         if !is_indestructible {

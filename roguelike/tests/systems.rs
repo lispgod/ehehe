@@ -27,8 +27,6 @@ fn test_app() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
-    app.init_resource::<PendingExp>();
-    app.init_resource::<PendingNpcExp>();
     app.init_resource::<SoundEvents>();
     app.init_resource::<CursorPosition>();
     app.init_resource::<BloodMap>();
@@ -46,7 +44,6 @@ fn test_app() -> App {
             combat::combat_system,
             combat::apply_damage_system,
             combat::death_system,
-            combat::level_up_system,
         )
             .chain(),
     );
@@ -565,8 +562,6 @@ fn test_app_with_spells() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
-    app.init_resource::<PendingExp>();
-    app.init_resource::<PendingNpcExp>();
     app.init_resource::<SoundEvents>();
     app.init_resource::<SpellParticles>();
     app.init_resource::<CursorPosition>();
@@ -587,7 +582,6 @@ fn test_app_with_spells() -> App {
             projectile::projectile_system,
             combat::apply_damage_system,
             combat::death_system,
-            combat::level_up_system,
         )
             .chain(),
     );
@@ -969,8 +963,6 @@ fn test_app_with_ranged() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
-    app.init_resource::<PendingExp>();
-    app.init_resource::<PendingNpcExp>();
     app.init_resource::<SoundEvents>();
     app.init_resource::<SpellParticles>();
     app.init_resource::<CursorPosition>();
@@ -993,7 +985,6 @@ fn test_app_with_ranged() -> App {
             projectile::projectile_system,
             combat::apply_damage_system,
             combat::death_system,
-            combat::level_up_system,
         )
             .chain(),
     );
@@ -1440,8 +1431,6 @@ fn test_app_with_cactus() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
-    app.init_resource::<PendingExp>();
-    app.init_resource::<PendingNpcExp>();
     app.init_resource::<SoundEvents>();
     app.init_resource::<CursorPosition>();
     app.init_resource::<BloodMap>();
@@ -1808,8 +1797,6 @@ fn test_app_with_ai() -> App {
     app.init_resource::<SpatialIndex>();
     app.init_resource::<CombatLog>();
     app.init_resource::<KillCount>();
-    app.init_resource::<PendingExp>();
-    app.init_resource::<PendingNpcExp>();
     app.init_resource::<SoundEvents>();
     app.init_resource::<SpellParticles>();
     app.init_resource::<CursorPosition>();
@@ -1841,8 +1828,6 @@ fn test_app_with_ai() -> App {
             projectile::projectile_system,
             combat::apply_damage_system,
             combat::death_system,
-            combat::level_up_system,
-            combat::npc_level_up_system,
         )
             .chain(),
     );
@@ -2366,8 +2351,6 @@ fn kill_awards_kill_count_with_damage_source() {
         Name("Player".into()),
         Health { current: 30, max: 30 },
         CombatStats { attack: 20 },
-        Level(1),
-        Experience { current: 0, next_level: 100 },
     )).id();
 
     let monster = app.world_mut().spawn((
@@ -2932,30 +2915,6 @@ fn multiple_kills_increment_count() {
         "Kill count should be at least 1 after killing monsters, got {}", kills.0);
 }
 
-// ─── Experience / Level Tests ────────────────────────────────────
-
-#[test]
-fn experience_ready_to_level() {
-    let exp = Experience { current: 20, next_level: 20 };
-    assert!(exp.ready_to_level());
-}
-
-#[test]
-fn experience_not_ready_when_below_threshold() {
-    let exp = Experience { current: 15, next_level: 20 };
-    assert!(!exp.ready_to_level());
-}
-
-#[test]
-fn experience_advance_level_increases_level() {
-    let mut exp = Experience { current: 25, next_level: 20 };
-    let mut level = Level(1);
-    let new_level = exp.advance_level(&mut level);
-    assert_eq!(new_level, 2);
-    assert_eq!(level.0, 2);
-    assert_eq!(exp.current, 5, "Excess EXP should carry over");
-}
-
 // ─── Collectibles Tests ─────────────────────────────────────────
 
 #[test]
@@ -2984,10 +2943,6 @@ fn collectibles_collect_adds_items() {
     let mut c = Collectibles::default();
     c.collect(CollectibleKind::Caps(10));
     assert_eq!(c.caps, 20);
-    c.collect(CollectibleKind::Bandages(5));
-    assert_eq!(c.bandages, 5);
-    c.collect(CollectibleKind::Dollars(100));
-    assert_eq!(c.dollars, 100);
 }
 
 // ─── DynamicRng Determinism Tests ────────────────────────────────

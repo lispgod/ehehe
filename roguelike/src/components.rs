@@ -451,35 +451,6 @@ pub struct LootTable {
     pub drop_chance: f64,
 }
 
-/// Experience points component for the player.
-/// Killing hostile entities awards EXP. Accumulating enough EXP triggers a level-up.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct Experience {
-    pub current: i32,
-    pub next_level: i32,
-}
-
-impl Experience {
-    /// Returns `true` if enough EXP has been accumulated for the next level.
-    pub fn ready_to_level(&self) -> bool {
-        self.current >= self.next_level
-    }
-
-    /// Consumes the EXP threshold for one level-up and recalculates the
-    /// next-level requirement. Returns the new level number.
-    pub fn advance_level(&mut self, level: &mut Level) -> i32 {
-        self.current -= self.next_level;
-        level.0 += 1;
-        self.next_level = 20 + (level.0 - 1) * 10;
-        level.0
-    }
-}
-
-/// Player level. Increases when enough EXP is accumulated.
-/// Each level grants stat bonuses (attack, max HP, max stamina).
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct Level(pub i32);
-
 /// Type of collectible supply drop.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum CollectibleKind {
@@ -492,16 +463,10 @@ pub enum CollectibleKind {
     Bullets577(i32),
     Bullets69(i32),
     Powder(i32),
-    Bandages(i32),
-    Dollars(i32),
 }
 
-/// How much EXP a hostile entity is worth when killed.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct ExpReward(pub i32);
-
 /// Tracks which entity last dealt damage to this entity.
-/// Used to attribute the killing blow for EXP rewards.
+/// Used to attribute the killing blow for kill counting.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastDamageSource(pub Entity);
 

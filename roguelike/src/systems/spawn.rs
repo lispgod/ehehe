@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, Caliber, CombatStats, Energy, ExpReward, Faction, Health, Hostile,
+    AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, Caliber, CombatStats, Energy, Faction, Health, Hostile,
     Inventory, Item, ItemKind, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Stamina, Viewshed,
 };
 use crate::grid_vec::GridVec;
@@ -68,7 +68,6 @@ pub struct MonsterTemplate {
     pub attack: i32,
     pub speed: i32,
     pub sight_range: i32,
-    pub exp_reward: i32,
     pub faction: Faction,
     /// Whether this NPC carries a gun in inventory.
     pub has_gun: bool,
@@ -82,16 +81,16 @@ pub struct MonsterTemplate {
 /// - Outlaw: 34, Vaquero: 32, Cowboy: 30, Gunslinger: 38
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Tier 1: Wildlife (lowercase symbols — animals)
-    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, speed: 50, sight_range: 6, exp_reward: 3, faction: Faction::Wildlife, has_gun: false },
-    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, speed: 20, sight_range: 8, exp_reward: 5, faction: Faction::Wildlife, has_gun: false },
+    MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, speed: 50, sight_range: 6, faction: Faction::Wildlife, has_gun: false },
+    MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, speed: 20, sight_range: 8, faction: Faction::Wildlife, has_gun: false },
     // Tier 2: Outlaws (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, speed: 34, sight_range: 8, exp_reward: 8, faction: Faction::Outlaws, has_gun: false },
+    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, speed: 34, sight_range: 8, faction: Faction::Outlaws, has_gun: false },
     // Tier 3: Vaqueros (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, speed: 32, sight_range: 10, exp_reward: 12, faction: Faction::Vaqueros, has_gun: false },
+    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, speed: 32, sight_range: 10, faction: Faction::Vaqueros, has_gun: false },
     // Tier 4: Lawmen (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, speed: 30, sight_range: 12, exp_reward: 18, faction: Faction::Lawmen, has_gun: true },
+    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Lawmen, has_gun: true },
     // Tier 5: Outlaws - Gunslinger (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, speed: 38, sight_range: 14, exp_reward: 30, faction: Faction::Outlaws, has_gun: true },
+    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, speed: 38, sight_range: 14, faction: Faction::Outlaws, has_gun: true },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,
@@ -111,7 +110,6 @@ pub fn spawn_monster(
     y: i32,
     health_bonus: i32,
     attack_bonus: i32,
-    exp_bonus: i32,
     drop_chance: f64,
 ) {
     let scaled_health = template.health + health_bonus;
@@ -250,7 +248,6 @@ pub fn spawn_monster(
             preferred_range,
         },
         LootTable { drop_chance },
-        ExpReward(template.exp_reward + exp_bonus),
         Viewshed {
             range: template.sight_range,
             visible_tiles: HashSet::new(),

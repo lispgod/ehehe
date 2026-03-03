@@ -195,17 +195,6 @@ impl GameMap {
         None
     }
 
-    /// Creates a RenderPacket (2D grid of GraphicTriples) for display,
-    /// centered on the given position with the given render dimensions.
-    pub fn create_render_packet(
-        &self,
-        center: &MyPoint,
-        render_width: u16,
-        render_height: u16,
-    ) -> RenderPacket {
-        self.create_render_packet_with_fog(center, render_width, render_height, None, None)
-    }
-
     /// Creates a RenderPacket with full fog-of-war support.
     ///
     /// Tiles are rendered in three states:
@@ -758,7 +747,7 @@ mod tests {
     fn game_map_render_packet_dimensions() {
         let map = GameMap::new(80, 50, 42);
         let center = GridVec::new(40, 25);
-        let packet = map.create_render_packet(&center, 20, 10);
+        let packet = map.create_render_packet_with_fog(&center, 20, 10, None, None);
         assert_eq!(packet.len(), 10);
         assert_eq!(packet[0].len(), 20);
     }

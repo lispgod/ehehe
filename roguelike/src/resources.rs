@@ -152,17 +152,6 @@ pub struct TurnCounter(pub u32);
 #[derive(Resource, Debug, Default)]
 pub struct KillCount(pub u32);
 
-/// Accumulates EXP from kills to be applied to the player by the level-up system.
-#[derive(Resource, Debug, Default)]
-pub struct PendingExp(pub i32);
-
-/// Accumulates EXP from kills for NPC entities (enemy level-up).
-/// Processed by the `npc_level_up_system` after death processing.
-#[derive(Resource, Debug, Default)]
-pub struct PendingNpcExp {
-    pub entries: Vec<(Entity, i32)>,
-}
-
 /// Accumulator for combat log messages displayed in the status bar.
 /// Maintains a rolling history of recent messages using a bounded
 /// ring buffer (`VecDeque`) for O(1) enqueue/dequeue — the correct
@@ -355,10 +344,6 @@ pub struct Collectibles {
     pub bullets_69: i32,
     /// Black powder charges (needed for reloading: 1 per round)
     pub powder: i32,
-    /// Bandages (healing item)
-    pub bandages: i32,
-    /// Dollars (currency)
-    pub dollars: i32,
 }
 
 impl Default for Collectibles {
@@ -373,8 +358,6 @@ impl Default for Collectibles {
             bullets_577: 0,
             bullets_69: 0,
             powder: 10,
-            bandages: 0,
-            dollars: 0,
         }
     }
 }
@@ -433,8 +416,6 @@ impl Collectibles {
             CollectibleKind::Bullets577(n) => self.bullets_577 += n,
             CollectibleKind::Bullets69(n) => self.bullets_69 += n,
             CollectibleKind::Powder(n) => self.powder += n,
-            CollectibleKind::Bandages(n) => self.bandages += n,
-            CollectibleKind::Dollars(n) => self.dollars += n,
         }
     }
 }
@@ -738,8 +719,6 @@ mod tests {
         assert_eq!(c.bullets_36, 0);
         assert_eq!(c.bullets_44, 0);
         assert_eq!(c.powder, 10);
-        assert_eq!(c.bandages, 0);
-        assert_eq!(c.dollars, 0);
     }
 
     // ─── CursorPosition default tests ───────────────────────────────

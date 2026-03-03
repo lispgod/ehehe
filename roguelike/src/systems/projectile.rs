@@ -19,6 +19,9 @@ pub const SHRAPNEL_TILES_PER_TICK: usize = 1;
 /// Knife/Tomahawk travel speed in tiles per tick.
 pub const THROWN_TILES_PER_TICK: usize = 2;
 
+/// Arrow travel speed in tiles per tick (faster than thrown, slower than bullets).
+pub const ARROW_TILES_PER_TICK: usize = 4;
+
 /// Maximum range for thrown knives and tomahawks (in tiles).
 pub const THROWN_RANGE: i32 = 12;
 
@@ -87,6 +90,38 @@ pub fn spawn_bullet(
             path,
             path_index: 1, // skip origin (index 0)
             tiles_per_tick: BULLET_TILES_PER_TICK,
+            damage,
+            penetration: damage,
+            source,
+        },
+    ));
+}
+
+/// Spawns an arrow projectile entity along a Bresenham line from origin to endpoint.
+/// Arrows travel slower than bullets and are rendered differently.
+pub fn spawn_arrow(
+    commands: &mut Commands,
+    origin: GridVec,
+    endpoint: GridVec,
+    damage: i32,
+    source: Entity,
+) {
+    let path = origin.bresenham_line(endpoint);
+    if path.len() <= 1 {
+        return;
+    }
+    let start_pos = path.get(1).copied().unwrap_or(origin);
+    commands.spawn((
+        Position { x: start_pos.x, y: start_pos.y },
+        Renderable {
+            symbol: "→".into(),
+            fg: RatColor::Rgb(139, 90, 43),
+            bg: RatColor::Black,
+        },
+        Projectile {
+            path,
+            path_index: 1,
+            tiles_per_tick: ARROW_TILES_PER_TICK,
             damage,
             penetration: damage,
             source,

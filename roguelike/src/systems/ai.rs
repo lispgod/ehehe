@@ -305,6 +305,22 @@ fn has_loaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut It
     })
 }
 
+/// Returns `true` if the NPC has a bow in inventory.
+fn has_bow(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    inventory.as_ref().is_some_and(|inv| {
+        inv.items.iter().any(|&ent| {
+            item_kinds.get(ent).ok().is_some_and(|k|
+                matches!(*k, ItemKind::Bow { .. })
+            )
+        })
+    })
+}
+
+/// Returns `true` if the NPC has a ranged weapon (loaded gun or bow).
+fn has_ranged_weapon(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    has_loaded_gun(inventory, item_kinds) || has_bow(inventory, item_kinds)
+}
+
 /// Returns `true` if the NPC should consider fleeing based on health and personality.
 fn should_flee(health: &Option<Mut<Health>>, personality: Option<&AiPersonality>, inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
     let Some(hp) = health else { return false; };
@@ -395,6 +411,7 @@ fn kite_direction(
 /// **Memory**: NPCs remember the last known position of their target. When
 /// sight is lost, they navigate to the remembered position before giving up.
 pub fn ai_system(
+    mut commands: Commands,
     mut ai_query: Query<
         (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
         Without<Player>,
@@ -992,6 +1009,44 @@ pub fn ai_system(
                     continue;
                 }
 
+                // Bow attack: fire an arrow projectile (unlimited ammo).
+                let mut used_bow = false;
+                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
+                {
+                    if let Some(ref inv) = inventory {
+                        let bow_ent = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Bow { .. })
+                            )
+                        });
+                        if let Some(bow_entity) = bow_ent {
+                            if let Ok(kind) = item_kinds.get(bow_entity) {
+                                if let ItemKind::Bow { attack: bow_atk, .. } = *kind {
+                                    let dx = target_vec.x - my_pos.x;
+                                    let dy = target_vec.y - my_pos.y;
+                                    let max_comp = dx.abs().max(dy.abs()).max(1);
+                                    let scale = AI_RANGED_ATTACK_RANGE.div_euclid(max_comp).max(1);
+                                    let endpoint = my_pos + GridVec::new(dx * scale, dy * scale);
+                                    crate::systems::projectile::spawn_arrow(
+                                        &mut commands,
+                                        my_pos,
+                                        endpoint,
+                                        bow_atk,
+                                        entity,
+                                    );
+                                    used_bow = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if used_bow {
+                    energy.spend_action();
+                    continue;
+                }
+
                 // Adjacent to target? Melee attack.
                 if dist == 1 {
                     attack_intents.write(AttackIntent {
@@ -1004,7 +1059,7 @@ pub fn ai_system(
 
                 // Tactical range management (kiting) for ranged NPCs
                 let pref_range = personality.map(|p| p.preferred_range).unwrap_or(1);
-                let is_ranged_npc = pref_range > 1 && has_loaded_gun(&inventory, &item_kinds);
+                let is_ranged_npc = pref_range > 1 && has_ranged_weapon(&inventory, &item_kinds);
 
                 if is_ranged_npc && dist < pref_range {
                     if let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {

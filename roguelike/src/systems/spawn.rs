@@ -27,11 +27,18 @@ const NICKNAMES: &[&str] = &[
     "Grizzly", "Hawk", "Longshot", "Maverick", "Sundown",
 ];
 
-const LAST_NAMES: &[&str] = &[
-    "Crowley", "Boone", "Shaw", "Hollister", "Cartwright",
-    "McAllister", "Dalton", "Cassidy", "Harlan", "Garrett",
-    "Ringo", "Earp", "Masterson", "Holliday", "Calhoun",
-    "Braddock", "Pickett", "Stanton", "Thornton", "Wainwright",
+const LAST_NAMES_FIRST: &[&str] = &[
+    "Red", "Black", "White", "Green", "Brown",
+    "Wor", "Win", "North", "South", "West",
+    "East", "High", "Low", "Long", "Short",
+    "Stone", "Iron", "Gold", "Silver", "Ash",
+];
+
+const LAST_NAMES_SECOND: &[&str] = &[
+    "shire", "berry", "wood", "field", "ley",
+    "ford", "ton", "ham", "bridge", "well",
+    "worth", "wick", "stead", "stone", "dale",
+    "grove", "ridge", "croft", "brook", "lake",
 ];
 
 // ── Faction-specific name pools ──────────────────────────────────
@@ -43,10 +50,18 @@ const INDIAN_FIRST_NAMES: &[&str] = &[
     "Tashunka", "Wicasa", "Tatanka", "Kohana", "Kuruk",
 ];
 
-const INDIAN_LAST_NAMES: &[&str] = &[
-    "Red Cloud", "Black Elk", "Iron Hawk", "Tall Bull", "Crow Dog",
-    "Running Bear", "Stone Wolf", "Grey Eagle", "Swift Arrow", "Thunder Horse",
-    "Sitting Bear", "Lone Wolf", "Two Moons", "Rain Walker", "Night Sky",
+const INDIAN_LAST_ADJ: &[&str] = &[
+    "Red", "Black", "Iron", "Tall", "Grey",
+    "Swift", "Running", "Sitting", "Lone", "Thunder",
+    "Silent", "Painted", "Broken", "Rising", "Burning",
+    "White", "Dark", "Wild", "Strong", "High",
+];
+
+const INDIAN_LAST_NOUN: &[&str] = &[
+    "Cloud", "Elk", "Hawk", "Bull", "Dog",
+    "Bear", "Wolf", "Eagle", "Arrow", "Horse",
+    "Moon", "Sky", "River", "Feather", "Stone",
+    "Fire", "Wind", "Star", "Crow", "Deer",
 ];
 
 const VAQUERO_FIRST_NAMES: &[&str] = &[
@@ -76,6 +91,8 @@ const SHERIFF_LAST_NAMES: &[&str] = &[
 
 /// Generates a procedural faction-appropriate name from position hash.
 /// About 30% of NPCs get a nickname (e.g., "Dusty" Silas Crowley).
+/// Indian last names use an adjective+noun system (e.g., "Red Cloud").
+/// Anglo last names use a compound word system (e.g., "Redshire").
 fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
     /// Out of 10, how many NPCs receive a nickname prefix.
     const NICKNAME_CHANCE: usize = 3;
@@ -84,16 +101,31 @@ fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
     let hash2 = (x.wrapping_mul(1009) ^ y.wrapping_mul(7529)).unsigned_abs() as usize;
     let hash3 = (x.wrapping_mul(2903) ^ y.wrapping_mul(3571)).unsigned_abs() as usize;
     let hash4 = (x.wrapping_mul(5381) ^ y.wrapping_mul(9103)).unsigned_abs() as usize;
+    let hash5 = (x.wrapping_mul(6173) ^ y.wrapping_mul(8219)).unsigned_abs() as usize;
 
-    let (first_pool, last_pool) = match faction {
-        Faction::Indians => (INDIAN_FIRST_NAMES, INDIAN_LAST_NAMES),
-        Faction::Vaqueros => (VAQUERO_FIRST_NAMES, VAQUERO_LAST_NAMES),
-        Faction::Sheriff => (SHERIFF_FIRST_NAMES, SHERIFF_LAST_NAMES),
-        _ => (FIRST_NAMES, LAST_NAMES),
+    let first = match faction {
+        Faction::Indians => INDIAN_FIRST_NAMES[hash1 % INDIAN_FIRST_NAMES.len()],
+        Faction::Vaqueros => VAQUERO_FIRST_NAMES[hash1 % VAQUERO_FIRST_NAMES.len()],
+        Faction::Sheriff => SHERIFF_FIRST_NAMES[hash1 % SHERIFF_FIRST_NAMES.len()],
+        _ => FIRST_NAMES[hash1 % FIRST_NAMES.len()],
     };
 
-    let first = first_pool[hash1 % first_pool.len()];
-    let last = last_pool[hash2 % last_pool.len()];
+    let last: String = match faction {
+        Faction::Indians => {
+            // Adjective + Noun system for Indian last names.
+            let adj = INDIAN_LAST_ADJ[hash2 % INDIAN_LAST_ADJ.len()];
+            let noun = INDIAN_LAST_NOUN[hash5 % INDIAN_LAST_NOUN.len()];
+            format!("{adj} {noun}")
+        }
+        Faction::Vaqueros => VAQUERO_LAST_NAMES[hash2 % VAQUERO_LAST_NAMES.len()].into(),
+        Faction::Sheriff => SHERIFF_LAST_NAMES[hash2 % SHERIFF_LAST_NAMES.len()].into(),
+        _ => {
+            // Compound word system for Anglo last names.
+            let first_part = LAST_NAMES_FIRST[hash2 % LAST_NAMES_FIRST.len()];
+            let second_part = LAST_NAMES_SECOND[hash5 % LAST_NAMES_SECOND.len()];
+            format!("{first_part}{second_part}")
+        }
+    };
 
     if hash3 % 10 < NICKNAME_CHANCE {
         let nick = NICKNAMES[hash4 % NICKNAMES.len()];
@@ -217,6 +249,21 @@ pub fn spawn_monster(
         inv_items.push(gun);
     }
 
+    // Indians get a bow instead of a gun.
+    if matches!(template.faction, Faction::Indians) {
+        let bow = commands.spawn((
+            Item,
+            Name("Bow".into()),
+            Renderable {
+                symbol: ")".into(),
+                fg: RatColor::Rgb(139, 90, 43),
+                bg: RatColor::Black,
+            },
+            ItemKind::Bow { attack: scaled_attack, blunt_damage: 3 },
+        )).id();
+        inv_items.push(bow);
+    }
+
     // Deterministic item assignment based on position.
     // Some humanoid NPCs carry throwable items (dynamite or molotovs).
     if !matches!(template.faction, Faction::Wildlife) {
@@ -256,7 +303,7 @@ pub fn spawn_monster(
     };
 
     // Compute personality based on faction and position hash.
-    let is_ranged = template.has_gun;
+    let is_ranged = template.has_gun || matches!(template.faction, Faction::Indians);
     let personality_hash = item_hash.wrapping_mul(7) ^ (x.wrapping_add(y)).unsigned_abs();
     let aggression = 0.3 + (personality_hash % 7) as f64 * 0.1; // 0.3 – 0.9
     let courage = if matches!(template.faction, Faction::Wildlife) {

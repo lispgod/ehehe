@@ -136,7 +136,7 @@ const AI_RANGED_ATTACK_RANGE: i32 = 15;
 /// hazard: cactus, fire, or smoke/sand clouds. NPCs avoid walking into or
 /// adjacent to these hazards during pathfinding.
 fn is_near_danger(pos: GridVec, game_map: &GameMapResource) -> bool {
-    // Check the tile itself for fire or smoke.
+    // Check the tile itself for fire or sand/smoke clouds.
     if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
         if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::SandCloud)) {
             return true;

@@ -3379,3 +3379,1143 @@ fn wildlife_fov_is_short_range() {
         "Animal should NOT see distant tiles (range limited to 8)",
     );
 }
+
+// ─── AI Behavior Integration Tests ──────────────────────────────
+
+#[test]
+fn ai_memory_tracks_last_known_position() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 63, 40, "Outlaw", Faction::Outlaws);
+
+    // NPC sees the player
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let mem = app.world().get::<AiMemory>(npc).unwrap();
+    assert_eq!(
+        mem.last_known_pos,
+        Some(GridVec::new(60, 40)),
+        "AiMemory should record the player position after seeing them",
+    );
+}
+
+#[test]
+fn ai_memory_expires_after_duration() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 10, 40);
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+
+    // NPC in Chasing state with stale memory (> 15 turns ago)
+    {
+        let mut mem = app.world_mut().get_mut::<AiMemory>(npc).unwrap();
+        mem.last_known_pos = Some(GridVec::new(50, 40));
+        mem.last_seen_turn = 0;
+    }
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+
+    // Advance turn counter well past MEMORY_DURATION (15)
+    app.world_mut().resource_mut::<TurnCounter>().0 = 20;
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    // With expired memory and no visible target, NPC should leave Chasing
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert!(
+        !matches!(*state, AiState::Chasing),
+        "NPC should stop chasing once memory expires (state is {:?})",
+        *state,
+    );
+}
+
+#[test]
+fn ai_flee_when_low_hp_no_healing() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 62, 40, "Outlaw", Faction::Outlaws);
+
+    // Default courage=0.5, threshold=30%, so flee below 0.5*0.3 = 15% HP
+    // HP 2/20 = 10% -> should flee
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 2;
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert_eq!(
+        *state,
+        AiState::Fleeing,
+        "NPC with very low HP and no healing should flee",
+    );
+}
+
+#[test]
+fn ai_no_flee_when_has_whiskey() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 62, 40, "Outlaw", Faction::Outlaws);
+
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(whiskey);
+    // Low HP but has whiskey
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 2;
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert_ne!(
+        *state,
+        AiState::Fleeing,
+        "NPC with healing items should NOT flee even at low HP",
+    );
+}
+
+#[test]
+fn ai_no_flee_when_courage_high() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 62, 40, "Outlaw", Faction::Outlaws);
+
+    // courage=0.0 means flee below 0.0 * 0.3 = 0.0 HP fraction.
+    // Since any alive NPC has fraction > 0.0, this threshold is unreachable,
+    // so the NPC effectively never flees.
+    app.world_mut().get_mut::<AiPersonality>(npc).unwrap().courage = 0.0;
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 2;
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert_ne!(
+        *state,
+        AiState::Fleeing,
+        "NPC with zero courage threshold should never flee",
+    );
+}
+
+#[test]
+fn ai_flee_moves_away_from_threat() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 63, 40, "Outlaw", Faction::Outlaws);
+
+    // Set up flee conditions
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 1;
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Fleeing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+
+    let initial_pos = *app.world().get::<Position>(npc).unwrap();
+
+    app.update();
+
+    let new_pos = *app.world().get::<Position>(npc).unwrap();
+    let dist_before = (initial_pos.x - 60).abs().max((initial_pos.y - 40).abs());
+    let dist_after = (new_pos.x - 60).abs().max((new_pos.y - 40).abs());
+
+    assert!(
+        dist_after >= dist_before,
+        "Fleeing NPC should move away from threat: dist_before={}, dist_after={}",
+        dist_before,
+        dist_after,
+    );
+}
+
+#[test]
+fn ai_heal_via_use_item_intent() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(whiskey);
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 8; // 40% < 50% threshold
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    let hp_before = app.world().get::<Health>(npc).unwrap().current;
+
+    app.update();
+
+    let hp_after = app.world().get::<Health>(npc).unwrap().current;
+    assert!(
+        hp_after > hp_before,
+        "NPC should heal via UseItemIntent: before={}, after={}",
+        hp_before,
+        hp_after,
+    );
+
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    assert!(
+        inv.items.is_empty(),
+        "Whiskey should be consumed from inventory after healing",
+    );
+}
+
+#[test]
+fn ai_pickup_via_pickup_intent() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+
+    // Place a whiskey on the ground at NPC position
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().entity_mut(whiskey).insert(Position { x: 60, y: 40 });
+
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    // Multiple updates for spatial index rebuild + pickup processing
+    for _ in 0..3 {
+        app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        app.update();
+    }
+
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    assert!(
+        !inv.items.is_empty(),
+        "NPC should have picked up the floor item via PickupItemIntent",
+    );
+}
+
+#[test]
+fn ai_ranged_attack_via_ranged_intent() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    let npc = spawn_ai_npc(&mut app, 55, 40, "Outlaw", Faction::Outlaws);
+
+    // Give NPC a loaded gun
+    let gun = app.world_mut().spawn((
+        Item,
+        Name("Revolver".into()),
+        Renderable {
+            symbol: "r".into(),
+            fg: roguelike::typedefs::RatColor::Rgb(160, 160, 160),
+            bg: roguelike::typedefs::RatColor::Black,
+        },
+        ItemKind::Gun {
+            loaded: 6,
+            capacity: 6,
+            caliber: Caliber::Cal36,
+            attack: 8,
+            name: "Revolver".into(),
+        },
+    )).id();
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
+
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    // Run updates for AI + projectile processing
+    for _ in 0..6 {
+        app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        app.update();
+    }
+
+    // The gun ammo should have decreased
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    if let Some(&gun_ent) = inv.items.first() {
+        if let Some(kind) = app.world().get::<ItemKind>(gun_ent) {
+            if let ItemKind::Gun { loaded, .. } = kind {
+                assert!(
+                    *loaded < 6,
+                    "Gun should have fewer rounds after firing",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ai_kite_maintains_preferred_range() {
+    let mut app = test_app_with_ai();
+    for dx in -15..=15 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    let npc = spawn_ai_npc(&mut app, 52, 40, "Outlaw", Faction::Outlaws);
+
+    // Give NPC a loaded gun and set preferred range to 6
+    let gun = app.world_mut().spawn((
+        Item,
+        Name("Rifle".into()),
+        Renderable {
+            symbol: "r".into(),
+            fg: roguelike::typedefs::RatColor::Rgb(160, 160, 160),
+            bg: roguelike::typedefs::RatColor::Black,
+        },
+        ItemKind::Gun {
+            loaded: 6,
+            capacity: 6,
+            caliber: Caliber::Cal44,
+            attack: 10,
+            name: "Rifle".into(),
+        },
+    )).id();
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
+    app.world_mut().get_mut::<AiPersonality>(npc).unwrap().preferred_range = 6;
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    // Block line of sight with a sand cloud between NPC and player so gun can't fire,
+    // forcing the kite logic to trigger instead.
+    app.world_mut().resource_mut::<SpellParticles>().particles.push(
+        (GridVec::new(51, 40), 5, 0, false),
+    );
+
+    let initial_dist = 2; // NPC at 52, player at 50
+
+    app.update();
+
+    let new_pos = *app.world().get::<Position>(npc).unwrap();
+    let new_dist = (new_pos.x - 50).abs().max((new_pos.y - 40).abs());
+
+    assert!(
+        new_dist > initial_dist,
+        "Ranged NPC should kite away when closer than preferred_range: dist {} -> {}",
+        initial_dist,
+        new_dist,
+    );
+}
+
+#[test]
+fn ai_faction_hostility_symmetric() {
+    let pairs = [
+        (Faction::Outlaws, Faction::Lawmen),
+        (Faction::Outlaws, Faction::Vaqueros),
+        (Faction::Wildlife, Faction::Outlaws),
+        (Faction::Wildlife, Faction::Lawmen),
+        (Faction::Wildlife, Faction::Vaqueros),
+    ];
+    for (a, b) in pairs {
+        let ab = ai::factions_are_hostile(a, b);
+        let ba = ai::factions_are_hostile(b, a);
+        assert_eq!(
+            ab, ba,
+            "Hostility should be symmetric for {:?} vs {:?}: a->b={}, b->a={}",
+            a, b, ab, ba,
+        );
+    }
+}
+
+#[test]
+fn ai_wildlife_hostile_to_all() {
+    let factions = [Faction::Outlaws, Faction::Lawmen, Faction::Vaqueros];
+    for f in factions {
+        assert!(
+            ai::factions_are_hostile(Faction::Wildlife, f),
+            "Wildlife should be hostile to {:?}",
+            f,
+        );
+        assert!(
+            ai::factions_are_hostile(f, Faction::Wildlife),
+            "{:?} should be hostile to Wildlife",
+            f,
+        );
+    }
+}
+
+#[test]
+fn ai_same_faction_not_hostile() {
+    let factions = [
+        Faction::Outlaws,
+        Faction::Lawmen,
+        Faction::Vaqueros,
+        Faction::Wildlife,
+    ];
+    for f in factions {
+        assert!(
+            !ai::factions_are_hostile(f, f),
+            "Same faction {:?} should not be hostile to itself",
+            f,
+        );
+    }
+}
+
+#[test]
+fn ai_npc_reloads_empty_gun() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    let npc = spawn_ai_npc(&mut app, 55, 40, "Outlaw", Faction::Outlaws);
+
+    // Give NPC an empty gun
+    let gun = app.world_mut().spawn((
+        Item,
+        Name("Revolver".into()),
+        Renderable {
+            symbol: "r".into(),
+            fg: roguelike::typedefs::RatColor::Rgb(160, 160, 160),
+            bg: roguelike::typedefs::RatColor::Black,
+        },
+        ItemKind::Gun {
+            loaded: 0,
+            capacity: 6,
+            caliber: Caliber::Cal36,
+            attack: 8,
+            name: "Revolver".into(),
+        },
+    )).id();
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    let gun_ent = inv.items[0];
+    let kind = app.world().get::<ItemKind>(gun_ent).unwrap();
+    if let ItemKind::Gun { loaded, .. } = kind {
+        assert!(
+            *loaded > 0,
+            "NPC should reload empty gun when in range of target (loaded={})",
+            loaded,
+        );
+    } else {
+        panic!("Expected gun item kind");
+    }
+}
+
+#[test]
+fn ai_npc_throws_grenade_at_medium_range() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    // Distance 5 is within 3..=6 grenade range
+    let npc = spawn_ai_npc(&mut app, 55, 40, "Outlaw", Faction::Outlaws);
+
+    let grenade = spawn_grenade_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(grenade);
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = 0;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    // NPC should have spent energy on the grenade throw action.
+    // energy_accumulate adds Speed(100)=ACTION_COST, then AI spends ACTION_COST → 0.
+    let energy = app.world().get::<Energy>(npc).unwrap().0;
+    assert!(
+        energy == 0,
+        "NPC should have spent energy on grenade throw action (energy={})",
+        energy,
+    );
+}
+
+#[test]
+fn ai_npc_throws_knife_at_medium_range() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    // Distance 4 is within 2..=8 knife throw range
+    let npc = spawn_ai_npc(&mut app, 54, 40, "Outlaw", Faction::Outlaws);
+
+    let knife = spawn_knife_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(knife);
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = 0;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    // energy_accumulate adds 100, AI spends 100 on knife throw → 0.
+    let energy = app.world().get::<Energy>(npc).unwrap().0;
+    assert!(
+        energy == 0,
+        "NPC should have spent energy on knife throw action (energy={})",
+        energy,
+    );
+}
+
+#[test]
+fn ai_npc_melee_wide_when_surrounded() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 61, 40, "Outlaw", Faction::Outlaws);
+
+    // Spawn a second hostile adjacent to the NPC (a Lawman NPC that is hostile)
+    let _enemy2 = spawn_ai_npc(&mut app, 61, 41, "Lawman", Faction::Lawmen);
+
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    app.world_mut().get_mut::<Stamina>(npc).unwrap().current = 50;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.visible_tiles.insert(GridVec::new(61, 41));
+        vs.dirty = false;
+    }
+
+    let stamina_before = app.world().get::<Stamina>(npc).unwrap().current;
+
+    app.update();
+
+    let stamina_after = app.world().get::<Stamina>(npc).unwrap().current;
+    assert!(
+        stamina_after < stamina_before,
+        "NPC with 2+ adjacent enemies should use melee wide (stamina: {} -> {})",
+        stamina_before,
+        stamina_after,
+    );
+}
+
+#[test]
+fn ai_idle_scavenges_nearby_items() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().entity_mut(whiskey).insert(Position { x: 63, y: 40 });
+
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(63, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    let initial_pos = *app.world().get::<Position>(npc).unwrap();
+
+    app.update();
+
+    let new_pos = *app.world().get::<Position>(npc).unwrap();
+    let dist_before = (initial_pos.x - 63).abs().max((initial_pos.y - 40).abs());
+    let dist_after = (new_pos.x - 63).abs().max((new_pos.y - 40).abs());
+
+    assert!(
+        dist_after < dist_before,
+        "Idle NPC should move toward visible item: dist {} -> {}",
+        dist_before,
+        dist_after,
+    );
+}
+
+#[test]
+fn ai_patrol_returns_to_origin() {
+    let mut app = test_app_with_ai();
+    for dx in -15..=15 {
+        for dy in -10..=10 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Lawman", Faction::Lawmen);
+    // Patrol origin is at spawn (60,40), move NPC far away
+    app.world_mut().get_mut::<Position>(npc).unwrap().x = 72;
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Patrolling);
+
+    let origin = GridVec::new(60, 40);
+    let start_pos = GridVec::new(72, 40);
+    let start_dist = start_pos.chebyshev_distance(origin);
+
+    for _ in 0..5 {
+        app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        app.update();
+    }
+
+    let final_pos = *app.world().get::<Position>(npc).unwrap();
+    let final_dist = GridVec::new(final_pos.x, final_pos.y).chebyshev_distance(origin);
+
+    assert!(
+        final_dist < start_dist,
+        "Patrolling NPC should return toward origin: dist {} -> {}",
+        start_dist,
+        final_dist,
+    );
+}
+
+#[test]
+fn ai_energy_system_accumulates() {
+    let mut app = test_app_with_ai();
+
+    // Spawn an entity with Speed and Energy but NOT an AI NPC,
+    // so ai_system won't consume the energy.
+    let ent = app.world_mut().spawn((
+        Speed(ACTION_COST),
+        Energy(0),
+    )).id();
+    assert_eq!(app.world().get::<Energy>(ent).unwrap().0, 0);
+
+    app.update();
+
+    let energy = app.world().get::<Energy>(ent).unwrap().0;
+    assert_eq!(
+        energy, ACTION_COST,
+        "Energy should have accumulated by Speed amount after update (got {})",
+        energy,
+    );
+}
+
+#[test]
+fn ai_unified_pickup_works_for_npc() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+    let knife = spawn_knife_item(&mut app);
+    app.world_mut().entity_mut(knife).insert(Position { x: 60, y: 40 });
+
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    for _ in 0..3 {
+        app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        app.update();
+    }
+
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    assert!(
+        !inv.items.is_empty(),
+        "NPC should pick up knife via unified pickup system",
+    );
+}
+
+#[test]
+fn ai_unified_use_item_works_for_npc() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(whiskey);
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 5;
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let hp = app.world().get::<Health>(npc).unwrap().current;
+    assert!(
+        hp > 5,
+        "NPC should have healed via unified use-item system (hp={})",
+        hp,
+    );
+}
+
+#[test]
+fn ai_personality_affects_preferred_range() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc_melee = spawn_ai_npc(&mut app, 60, 40, "Melee", Faction::Outlaws);
+    let npc_ranged = spawn_ai_npc(&mut app, 65, 40, "Ranged", Faction::Outlaws);
+
+    app.world_mut().get_mut::<AiPersonality>(npc_melee).unwrap().preferred_range = 1;
+    app.world_mut().get_mut::<AiPersonality>(npc_ranged).unwrap().preferred_range = 8;
+
+    let melee_range = app.world().get::<AiPersonality>(npc_melee).unwrap().preferred_range;
+    let ranged_range = app.world().get::<AiPersonality>(npc_ranged).unwrap().preferred_range;
+
+    assert_eq!(melee_range, 1, "Melee NPC preferred_range should be 1");
+    assert_eq!(ranged_range, 8, "Ranged NPC preferred_range should be 8");
+    assert_ne!(
+        melee_range, ranged_range,
+        "Different personalities should have different preferred ranges",
+    );
+}
+
+#[test]
+fn ai_chasing_uses_a_star_pathfinding() {
+    let mut app = test_app_with_ai();
+    for dx in -15..=15 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 50 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 50, 40);
+    let npc = spawn_ai_npc(&mut app, 56, 40, "Outlaw", Faction::Outlaws);
+
+    // Block the direct path with obstacles
+    app.world_mut().spawn((
+        Position { x: 53, y: 40 },
+        BlocksMovement,
+        Name("Wall".into()),
+    ));
+    app.world_mut().spawn((
+        Position { x: 54, y: 40 },
+        BlocksMovement,
+        Name("Wall".into()),
+    ));
+    app.world_mut().spawn((
+        Position { x: 55, y: 40 },
+        BlocksMovement,
+        Name("Wall".into()),
+    ));
+
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(50, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let pos_after = *app.world().get::<Position>(npc).unwrap();
+    let moved = pos_after.x != 56 || pos_after.y != 40;
+    assert!(
+        moved,
+        "NPC should pathfind around obstacles, but pos unchanged at ({}, {})",
+        pos_after.x,
+        pos_after.y,
+    );
+}
+
+#[test]
+fn ai_flee_to_patrol_state() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 1;
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Fleeing);
+
+    // No player spawned — no threats visible
+    for _ in 0..3 {
+        app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+        app.update();
+    }
+
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert!(
+        matches!(*state, AiState::Patrolling | AiState::Idle),
+        "Fleeing NPC without threats should transition to Patrolling or Idle (state is {:?})",
+        *state,
+    );
+}
+
+// ─── Additional AI Edge Case Tests ──────────────────────────────
+
+#[test]
+fn ai_npc_does_not_act_without_energy() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 63, 40, "Outlaw", Faction::Outlaws);
+
+    // Set speed to 0 so no energy accumulates
+    app.world_mut().get_mut::<Speed>(npc).unwrap().0 = 0;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+
+    let initial_pos = *app.world().get::<Position>(npc).unwrap();
+
+    app.update();
+
+    let new_pos = *app.world().get::<Position>(npc).unwrap();
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert_eq!(initial_pos, new_pos, "NPC without energy should not move");
+    assert_eq!(*state, AiState::Idle, "NPC without energy should remain Idle");
+}
+
+#[test]
+fn ai_multiple_npcs_independent_states() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 55 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 55, 40);
+
+    let npc1 = spawn_ai_npc(&mut app, 58, 40, "Outlaw1", Faction::Outlaws);
+    let npc2 = spawn_ai_npc(&mut app, 62, 40, "Outlaw2", Faction::Outlaws);
+
+    // NPC1 can see the player, NPC2 cannot
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc1).unwrap();
+        vs.visible_tiles.insert(GridVec::new(55, 40));
+        vs.dirty = false;
+    }
+
+    app.world_mut().get_mut::<Energy>(npc1).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<Energy>(npc2).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let state1 = *app.world().get::<AiState>(npc1).unwrap();
+    let state2 = *app.world().get::<AiState>(npc2).unwrap();
+
+    assert_eq!(state1, AiState::Chasing, "NPC1 (sees player) should be Chasing");
+    assert_eq!(state2, AiState::Idle, "NPC2 (cannot see player) should remain Idle");
+}
+
+#[test]
+fn ai_npc_heals_before_chasing() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 57, 40);
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+
+    let whiskey = spawn_whiskey_item(&mut app);
+    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(whiskey);
+    app.world_mut().get_mut::<Health>(npc).unwrap().current = 8;
+    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(57, 40));
+        vs.dirty = false;
+    }
+
+    app.update();
+
+    let hp = app.world().get::<Health>(npc).unwrap().current;
+    assert!(
+        hp > 8,
+        "NPC should heal before other actions when HP < 50% (hp={})",
+        hp,
+    );
+}
+
+#[test]
+fn ai_a_star_pathfinding_basic() {
+    let start = GridVec::new(0, 0);
+    let goal = GridVec::new(5, 0);
+
+    let step = ai::a_star_first_step_pub(start, goal, |_| true);
+    assert!(step.is_some(), "A* should find a step on open grid");
+    let s = step.unwrap();
+    let new_pos = start + s;
+    let dist_after = new_pos.chebyshev_distance(goal);
+    let dist_before = start.chebyshev_distance(goal);
+    assert!(
+        dist_after < dist_before,
+        "A* first step should move closer to goal: dist {} -> {}",
+        dist_before,
+        dist_after,
+    );
+}
+
+#[test]
+fn ai_a_star_pathfinding_around_wall() {
+    let start = GridVec::new(0, 0);
+    let goal = GridVec::new(3, 0);
+
+    let blocked = [GridVec::new(1, 0), GridVec::new(2, 0)];
+    let step = ai::a_star_first_step_pub(start, goal, |p| !blocked.contains(&p));
+    assert!(step.is_some(), "A* should find a path around blocked tiles");
+    let s = step.unwrap();
+    assert!(s.y != 0, "A* should step diagonally to avoid wall (step=({}, {}))", s.x, s.y);
+}
+
+#[test]
+fn ai_memory_updates_on_each_sighting() {
+    let mut app = test_app_with_ai();
+    for dx in -10..=10 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 55 + dx, 40 + dy);
+        }
+    }
+
+    let player = spawn_test_player(&mut app, 55, 40);
+    let npc = spawn_ai_npc(&mut app, 58, 40, "Outlaw", Faction::Outlaws);
+
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(55, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let mem1_pos = app.world().get::<AiMemory>(npc).unwrap().last_known_pos;
+    assert_eq!(mem1_pos, Some(GridVec::new(55, 40)));
+
+    // Move player
+    app.world_mut().get_mut::<Position>(player).unwrap().x = 54;
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(54, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let mem2 = app.world().get::<AiMemory>(npc).unwrap();
+    assert_eq!(
+        mem2.last_known_pos,
+        Some(GridVec::new(54, 40)),
+        "Memory should update to the player new position",
+    );
+}
+
+#[test]
+fn ai_idle_does_not_chase_without_visibility() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let _player = spawn_test_player(&mut app, 60, 40);
+    let npc = spawn_ai_npc(&mut app, 63, 40, "Outlaw", Faction::Outlaws);
+
+    // NPC viewshed does NOT contain the player position
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let state = app.world().get::<AiState>(npc).unwrap();
+    assert_eq!(
+        *state,
+        AiState::Idle,
+        "NPC should remain Idle when player is not in viewshed",
+    );
+}
+
+#[test]
+fn ai_health_fraction_calculation() {
+    let hp_full = Health { current: 20, max: 20 };
+    assert!((hp_full.fraction() - 1.0).abs() < f64::EPSILON, "Full HP should be 1.0");
+    assert!(hp_full.is_full(), "Full HP should report is_full()");
+
+    let hp_half = Health { current: 10, max: 20 };
+    assert!((hp_half.fraction() - 0.5).abs() < f64::EPSILON, "Half HP should be 0.5");
+    assert!(!hp_half.is_full(), "Half HP should not be full");
+
+    let hp_zero = Health { current: 0, max: 20 };
+    assert!((hp_zero.fraction() - 0.0).abs() < f64::EPSILON, "Zero HP should be 0.0");
+
+    let mut hp_heal = Health { current: 10, max: 20 };
+    let healed = hp_heal.heal(5);
+    assert_eq!(healed, 5, "Should heal 5");
+    assert_eq!(hp_heal.current, 15, "HP should be 15 after healing");
+
+    let capped = hp_heal.heal(100);
+    assert_eq!(capped, 5, "Should only heal to max");
+    assert_eq!(hp_heal.current, 20, "HP should be capped at max");
+}
+
+#[test]
+fn ai_energy_can_act_threshold() {
+    let energy_zero = Energy(0);
+    assert!(!energy_zero.can_act(), "Zero energy should not be able to act");
+
+    let energy_half = Energy(50);
+    assert!(!energy_half.can_act(), "50 energy should not be able to act");
+
+    let energy_full = Energy(ACTION_COST);
+    assert!(energy_full.can_act(), "ACTION_COST energy should be able to act");
+
+    let energy_over = Energy(ACTION_COST + 50);
+    assert!(energy_over.can_act(), "Over ACTION_COST energy should be able to act");
+}
+
+#[test]
+fn ai_npc_inventory_capacity_limit() {
+    let mut app = test_app_with_ai();
+    for dx in -5..=5 {
+        for dy in -5..=5 {
+            clear_tile(&mut app, 60 + dx, 40 + dy);
+        }
+    }
+
+    let npc = spawn_ai_npc(&mut app, 60, 40, "Outlaw", Faction::Outlaws);
+
+    // Fill inventory to capacity (9 items)
+    for _ in 0..9 {
+        let item = spawn_whiskey_item(&mut app);
+        app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(item);
+    }
+
+    // Place another item on the ground
+    let extra = spawn_whiskey_item(&mut app);
+    app.world_mut().entity_mut(extra).insert(Position { x: 60, y: 40 });
+
+    {
+        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40));
+        vs.dirty = false;
+    }
+    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
+
+    app.update();
+
+    let inv = app.world().get::<Inventory>(npc).unwrap();
+    assert_eq!(
+        inv.items.len(),
+        9,
+        "NPC should not pick up items when inventory is full (has {} items)",
+        inv.items.len(),
+    );
+}

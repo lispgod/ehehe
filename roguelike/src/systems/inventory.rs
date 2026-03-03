@@ -58,7 +58,7 @@ pub fn pickup_system(
         }
 
         if !picked_up {
-            combat_log.push("Nothing to pick up here.".into());
+            // Silently ignore — no message when there's nothing to pick up.
         }
     }
 }

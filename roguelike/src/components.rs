@@ -128,47 +128,32 @@ impl Health {
 }
 
 /// Combat statistics used by the combat system to resolve attacks.
-/// Damage dealt = max(0, attacker.attack − defender.defense).
+/// Damage dealt = attacker.attack (defense has been removed from the game).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct CombatStats {
     pub attack: CoordinateUnit,
+    /// Defense is no longer used in damage calculations.
+    /// Kept at 0 for struct compatibility.
     pub defense: CoordinateUnit,
 }
 
 impl CombatStats {
     /// Computes the raw damage this attacker deals against `defender`.
     ///
-    /// **Damage model**: `max(0, self.attack − defender.defense)`.
-    ///
-    /// Mathematical properties:
-    /// - **Non-negative**: result ∈ ℤ≥0 (clamped by `max(0, …)`).
-    /// - **Monotone in attack**: higher attack → equal or more damage.
-    /// - **Monotone in defense**: higher defense → equal or less damage.
-    /// - **Idempotent clamping**: `max(0, max(0, x)) = max(0, x)`.
+    /// **Damage model**: `self.attack` (defense removed).
     #[inline]
-    pub fn damage_against(&self, defender: &CombatStats) -> CoordinateUnit {
-        compute_damage(self.attack, defender.defense)
+    pub fn damage_against(&self, _defender: &CombatStats) -> CoordinateUnit {
+        self.attack.max(0)
     }
 }
 
-/// Pure function: computes melee/combat damage from attack and defense values.
+/// Pure function: computes damage from attack value.
+/// Defense parameter is kept for API compatibility but ignored.
 ///
-/// `damage(atk, def) = max(0, atk − def)`
-///
-/// This is the universal damage formula used by:
-/// - Melee bump attacks (combat_system)
-/// - Roundhouse kick / cleave (melee_wide_system)
-/// - Thrown weapons (throw_system)
-///
-/// **Mathematical properties**:
-/// - **Non-negative**: ∀ atk, def: `damage(atk, def) ≥ 0`.
-/// - **Monotone increasing in atk**: `atk₁ ≤ atk₂ ⟹ damage(atk₁, def) ≤ damage(atk₂, def)`.
-/// - **Monotone decreasing in def**: `def₁ ≤ def₂ ⟹ damage(atk, def₁) ≥ damage(atk, def₂)`.
-/// - **Zero threshold**: `damage(atk, def) = 0 ⟺ atk ≤ def`.
-/// - **Linearity above threshold**: for `atk > def`, `damage(atk, def) = atk − def`.
+/// `damage(atk, _def) = max(0, atk)`
 #[inline]
-pub fn compute_damage(attack: CoordinateUnit, defense: CoordinateUnit) -> CoordinateUnit {
-    (attack - defense).max(0)
+pub fn compute_damage(attack: CoordinateUnit, _defense: CoordinateUnit) -> CoordinateUnit {
+    attack.max(0)
 }
 
 /// Display name for any entity. Used in combat messages, UI, and logs.
@@ -707,24 +692,28 @@ mod tests {
     fn damage_formula_positive() {
         let attacker = CombatStats { attack: 5, defense: 0 };
         let defender = CombatStats { attack: 0, defense: 2 };
-        assert_eq!(attacker.damage_against(&defender), 3);
-        assert_eq!(compute_damage(5, 2), 3);
+        // Defense is ignored — damage = attacker.attack
+        assert_eq!(attacker.damage_against(&defender), 5);
+        // compute_damage also ignores the defense parameter
+        assert_eq!(compute_damage(5, 2), 5);
     }
 
     #[test]
-    fn damage_formula_zero_when_defense_equals_attack() {
+    fn damage_formula_equals_attack_regardless_of_defense() {
         let attacker = CombatStats { attack: 3, defense: 0 };
         let defender = CombatStats { attack: 0, defense: 3 };
-        assert_eq!(attacker.damage_against(&defender), 0);
-        assert_eq!(compute_damage(3, 3), 0);
+        // Defense removed — damage is always the attack value
+        assert_eq!(attacker.damage_against(&defender), 3);
+        assert_eq!(compute_damage(3, 3), 3);
     }
 
     #[test]
-    fn damage_formula_zero_when_defense_exceeds_attack() {
+    fn damage_formula_ignores_high_defense() {
         let attacker = CombatStats { attack: 2, defense: 0 };
         let defender = CombatStats { attack: 0, defense: 10 };
-        assert_eq!(attacker.damage_against(&defender), 0);
-        assert_eq!(compute_damage(2, 10), 0);
+        // Defense removed — damage is always the attack value
+        assert_eq!(attacker.damage_against(&defender), 2);
+        assert_eq!(compute_damage(2, 10), 2);
     }
 
     #[test]
@@ -747,21 +736,21 @@ mod tests {
     }
 
     #[test]
-    fn compute_damage_monotone_in_defense() {
-        // Property: def₁ ≤ def₂ ⟹ damage(atk, def₁) ≥ damage(atk, def₂)
+    fn compute_damage_ignores_defense_parameter() {
+        // Defense is no longer used — damage should equal attack regardless of def
         let atk = 10;
         for def in 0..19 {
-            assert!(compute_damage(atk, def) >= compute_damage(atk, def + 1));
+            assert_eq!(compute_damage(atk, def), compute_damage(atk, def + 1));
         }
     }
 
     #[test]
-    fn compute_damage_zero_threshold() {
-        // Property: damage(atk, def) = 0 ⟺ atk ≤ def
+    fn compute_damage_zero_only_for_zero_attack() {
+        // With defense removed: damage = max(0, atk), so it's 0 only when atk <= 0
         for atk in 0..15 {
             for def in 0..15 {
                 let d = compute_damage(atk, def);
-                if atk <= def {
+                if atk <= 0 {
                     assert_eq!(d, 0);
                 } else {
                     assert!(d > 0);

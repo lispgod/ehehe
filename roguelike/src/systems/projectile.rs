@@ -184,9 +184,7 @@ pub fn projectile_system(
 
             // Check for hostile entities at this tile.
             // Penetration model: the first hit deals full penetration damage.
-            // Each hit reduces remaining penetration by the target's defense,
-            // so subsequent targets take less damage — matching standard
-            // roguelike bullet-through-armor mechanics.
+            // Defense has been removed, so penetration is not reduced on hit.
             if let Some(entities_here) = target_by_pos.get(&tile) {
                 for (target_entity, target_def, t_name, t_max_hp) in entities_here {
                     if proj.penetration <= 0 {

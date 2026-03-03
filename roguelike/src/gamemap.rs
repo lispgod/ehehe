@@ -6,6 +6,14 @@ use crate::typeenums::{Floor, Props};
 use crate::typedefs::{create_2d_array, CoordinateUnit, MyPoint, RenderPacket, SPAWN_POINT};
 use crate::voxel::Voxel;
 
+/// Side length of a map chunk (tiles). Used for chunk-based spatial queries.
+pub const CHUNK_SIZE: CoordinateUnit = 16;
+
+/// Returns the chunk coordinates for a given world position.
+pub fn chunk_coords(pos: &GridVec) -> (CoordinateUnit, CoordinateUnit) {
+    (pos.x.div_euclid(CHUNK_SIZE), pos.y.div_euclid(CHUNK_SIZE))
+}
+
 /// The game map: a simple 2D grid of voxels.
 pub struct GameMap {
     pub width: CoordinateUnit,
@@ -43,12 +51,10 @@ impl GameMap {
     ///   3. **Buildings** — deterministically placed houses, saloons, stables
     ///      with walls and wood-plank interiors filling every city block.
     ///   4. **Landmarks** — a large Town Hall and oversized Grand Saloon.
-    ///   5. **Parks** — small green parks with trees and benches scattered
-    ///      throughout the town.
-    ///   6. **Street props** — benches, lamp posts, barrels, crates,
+    ///   5. **Street props** — benches, lamp posts, barrels, crates,
     ///      hitching posts, water troughs, signs placed along streets.
-    ///   7. **Decorative elements** — cacti, dead trees, rocks in open areas.
-    ///   8. **Spawn clearing** — guaranteed open area around the player spawn.
+    ///   6. **Decorative elements** — cacti, dead trees, rocks in open areas.
+    ///   7. **Spawn clearing** — guaranteed open area around the player spawn.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
         let mut voxels = Vec::with_capacity(height as usize);
 
@@ -292,18 +298,15 @@ impl GameMap {
         place_town_hall(&mut map, width, height, seed);
         place_grand_saloon(&mut map, width, height, seed);
 
-        // ── Step 6: Small parks ─────────────────────────────────────
-        place_parks(&mut map, width, height, seed);
-
-        // ── Step 7: Street props along every avenue ──────────────
+        // ── Step 6: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
             place_street_props(&mut map, width, ay, avenue_half_width, seed);
         }
 
-        // ── Step 8: Decorative elements in open areas ───────────────
+        // ── Step 7: Decorative elements in open areas ───────────────
         place_desert_decorations(&mut map, width, height, seed);
 
-        // ── Step 9: Victory goal at top-right ───────────────────────
+        // ── Step 8: Victory goal at top-right ───────────────────────
         let goal_x = width - 15;
         let goal_y = height - 15;
         // Clear area and place the goal
@@ -321,7 +324,7 @@ impl GameMap {
             }
         }
 
-        // ── Step 10: Spawn clearing (bottom-left) ───────────────────
+        // ── Step 9: Spawn clearing (bottom-left) ───────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
 
         map
@@ -407,6 +410,8 @@ impl GameMap {
 
         let mut grid = create_2d_array(render_width as usize, render_height as usize);
 
+        // Note: iteration is already viewport-scoped (only tiles within render_width/height
+        // are processed), which is equivalent to chunk-based culling for the viewport.
         for ry in 0..render_height as CoordinateUnit {
             for rx in 0..render_width as CoordinateUnit {
                 let world_pos = bottom_left + GridVec::new(rx, ry);
@@ -423,6 +428,23 @@ impl GameMap {
         }
 
         grid
+    }
+
+    /// Returns which chunk coordinates overlap the given viewport.
+    pub fn active_chunks(&self, center: &GridVec, render_width: u16, render_height: u16) -> Vec<(CoordinateUnit, CoordinateUnit)> {
+        let w_radius = render_width as CoordinateUnit / 2;
+        let h_radius = render_height as CoordinateUnit / 2;
+        let min_x = (center.x - w_radius).div_euclid(CHUNK_SIZE);
+        let max_x = (center.x + w_radius).div_euclid(CHUNK_SIZE);
+        let min_y = (center.y - h_radius).div_euclid(CHUNK_SIZE);
+        let max_y = (center.y + h_radius).div_euclid(CHUNK_SIZE);
+        let mut chunks = Vec::new();
+        for cy in min_y..=max_y {
+            for cx in min_x..=max_x {
+                chunks.push((cx, cy));
+            }
+        }
+        chunks
     }
 }
 
@@ -559,19 +581,88 @@ fn generate_buildings(
 
 /// Places a building on the map: walls around the perimeter, wood plank floor,
 /// and interior props based on building kind.
+/// Supports non-rectangular shapes for larger buildings.
+const SHAPE_RECT: u32 = 0;
+const SHAPE_ROUNDED: u32 = 1;
+const SHAPE_L: u32 = 2;
+
+/// Corner radius for rounded-corner building shapes.
+const ROUNDED_CORNER_RADIUS: CoordinateUnit = 2;
+
+/// L-shape notch is ~1/N of building dimensions.
+const L_SHAPE_NOTCH_DIVISOR: CoordinateUnit = 3;
+
 fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
     let furn_seed = seed.wrapping_add(55555);
+
+    // Determine building shape based on noise
+    let shape_noise = value_noise(b.x + b.y, b.w + b.h, seed.wrapping_add(77777));
+    let shape_type = if b.w >= 8 && b.h >= 8 {
+        (shape_noise * 3.0) as u32 // SHAPE_RECT, SHAPE_ROUNDED, or SHAPE_L
+    } else {
+        SHAPE_RECT
+    };
+
+    // For L-shape, compute notch dimensions
+    let notch_w = b.w / L_SHAPE_NOTCH_DIVISOR;
+    let notch_h = b.h / L_SHAPE_NOTCH_DIVISOR;
+    // Notch is in top-right corner
+    let notch_x_start = b.x + b.w - notch_w;
+    let notch_y_start = b.y + b.h - notch_h;
+
+    let corner_radius = ROUNDED_CORNER_RADIUS;
 
     for y in b.y..b.y + b.h {
         for x in b.x..b.x + b.w {
             let pos = GridVec::new(x, y);
+
+            // L-shape: skip the notch area entirely
+            if shape_type == SHAPE_L && x >= notch_x_start && y >= notch_y_start {
+                continue;
+            }
+
             if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                let is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
-                // Leave a doorway in the center of the bottom wall and one on the top
-                let is_door = (y == b.y + b.h - 1 && x == b.x + b.w / 2)
+                let mut is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
+                // For L-shape, the notch edges are also borders
+                if shape_type == SHAPE_L {
+                    // Recompute border for L-shape
+                    let in_main = x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h
+                        && !(x >= notch_x_start && y >= notch_y_start);
+                    if in_main {
+                        let left_out = x == b.x;
+                        let right_out = x == b.x + b.w - 1 && y < notch_y_start;
+                        let right_notch_edge = x == notch_x_start - 1 && y >= notch_y_start;
+                        // right edge for L: either original right wall (above notch) or notch inner edge
+                        let top_out = y == b.y + b.h - 1 && x < notch_x_start;
+                        let top_notch_edge = y == notch_y_start - 1 && x >= notch_x_start;
+                        let bottom_out = y == b.y;
+                        is_border = left_out || right_out || right_notch_edge || top_out || top_notch_edge || bottom_out;
+                    }
+                }
+
+                // Door positions
+                let is_door = (y == b.y + b.h - 1 && x == b.x + b.w / 2 && (shape_type != SHAPE_L || x < notch_x_start))
                     || (y == b.y && x == b.x + b.w / 2);
 
-                if is_border && !is_door {
+                // Side doors for bigger buildings
+                let is_side_door = if b.w >= 9 || b.h >= 9 {
+                    (x == b.x && y == b.y + b.h / 2)
+                    || (x == b.x + b.w - 1 && y == b.y + b.h / 2 && (shape_type != SHAPE_L || y < notch_y_start))
+                } else {
+                    false
+                };
+
+                // Rounded corners: skip corner walls
+                let is_corner = if shape_type == SHAPE_ROUNDED {
+                    (x - b.x < corner_radius && y - b.y < corner_radius)
+                    || (x - b.x < corner_radius && b.y + b.h - 1 - y < corner_radius)
+                    || (b.x + b.w - 1 - x < corner_radius && y - b.y < corner_radius)
+                    || (b.x + b.w - 1 - x < corner_radius && b.y + b.h - 1 - y < corner_radius)
+                } else {
+                    false
+                };
+
+                if is_border && !is_door && !is_side_door && !is_corner {
                     voxel.props = Some(Props::Wall);
                     voxel.floor = Some(Floor::WoodPlanks);
                 } else {
@@ -871,72 +962,6 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     set_prop(map, sx + sw - 2, sy + sh - 2, Props::Crate);
 }
 
-/// Places 3-5 small parks throughout the town.
-/// Each park is a grassy area with trees, benches, and open space.
-fn place_parks(
-    map: &mut GameMap,
-    width: CoordinateUnit,
-    height: CoordinateUnit,
-    seed: NoiseSeed,
-) {
-    let park_seed = seed.wrapping_add(555666);
-    let park_count = 5 + (value_noise(0, 0, park_seed) * 4.0) as i32; // 5-8 parks
-    let mut placed = 0;
-    let mut pi = 0i32;
-    while placed < park_count && pi < 30 {
-        let px_noise = value_noise(pi, 0, park_seed);
-        let py_noise = value_noise(0, pi, park_seed.wrapping_add(1));
-        let park_cx = 30 + (px_noise * (width - 60) as f64) as CoordinateUnit;
-        let park_cy = 30 + (py_noise * (height - 60) as f64) as CoordinateUnit;
-        let park_w = 8 + (value_noise(pi, 1, park_seed) * 5.0) as CoordinateUnit; // 8-12
-        let park_h = 6 + (value_noise(1, pi, park_seed) * 5.0) as CoordinateUnit; // 6-10
-
-        pi += 1;
-
-        // Don't place parks too close to spawn
-        let dist_sq = GridVec::new(park_cx, park_cy).distance_squared(SPAWN_POINT);
-        if dist_sq < 100 {
-            continue;
-        }
-
-        // Lay down grass floor and clear props
-        for y in park_cy..park_cy + park_h {
-            for x in park_cx..park_cx + park_w {
-                if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(x, y)) {
-                    // Don't overwrite border walls
-                    if !matches!(voxel.props, Some(Props::Wall)) {
-                        voxel.floor = Some(Floor::Grass);
-                        voxel.props = None;
-                    }
-                }
-            }
-        }
-
-        // Place trees around the edges
-        for dx in (0..park_w).step_by(3) {
-            set_prop(map, park_cx + dx, park_cy, Props::Tree);
-            set_prop(map, park_cx + dx, park_cy + park_h - 1, Props::Tree);
-        }
-        for dy in (0..park_h).step_by(3) {
-            set_prop(map, park_cx, park_cy + dy, Props::Tree);
-            set_prop(map, park_cx + park_w - 1, park_cy + dy, Props::Tree);
-        }
-
-        // Benches in the interior
-        if park_w >= 6 && park_h >= 4 {
-            set_prop(map, park_cx + 2, park_cy + park_h / 2, Props::Bench);
-            set_prop(map, park_cx + park_w - 3, park_cy + park_h / 2, Props::Bench);
-        }
-
-        // Water trough (fountain stand-in)
-        if park_w >= 8 && park_h >= 6 {
-            set_prop(map, park_cx + park_w / 2, park_cy + park_h / 2, Props::WaterTrough);
-        }
-
-        placed += 1;
-    }
-}
-
 /// Places street props (benches, lamp posts, barrels, signs, hitching posts)
 /// along the main street sidewalks.
 fn place_street_props(
@@ -1234,12 +1259,12 @@ mod tests {
 
     #[test]
     fn game_map_has_western_props() {
-        let map = GameMap::new(120, 80, 42);
+        let map = GameMap::new(200, 140, 42);
         let mut has_bench = false;
         let mut has_barrel = false;
         let mut has_cactus = false;
-        for y in 0..80 {
-            for x in 0..120 {
+        for y in 0..140 {
+            for x in 0..200 {
                 match &map.voxels[y][x].props {
                     Some(Props::Bench) => has_bench = true,
                     Some(Props::Barrel) => has_barrel = true,

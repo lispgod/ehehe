@@ -44,12 +44,6 @@ const SAND_STAMINA_COST: i32 = 5;
 /// Stamina cost for the Throw Item ability (0 key).
 const THROW_ITEM_STAMINA_COST: i32 = 10;
 
-/// Stamina cost for the War Cry ability (X key).
-const WAR_CRY_STAMINA_COST: i32 = 25;
-
-/// Stamina cost for the Quick Draw ability (B key).
-const QUICK_DRAW_STAMINA_COST: i32 = 15;
-
 /// Stamina cost for the Dive ability (Z key).
 const DIVE_STAMINA_COST: i32 = 20;
 
@@ -79,8 +73,6 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
     CommandBinding { key: "G", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
     CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
-    CommandBinding { key: "X", name: "War Cry (25 sta)", docs: "Create smoke cloud around you, disrupting enemy vision." },
-    CommandBinding { key: "B", name: "Quick Draw (15 sta)", docs: "Instantly fire first loaded gun. Costs 0 extra ticks." },
     CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
     CommandBinding { key: "7", name: "Dual wield (15 sta)", docs: "Fire two random revolvers at once." },
     CommandBinding { key: "8", name: "Fan shot (20 sta)", docs: "Fire all rounds from a random revolver." },
@@ -449,6 +441,16 @@ pub fn input_system(
                                     advance_turn(&mut next_turn_state);
                                 }
                                 handled = true;
+                            } else if let ItemKind::WaterBucket { uses, radius, .. } = kind {
+                                if *uses > 0 {
+                                    extra_world_ticks.0 = 1;
+                                    input_state.water_bucket_pending = Some((idx, *radius));
+                                    advance_turn(&mut next_turn_state);
+                                    combat_log.push("You splash water around you!".into());
+                                } else {
+                                    combat_log.push("The bucket is empty!".into());
+                                }
+                                handled = true;
                             }
                         }
                 if !handled {
@@ -535,64 +537,6 @@ pub fn input_system(
                         &cursor, &mut intents, &mut extra_world_ticks,
                         &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
                     );
-                }
-            }
-            // X: War Cry — stun/scare nearby enemies for a few turns (costs stamina)
-            KeyCode::Char('x') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= WAR_CRY_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina for war cry!".into());
-                } else {
-                    input_state.ability_stamina_pending = WAR_CRY_STAMINA_COST;
-                    // War cry: create a large sand cloud centered on the player
-                    // that temporarily blocks enemy vision in all directions
-                    intents.spell_intents.write(SpellCastIntent {
-                        caster: player_entity,
-                        radius: 3,
-                        target: player_pos.as_grid_vec(),
-                        grenade_index: usize::MAX, // sentinel: no grenade consumed
-                    });
-                    combat_log.push("You let out a deafening war cry!".into());
-                    extra_world_ticks.0 = 0;
-                    advance_turn(&mut next_turn_state);
-                }
-            }
-            // B: Quick Draw — instantly fire the first loaded gun (costs stamina, no extra ticks)
-            KeyCode::Char('b') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= QUICK_DRAW_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina for quick draw!".into());
-                } else {
-                    let delta = cursor.pos - player_pos.as_grid_vec();
-                    if delta == crate::grid_vec::GridVec::ZERO {
-                        combat_log.push("Cursor is on your position!".into());
-                    } else if let Some(inv) = player_inv {
-                        let gun_ent = inv.items.iter().find(|&&ent| {
-                            item_kind_query.get(ent).ok().is_some_and(|k|
-                                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0))
-                        }).copied();
-                        if let Some(gun) = gun_ent {
-                            input_state.ability_stamina_pending = QUICK_DRAW_STAMINA_COST;
-                            intents.ranged_intents.write(RangedAttackIntent {
-                                attacker: player_entity,
-                                range: RANGED_ATTACK_RANGE,
-                                dx: delta.x,
-                                dy: delta.y,
-                                gun_item: Some(gun),
-                            });
-                            extra_world_ticks.0 = 0; // quick draw costs 0 extra ticks
-                            advance_turn(&mut next_turn_state);
-                            combat_log.push("Quick draw!".into());
-                        } else {
-                            combat_log.push("No loaded gun for quick draw!".into());
-                        }
-                    } else {
-                        combat_log.push("No inventory!".into());
-                    }
                 }
             }
             _ => {}

@@ -144,10 +144,19 @@ impl Plugin for RoguelikePlugin {
                     inventory::reload_system,
                     spell::spell_system,
                     spell::molotov_system,
+                    spell::water_bucket_system,
                     combat::ranged_attack_system,
                     combat::melee_wide_system,
                     combat::combat_system,
                     projectile::projectile_system,
+                )
+                    .chain()
+                    .in_set(RoguelikeSet::Action)
+                    .run_if(in_state(GameState::Playing)),
+            )
+            .add_systems(
+                Update,
+                (
                     spell::explosive_projectile_system,
                     combat::apply_damage_system,
                     combat::death_system,
@@ -155,6 +164,7 @@ impl Plugin for RoguelikePlugin {
                     movement::water_slowdown_system,
                 )
                     .chain()
+                    .after(projectile::projectile_system)
                     .in_set(RoguelikeSet::Action)
                     .run_if(in_state(GameState::Playing)),
             )
@@ -286,6 +296,18 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
         ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
     )).id();
 
+    // Spawn starting water bucket
+    let water_bucket = commands.spawn((
+        Item,
+        Name("Water Bucket".into()),
+        Renderable {
+            symbol: "u".into(),
+            fg: RatColor::Rgb(100, 150, 255),
+            bg: RatColor::Black,
+        },
+        ItemKind::WaterBucket { uses: 3, radius: 2, blunt_damage: 3 },
+    )).id();
+
     commands.spawn((
         Position {
             x: spawn_pos.x,
@@ -314,7 +336,7 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
         Speed(ACTION_COST),
         Energy(0),
     )).insert((
-        Inventory { items: vec![colt_pocket, knife, whiskey, molotov] },
+        Inventory { items: vec![colt_pocket, knife, whiskey, molotov, water_bucket] },
         Viewshed {
             range: 40,
             visible_tiles: HashSet::new(),
@@ -384,10 +406,19 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                     if !map.0.is_passable(&pos) {
                         continue;
                     }
+                    // Skip tiles with props or water/fire
+                    if let Some(voxel) = map.0.get_voxel_at(&pos) {
+                        if voxel.props.is_some() {
+                            continue;
+                        }
+                        if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
+                            continue;
+                        }
+                    }
 
                     let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
                     if tile_noise > 0.35 {
-                        continue; // More generous placement (up from 0.15)
+                        continue;
                     }
 
                     let template_idx = templates[(spawned as usize) % templates.len()];
@@ -444,6 +475,15 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 }
                 if !map.0.is_passable(&pos) {
                     continue;
+                }
+                // Skip tiles with props or water/fire
+                if let Some(voxel) = map.0.get_voxel_at(&pos) {
+                    if voxel.props.is_some() {
+                        continue;
+                    }
+                    if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
+                        continue;
+                    }
                 }
                 let tile_noise = value_noise(pos.x, pos.y, near_seed.wrapping_add(33333));
                 if tile_noise > 0.25 {

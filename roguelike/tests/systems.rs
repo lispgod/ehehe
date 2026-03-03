@@ -3027,19 +3027,19 @@ fn dynamic_rng_advance_changes_output() {
 fn blood_map_prune_removes_old_stains() {
     let mut blood = BloodMap::default();
     blood.stains.insert(GridVec::new(1, 1), 0);     // turn 0
-    blood.stains.insert(GridVec::new(2, 2), 100);   // turn 100
-    blood.stains.insert(GridVec::new(3, 3), 250);   // turn 250
+    blood.stains.insert(GridVec::new(2, 2), 25);     // turn 25
+    blood.stains.insert(GridVec::new(3, 3), 35);     // turn 35
 
-    // Prune at turn 300
-    blood.prune(300);
+    // Prune at turn 40
+    blood.prune(40);
 
-    // Stain at turn 0 (age 300 > 200) should be removed
+    // Stain at turn 0 (age 40 > 20) should be removed
     assert!(!blood.stains.contains_key(&GridVec::new(1, 1)),
         "Old blood stain should be pruned");
-    // Stain at turn 100 (age 200 = 200) should remain
+    // Stain at turn 25 (age 15 <= 20) should remain
     assert!(blood.stains.contains_key(&GridVec::new(2, 2)),
         "Recent-ish blood stain should remain");
-    // Stain at turn 250 (age 50 < 200) should remain
+    // Stain at turn 35 (age 5 < 20) should remain
     assert!(blood.stains.contains_key(&GridVec::new(3, 3)),
         "Recent blood stain should remain");
 }

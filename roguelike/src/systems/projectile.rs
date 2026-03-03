@@ -82,7 +82,7 @@ pub fn spawn_bullet(
     commands.spawn((
         Position { x: start_pos.x, y: start_pos.y },
         Renderable {
-            symbol: "•".into(),
+            symbol: "◦".into(),
             fg: RatColor::Rgb(255, 200, 80),
             bg: RatColor::Black,
         },
@@ -93,6 +93,7 @@ pub fn spawn_bullet(
             damage,
             penetration: damage,
             source,
+            tail_pos: None,
         },
     ));
 }
@@ -114,7 +115,7 @@ pub fn spawn_arrow(
     commands.spawn((
         Position { x: start_pos.x, y: start_pos.y },
         Renderable {
-            symbol: "•".into(),
+            symbol: "◦".into(),
             fg: RatColor::Rgb(139, 90, 43),
             bg: RatColor::Black,
         },
@@ -125,6 +126,7 @@ pub fn spawn_arrow(
             damage,
             penetration: damage,
             source,
+            tail_pos: None,
         },
     ));
 }
@@ -164,6 +166,7 @@ pub fn spawn_shrapnel(
                     damage,
                     penetration: damage,
                     source,
+                    tail_pos: None,
                 },
             ));
         }
@@ -358,6 +361,11 @@ pub fn projectile_system(
                     despawn = true;
                     break;
                 }
+
+            // Save previous position as tail before advancing.
+            if proj.path_index > 0 {
+                proj.tail_pos = Some(proj.path[proj.path_index.saturating_sub(1)]);
+            }
 
             // Advance to next tile.
             proj.path_index += 1;

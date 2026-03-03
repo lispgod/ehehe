@@ -15,7 +15,7 @@ const HEALTH_REGEN_PER_TURN: i32 = 1;
 const HEALTH_REGEN_INTERVAL: u32 = 30;
 
 /// Fire spreads every N world turns.
-const FIRE_SPREAD_INTERVAL: u32 = 4;
+const FIRE_SPREAD_INTERVAL: u32 = 8;
 
 /// Damage dealt to entities standing on fire per turn.
 const FIRE_DAMAGE: i32 = 2;

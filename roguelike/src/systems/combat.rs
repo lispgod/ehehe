@@ -120,6 +120,7 @@ pub fn combat_system(
                             ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
                             ItemKind::Molotov { .. } => "Molotov".into(),
                             ItemKind::Bow { .. } => "Bow".into(),
+                            ItemKind::WaterBucket { .. } => "Water Bucket".into(),
                         });
                     }
                 }

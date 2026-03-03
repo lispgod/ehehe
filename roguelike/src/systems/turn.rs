@@ -200,6 +200,7 @@ pub fn fire_system(
             .collect();
 
         // Collect drift operations: (old_pos, new_pos, placed_turn)
+        // Primes 7919 and 6271 provide good hash distribution; modulo 5 = 20% drift probability.
         let dirs = [GridVec::new(1, 0), GridVec::new(-1, 0), GridVec::new(0, 1), GridVec::new(0, -1)];
         let mut drift_ops: Vec<(GridVec, GridVec, u32)> = Vec::new();
         for (tile, placed_turn) in &active_clouds {

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{CombatStats, Inventory, Item, ItemKind, Stamina, Name, Position, Renderable, display_name};
 use crate::events::{MolotovCastIntent, SpellCastIntent};
-use crate::resources::{CombatLog, GameMapResource, MapSeed, SpellParticles};
+use crate::resources::{CombatLog, GameMapResource, MapSeed, SpellParticles, TurnCounter};
 use crate::typeenums::{Floor, Furniture};
 use crate::typedefs::RatColor;
 
@@ -25,24 +25,31 @@ pub fn spell_system(
     mut game_map: ResMut<GameMapResource>,
     seed: Res<MapSeed>,
     mut spell_particles: ResMut<SpellParticles>,
+    turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
         let Ok((caster_stats, caster_name, stamina, inventory)) = caster_query.get_mut(intent.caster) else {
             continue;
         };
 
-        // Sand throw (sentinel: grenade_index == usize::MAX) — creates dust clouds
-        // that block line of sight for 30 ticks (persists as the player moves).
+        // Sand throw (sentinel: grenade_index == usize::MAX) — creates persistent
+        // sand cloud tiles on the map that block line of sight.
         if intent.grenade_index == usize::MAX {
             if let Some(mut stamina) = stamina {
                 stamina.spend(5); // Sand throw costs 5 stamina
             }
-            // Create sand dust cloud particles at target (blocks sight).
+            // Place persistent SandCloud floor tiles on the map.
             let origin = intent.target;
             for dx in -intent.radius..=intent.radius {
                 for dy in -intent.radius..=intent.radius {
                     let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
-                    spell_particles.particles.push((pos, 30, 0, true));
+                    if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+                        // Only place sand cloud on passable tiles without walls
+                        if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                            voxel.floor = Some(Floor::SandCloud);
+                            game_map.0.sand_cloud_turns.insert(pos, turn_counter.0);
+                        }
+                    }
                 }
             }
             continue;

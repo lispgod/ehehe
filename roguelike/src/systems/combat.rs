@@ -3,9 +3,9 @@ use bevy::prelude::*;
 use crate::components::{CollectibleKind, CombatStats, ExpReward, Experience, Faction, Health, HellGate, Hostile, Inventory, Item, ItemKind, LastDamageSource, Level, LootTable, Stamina, Ammo, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
-use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, SpellParticles};
+use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, PendingExp, PendingNpcExp, SoundEvents, SpellParticles, TurnCounter};
 use crate::grid_vec::GridVec;
-use crate::typeenums::Furniture;
+use crate::typeenums::{Floor, Furniture};
 use crate::typedefs::{CoordinateUnit, RatColor};
 
 /// Computes the bullet endpoint by scaling a direction vector so the
@@ -18,18 +18,19 @@ fn bullet_endpoint(origin: GridVec, dx: CoordinateUnit, dy: CoordinateUnit, rang
     origin + GridVec::new(dx * scale, dy * scale)
 }
 
-/// Smoke lifetime in ticks. Smoke persists for several turns after a gun fires,
-/// blocking line of sight. Uses the same particle system as sand clouds.
-const SMOKE_LIFETIME: u32 = 8;
-
 /// Spawns a small cloud of gun smoke at the firing position.
-/// Smoke particles are flagged as is_sand=true (rendered as `*`, blocks sight).
-fn spawn_gun_smoke(spell_particles: &mut SpellParticles, origin: GridVec) {
+/// Places persistent SandCloud floor tiles on the map that block sight.
+fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32) {
     // Smoke cloud: small 3×3 area centered on the firing position
     for dx in -1..=1i32 {
         for dy in -1..=1i32 {
             let pos = origin + GridVec::new(dx, dy);
-            spell_particles.particles.push((pos, SMOKE_LIFETIME, 0, true));
+            if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+                if !matches!(voxel.furniture, Some(Furniture::Wall)) {
+                    voxel.floor = Some(Floor::SandCloud);
+                    game_map.0.sand_cloud_turns.insert(pos, turn);
+                }
+            }
         }
     }
 }
@@ -281,6 +282,8 @@ pub fn ranged_attack_system(
     mut spell_particles: ResMut<SpellParticles>,
     dynamic_rng: Res<DynamicRng>,
     seed: Res<MapSeed>,
+    mut game_map: ResMut<GameMapResource>,
+    turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
         let Ok((caster_pos, ammo, caster_stats, caster_name)) = caster_query.get_mut(intent.attacker) else {
@@ -342,7 +345,7 @@ pub fn ranged_attack_system(
         sound_events.add(origin);
 
         // Spawn gun smoke at the firing position (persists and blocks sight).
-        spawn_gun_smoke(&mut spell_particles, origin);
+        spawn_gun_smoke(&mut game_map, origin, turn_counter.0);
 
         // Spawn a bullet projectile entity that will travel along the path.
         crate::systems::projectile::spawn_bullet(
@@ -365,6 +368,8 @@ pub fn ai_ranged_attack_system(
     mut combat_log: ResMut<CombatLog>,
     mut sound_events: ResMut<SoundEvents>,
     mut spell_particles: ResMut<SpellParticles>,
+    mut game_map: ResMut<GameMapResource>,
+    turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
@@ -395,7 +400,7 @@ pub fn ai_ranged_attack_system(
         sound_events.add(origin);
 
         // Spawn gun smoke at the firing position (persists and blocks sight).
-        spawn_gun_smoke(&mut spell_particles, origin);
+        spawn_gun_smoke(&mut game_map, origin, turn_counter.0);
 
         // Spawn a bullet projectile entity.
         crate::systems::projectile::spawn_bullet(

@@ -23,6 +23,9 @@ const FIRE_DAMAGE: i32 = 2;
 /// Maximum number of world turns a fire tile persists before burning out.
 const FIRE_BURNOUT_TURNS: u32 = 20;
 
+/// Number of world turns before a sand cloud tile dissipates.
+const SAND_CLOUD_LIFETIME: u32 = 8;
+
 /// Advances the turn state from `PlayerTurn` → `WorldTurn`.
 /// Runs only during `TurnState::PlayerTurn` after all player-phase systems.
 pub fn end_player_turn(mut next_state: ResMut<NextState<TurnState>>) {
@@ -161,5 +164,22 @@ pub fn fire_system(
             voxel.floor = Some(Floor::ScorchedEarth);
         }
         game_map.0.fire_turns.remove(tile);
+    }
+
+    // ── Sand cloud dissipation ──────────────────────────────────────
+    // Remove sand cloud tiles that have exceeded their lifetime.
+    let expired_clouds: Vec<GridVec> = game_map.0.sand_cloud_turns.iter()
+        .filter(|entry| turn_counter.0.saturating_sub(*entry.1) >= SAND_CLOUD_LIFETIME)
+        .map(|entry| *entry.0)
+        .collect();
+
+    for tile in &expired_clouds {
+        if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
+            if matches!(voxel.floor, Some(Floor::SandCloud)) {
+                // Restore to sand (desert default).
+                voxel.floor = Some(Floor::Sand);
+            }
+        }
+        game_map.0.sand_cloud_turns.remove(tile);
     }
 }

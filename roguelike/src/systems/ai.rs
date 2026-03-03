@@ -208,6 +208,9 @@ fn has_clear_line_of_sight(origin: GridVec, target: GridVec, game_map: &GameMapR
         }
         match game_map.0.get_voxel_at(&tile) {
             Some(v) => {
+                if matches!(v.floor, Some(crate::typeenums::Floor::SandCloud)) {
+                    return false;
+                }
                 if v.furniture.as_ref().is_some_and(|f| f.blocks_vision()) {
                     return false;
                 }

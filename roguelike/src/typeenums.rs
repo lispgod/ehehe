@@ -15,6 +15,9 @@ pub enum Floor {
     Fire,
     /// Spilled water from a destroyed water trough.
     Water,
+    /// Persistent sand/smoke cloud that blocks line of sight.
+    /// Placed by sand throws and gun smoke; ticks down per game turn.
+    SandCloud,
 }
 
 /// Furniture (obstacles/structures) placed on tiles.

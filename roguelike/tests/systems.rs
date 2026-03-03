@@ -1903,20 +1903,17 @@ fn spell_sand_throw_creates_sand_particles() {
     });
     app.update();
 
-    let particles = app.world().resource::<SpellParticles>();
-    assert!(!particles.particles.is_empty(),
-        "Sand throw should create particles");
+    // Sand clouds should now be placed on the game map as SandCloud floor tiles
+    let game_map = app.world().resource::<GameMapResource>();
+    let target = GridVec::new(62, 40);
+    let has_sand_cloud = game_map.0.get_voxel_at(&target)
+        .is_some_and(|v| matches!(v.floor, Some(roguelike::typeenums::Floor::SandCloud)));
+    assert!(has_sand_cloud,
+        "Sand throw should create SandCloud floor tiles on the map");
 
-    // All particles from sand throw should be sand particles
-    let sand_particles: Vec<_> = particles.particles.iter()
-        .filter(|(_, _, _, is_sand)| *is_sand)
-        .collect();
-    assert!(!sand_particles.is_empty(),
-        "Sand throw particles should have is_sand=true");
-
-    // Sand particles should have lifetime 30
-    assert!(sand_particles.iter().all(|(_, life, _, _)| *life == 30),
-        "Sand particles should have 30-tick lifetime");
+    // Sand cloud turns tracker should be populated
+    assert!(!game_map.0.sand_cloud_turns.is_empty(),
+        "Sand cloud turn tracker should have entries");
 }
 
 // ═══════════════════════════════════════════════════════════════════

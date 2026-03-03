@@ -14,6 +14,9 @@ pub struct GameMap {
     /// Tracks the world turn at which each fire tile was ignited.
     /// Used for deterministic burnout.
     pub fire_turns: HashMap<GridVec, u32>,
+    /// Tracks the world turn at which each sand cloud tile was placed.
+    /// Sand clouds dissipate after `SAND_CLOUD_LIFETIME` world turns.
+    pub sand_cloud_turns: HashMap<GridVec, u32>,
 }
 
 /// A rectangular building footprint used during town generation.
@@ -76,6 +79,7 @@ impl GameMap {
             height,
             voxels,
             fire_turns: HashMap::new(),
+            sand_cloud_turns: HashMap::new(),
         };
 
         // ── Step 2: Main street (horizontal dirt road) ──────────────

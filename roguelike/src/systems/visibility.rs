@@ -187,7 +187,12 @@ fn is_opaque(game_map: &GameMapResource, point: MyPoint, sand_clouds: &HashSet<M
         return true;
     }
     match game_map.0.get_voxel_at(&point) {
-        Some(v) => v.furniture.as_ref().is_some_and(|f| f.blocks_vision()),
+        Some(v) => {
+            if matches!(v.floor, Some(crate::typeenums::Floor::SandCloud)) {
+                return true;
+            }
+            v.furniture.as_ref().is_some_and(|f| f.blocks_vision())
+        }
         None => true, // off-map ⇒ opaque
     }
 }

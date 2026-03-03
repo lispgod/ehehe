@@ -159,6 +159,13 @@ pub fn display_name(name: Option<&Name>) -> &str {
     name.map_or("???", |n| &n.0)
 }
 
+/// Returns the display string of an optional `Name`, falling back to `"item"`.
+/// Used for item pickup/drop/use messages where "item" is the natural default.
+#[inline]
+pub fn item_display_name(name: Option<&Name>) -> &str {
+    name.map_or("item", |n| &n.0)
+}
+
 /// Movement speed: determines how much energy an entity gains each world tick.
 ///
 /// In the energy-based turn model, an entity acts when its accumulated energy

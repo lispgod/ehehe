@@ -545,7 +545,6 @@ pub fn input_system(
 }
 
 /// Special ability 7: Dual wield shot — fire two random revolvers at once.
-#[allow(clippy::too_many_arguments)]
 fn handle_dual_wield(
     player_entity: Entity,
     player_pos: &Position,
@@ -606,7 +605,6 @@ fn handle_dual_wield(
 }
 
 /// Special ability 8: Fan shot — fire all rounds from a random revolver.
-#[allow(clippy::too_many_arguments)]
 fn handle_fan_shot(
     player_entity: Entity,
     player_pos: &Position,
@@ -667,7 +665,6 @@ fn handle_fan_shot(
 }
 
 /// Special ability 0: Throw random inventory item toward cursor.
-#[allow(clippy::too_many_arguments)]
 fn handle_throw_random(
     player_entity: Entity,
     player_pos: &Position,

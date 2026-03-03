@@ -73,7 +73,7 @@ pub fn draw_system(
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
     hostile_viewsheds: Query<(&Viewshed, Option<&Faction>, &Position), With<Hostile>>,
-    projectiles: Query<(&Position, &Renderable), With<Projectile>>,
+    projectiles: Query<(&Position, &Renderable, &Projectile)>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
     turn_counter: Res<TurnCounter>,
@@ -252,7 +252,8 @@ pub fn draw_system(
                     if *is_sand {
                         // Smoke plume: particles fade through different symbols
                         // as they drift and dissipate, creating a visible plume effect.
-                        let intensity = (*lifetime as f32 / 30.0).min(1.0);
+                        let max_life = 10.0f32;
+                        let intensity = (*lifetime as f32 / max_life).clamp(0.2, 1.0);
                         let (symbol, r, g, b) = if *lifetime > 6 {
                             ("▓", (220.0 * intensity) as u8, (190.0 * intensity) as u8, (130.0 * intensity) as u8)
                         } else if *lifetime > 3 {
@@ -264,7 +265,7 @@ pub fn draw_system(
                             (symbol.into(), RatColor::Rgb(r, g, b), bg);
                     } else {
                         // Explosion/fire particle: visible movement with changing symbols
-                        let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).min(1.0);
+                        let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).clamp(0.15, 1.0);
                         let r = (255.0 * intensity) as u8;
                         let g = (165.0 * intensity) as u8;
                         let symbol = if *lifetime > 5 { "◦" } else if *lifetime > 3 { "·" } else { "." };
@@ -291,7 +292,7 @@ pub fn draw_system(
         }
 
         // Render projectile entities on the map with fast blinking effect.
-        for (proj_pos, proj_render) in &projectiles {
+        for (proj_pos, proj_render, proj) in &projectiles {
             let screen = proj_pos.as_grid_vec() - bottom_left;
             if in_bounds(screen, render_width, render_height)
             {
@@ -312,8 +313,33 @@ pub fn draw_system(
                             proj_render.fg
                         }
                     };
+                    // Render head
                     render_packet[screen.y as usize][screen.x as usize] =
                         (proj_render.symbol.clone(), fg, bg);
+
+                    // Render tail
+                    if let Some(tail) = proj.tail_pos {
+                        let tail_screen = tail - bottom_left;
+                        if in_bounds(tail_screen, render_width, render_height) {
+                            let tail_visible = visible_tiles
+                                .map(|vt| vt.contains(&tail))
+                                .unwrap_or(true);
+                            if tail_visible {
+                                let tail_bg = render_packet[tail_screen.y as usize][tail_screen.x as usize].2;
+                                let tail_fg = if let RatColor::Rgb(r, g, b) = proj_render.fg {
+                                    if blink_bright {
+                                        RatColor::Rgb(r.saturating_sub(60), g.saturating_sub(60), b.saturating_sub(60))
+                                    } else {
+                                        RatColor::Rgb(r / 3, g / 3, b / 3)
+                                    }
+                                } else {
+                                    proj_render.fg
+                                };
+                                render_packet[tail_screen.y as usize][tail_screen.x as usize] =
+                                    ("·".into(), tail_fg, tail_bg);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -372,6 +398,7 @@ pub fn draw_system(
                                 ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
                                 ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
                                 ItemKind::Bow { .. } => "Bow".to_string(),
+                                ItemKind::WaterBucket { uses, radius, .. } => format!("{uses} uses r{radius} 💧"),
                             });
                         (name, desc)
                     })

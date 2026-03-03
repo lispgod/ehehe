@@ -458,6 +458,8 @@ pub struct Projectile {
     pub penetration: i32,
     /// Entity that fired the projectile (to avoid self-damage for bullets).
     pub source: Entity,
+    /// Previous position for rendering a trailing tail.
+    pub tail_pos: Option<GridVec>,
 }
 
 /// A thrown explosive (dynamite or molotov) traveling through the air.
@@ -502,6 +504,8 @@ pub enum ItemKind {
     Molotov { damage: i32, radius: i32, blunt_damage: i32 },
     /// A bow. Fires arrows. Used by Indians.
     Bow { attack: i32, blunt_damage: i32 },
+    /// A water bucket. Splashes water around the player, extinguishing fires.
+    WaterBucket { uses: i32, radius: i32, blunt_damage: i32 },
 }
 
 impl ItemKind {
@@ -515,6 +519,7 @@ impl ItemKind {
             ItemKind::Whiskey { blunt_damage, .. } => *blunt_damage,
             ItemKind::Molotov { blunt_damage, .. } => *blunt_damage,
             ItemKind::Bow { blunt_damage, .. } => *blunt_damage,
+            ItemKind::WaterBucket { blunt_damage, .. } => *blunt_damage,
         }
     }
 }

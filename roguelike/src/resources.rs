@@ -55,6 +55,8 @@ pub struct InputState {
     pub dive_stamina_pending: i32,
     /// Stamina cost for a pending special ability action.
     pub ability_stamina_pending: i32,
+    /// Pending water bucket splash: (inventory_index, radius).
+    pub water_bucket_pending: Option<(usize, i32)>,
 }
 
 impl Default for InputState {
@@ -68,6 +70,7 @@ impl Default for InputState {
             reload_pending: false,
             dive_stamina_pending: 0,
             ability_stamina_pending: 0,
+            water_bucket_pending: None,
         }
     }
 }
@@ -316,7 +319,7 @@ pub struct BloodMap {
 }
 
 /// Blood stains older than this many turns are removed to prevent unbounded growth.
-const BLOOD_MAX_AGE: u32 = 200;
+const BLOOD_MAX_AGE: u32 = 20;
 
 impl BloodMap {
     /// Removes blood stains older than `BLOOD_MAX_AGE` turns.

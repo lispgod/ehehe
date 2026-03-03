@@ -303,8 +303,8 @@ fn do_spawn_player(commands: &mut Commands, _seed: u64, map: &GameMapResource) {
             max: 100,
         },
         Stamina {
-            current: 50,
-            max: 50,
+            current: 100,
+            max: 100,
         },
         CombatStats {
             attack: 5,

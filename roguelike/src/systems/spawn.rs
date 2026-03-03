@@ -159,25 +159,25 @@ pub struct MonsterTemplate {
 /// - Rattlesnake: 20 (slow — acts every ~5 ticks)
 /// - Outlaw: 34, Vaquero: 32, Cowboy: 30, Gunslinger: 38
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
-    // Tier 1: Wildlife (lowercase symbols — animals)
+    // Tier 1: Wildlife (lowercase symbols — animals keep unique glyphs)
     MonsterTemplate { name: "Coyote", symbol: "c", fg: RatColor::Rgb(220, 170, 100), health: 100, attack: 2, speed: 50, sight_range: 6, faction: Faction::Wildlife, has_gun: false },
     MonsterTemplate { name: "Rattlesnake", symbol: "s", fg: RatColor::Rgb(100, 200, 60), health: 100, attack: 3, speed: 20, sight_range: 8, faction: Faction::Wildlife, has_gun: false },
-    // Tier 2: Outlaws (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Outlaw", symbol: "O", fg: RatColor::Rgb(240, 200, 130), health: 100, attack: 4, speed: 34, sight_range: 8, faction: Faction::Outlaws, has_gun: false },
-    // Tier 3: Vaqueros (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Vaquero", symbol: "V", fg: RatColor::Rgb(180, 200, 80), health: 100, attack: 5, speed: 32, sight_range: 10, faction: Faction::Vaqueros, has_gun: false },
-    // Tier 4: Lawmen (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Cowboy", symbol: "C", fg: RatColor::Rgb(230, 180, 100), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Lawmen, has_gun: true },
-    // Tier 5: Outlaws - Gunslinger (uppercase symbols — human NPCs)
-    MonsterTemplate { name: "Gunslinger", symbol: "G", fg: RatColor::Rgb(255, 80, 80), health: 100, attack: 8, speed: 38, sight_range: 14, faction: Faction::Outlaws, has_gun: true },
-    // Tier 6: Civilians — unarmed townsfolk
-    MonsterTemplate { name: "Civilian", symbol: "T", fg: RatColor::Rgb(180, 180, 220), health: 60, attack: 2, speed: 28, sight_range: 8, faction: Faction::Civilians, has_gun: false },
-    // Tier 7: Indians — native warriors
-    MonsterTemplate { name: "Indian Brave", symbol: "I", fg: RatColor::Rgb(180, 100, 60), health: 120, attack: 5, speed: 40, sight_range: 12, faction: Faction::Indians, has_gun: false },
-    MonsterTemplate { name: "Indian Scout", symbol: "I", fg: RatColor::Rgb(150, 90, 50), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Indians, has_gun: false },
-    // Tier 8: Sheriff and deputies
-    MonsterTemplate { name: "Sheriff", symbol: "S", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Sheriff, has_gun: true },
-    MonsterTemplate { name: "Deputy", symbol: "D", fg: RatColor::Rgb(200, 180, 100), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Sheriff, has_gun: true },
+    // Tier 2: Outlaws — all human NPCs use '@', distinguished by faction color (red-orange)
+    MonsterTemplate { name: "Outlaw", symbol: "@", fg: RatColor::Rgb(255, 140, 60), health: 100, attack: 4, speed: 34, sight_range: 8, faction: Faction::Outlaws, has_gun: false },
+    // Tier 3: Vaqueros — faction color: lime green
+    MonsterTemplate { name: "Vaquero", symbol: "@", fg: RatColor::Rgb(140, 220, 60), health: 100, attack: 5, speed: 32, sight_range: 10, faction: Faction::Vaqueros, has_gun: false },
+    // Tier 4: Lawmen — faction color: sky blue
+    MonsterTemplate { name: "Cowboy", symbol: "@", fg: RatColor::Rgb(100, 180, 255), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Lawmen, has_gun: true },
+    // Tier 5: Outlaws - Gunslinger — same faction color as Outlaws (red-orange)
+    MonsterTemplate { name: "Gunslinger", symbol: "@", fg: RatColor::Rgb(255, 100, 50), health: 100, attack: 8, speed: 38, sight_range: 14, faction: Faction::Outlaws, has_gun: true },
+    // Tier 6: Civilians — faction color: light purple
+    MonsterTemplate { name: "Civilian", symbol: "@", fg: RatColor::Rgb(180, 160, 240), health: 60, attack: 2, speed: 28, sight_range: 8, faction: Faction::Civilians, has_gun: false },
+    // Tier 7: Indians — faction color: warm brown
+    MonsterTemplate { name: "Indian Brave", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 120, attack: 5, speed: 40, sight_range: 12, faction: Faction::Indians, has_gun: false },
+    MonsterTemplate { name: "Indian Scout", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Indians, has_gun: false },
+    // Tier 8: Sheriff and deputies — faction color: gold
+    MonsterTemplate { name: "Sheriff", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Sheriff, has_gun: true },
+    MonsterTemplate { name: "Deputy", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Sheriff, has_gun: true },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,

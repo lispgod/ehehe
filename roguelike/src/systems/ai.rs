@@ -132,21 +132,33 @@ pub fn a_star_first_step_pub(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
-/// Returns `true` if any neighbor (all 8 directions) of `pos` is a cactus.
-/// Used by NPC pathfinding to avoid cactus-adjacent tiles.
-fn is_near_cactus(pos: GridVec, game_map: &GameMapResource) -> bool {
+/// Returns `true` if `pos` or any neighbor of `pos` contains a dangerous
+/// hazard: cactus, fire, or smoke/sand clouds. NPCs avoid walking into or
+/// adjacent to these hazards during pathfinding.
+fn is_near_danger(pos: GridVec, game_map: &GameMapResource) -> bool {
+    // Check the tile itself for fire or smoke.
+    if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
+        if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::SandCloud)) {
+            return true;
+        }
+    }
+    // Check all 8 neighbors for cactus or fire.
     for neighbor in pos.all_neighbors() {
-        if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
-            && matches!(voxel.props, Some(Props::Cactus)) {
+        if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
+            if matches!(voxel.props, Some(Props::Cactus)) {
                 return true;
             }
+            if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire)) {
+                return true;
+            }
+        }
     }
     false
 }
 
 /// Returns `true` if `pos` is walkable for AI pathfinding: the tile is passable
 /// on the game map, not occupied by a blocking entity other than `self_entity`,
-/// and not adjacent to a cactus.
+/// and not near any dangerous hazards (cactus, fire, smoke).
 fn is_walkable_for_ai(
     pos: GridVec,
     self_entity: Entity,
@@ -156,7 +168,7 @@ fn is_walkable_for_ai(
 ) -> bool {
     game_map.0.is_passable(&pos)
         && !spatial.entities_at(&pos).iter().any(|&e| e != self_entity && blockers.contains(e))
-        && !is_near_cactus(pos, game_map)
+        && !is_near_danger(pos, game_map)
 }
 
 /// Updates the NPC's look direction and marks the viewshed dirty.

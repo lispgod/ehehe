@@ -86,21 +86,24 @@ pub fn draw_system(
     context.draw(|frame| {
         let area = frame.area();
 
-        // ── Top-level layout: game area + inventory bar + bottom panel ──
+        // ── Top-level layout: game area + inventory bar + bottom panel + command bar ──
         let bottom_panel_height = 10u16;
         let inv_bar_height = 3u16; // 1 line + 2 for border
+        let cmd_bar_height = 1u16; // single line command bar at very bottom
         let vert_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(1),
                 Constraint::Length(inv_bar_height),
                 Constraint::Length(bottom_panel_height),
+                Constraint::Length(cmd_bar_height),
             ])
             .split(area);
 
         let game_area = vert_chunks[0];
         let inv_bar_area = vert_chunks[1];
         let bottom_area = vert_chunks[2];
+        let cmd_bar_area = vert_chunks[3];
 
         let render_width = game_area.width;
         let render_height = game_area.height;
@@ -417,6 +420,9 @@ pub fn draw_system(
         // ── Inventory Bar (wide, horizontal) ────────────────────
         render_inventory_bar(frame, inv_bar_area, &inv_item_info);
 
+        // ── Command Bar (very bottom) ───────────────────────────
+        render_command_bar(frame, cmd_bar_area, &input_state);
+
         // ── Overlays ────────────────────────────────────────────
 
         // Show ESC menu overlay when in EscMenu mode (replaces old PAUSED overlay)
@@ -465,11 +471,6 @@ pub fn draw_system(
                     death_area,
                 );
             }
-        }
-
-        // Show help overlay when toggled
-        if input_state.help_visible {
-            render_help_overlay(frame, game_area);
         }
 
         // Show welcome screen at game start
@@ -522,7 +523,7 @@ fn render_bottom_panel(
     .map(|s| Line::from(format!(" {s}")).dark_gray())
     .collect();
 
-    let title = format!(" Log | Tick:{} Kills:{} | ?:help ", turn_counter.0, kill_count.0);
+    let title = format!(" Log | Tick:{} Kills:{} ", turn_counter.0, kill_count.0);
     frame.render_widget(
         Paragraph::new(if log_lines.is_empty() {
             vec![Line::from(" (no events)".dark_gray())]
@@ -689,54 +690,32 @@ fn render_inventory_bar(
     );
 }
 
-/// Renders the help overlay listing all keybindings.
-fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
-    let help_width = 50u16;
-    let help_height = (KEYBINDINGS.len() as u16) + 6; // +6 for border + title + padding
-
-    // Clamp to game area to avoid overflow
-    let w = help_width.min(game_area.width.saturating_sub(2));
-    let h = help_height.min(game_area.height.saturating_sub(2));
-
-    if w < 10 || h < 5 {
-        return;
-    }
-
-    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
-    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
-    let help_area = Rect {
-        x: cx,
-        y: cy,
-        width: w,
-        height: h,
+/// Renders the command bar at the very bottom of the screen showing all key commands.
+fn render_command_bar(frame: &mut ratatui::Frame, area: Rect, input_state: &InputState) {
+    let spans = if input_state.mode == InputMode::EscMenu {
+        vec![
+            Span::from(" Q").bold().yellow(), Span::from(":Resume ").dark_gray(),
+            Span::from("R").bold().yellow(), Span::from(":Restart ").dark_gray(),
+            Span::from("E").bold().yellow(), Span::from(":Exit").dark_gray(),
+        ]
+    } else {
+        vec![
+            Span::from(" WASD").bold().yellow(), Span::from(":Move ").dark_gray(),
+            Span::from("IJKL").bold().yellow(), Span::from(":Cursor ").dark_gray(),
+            Span::from("F").bold().yellow(), Span::from(":Kick ").dark_gray(),
+            Span::from("C").bold().yellow(), Span::from(":Center ").dark_gray(),
+            Span::from("V").bold().yellow(), Span::from(":Autoaim ").dark_gray(),
+            Span::from("R").bold().yellow(), Span::from(":Reload ").dark_gray(),
+            Span::from("G").bold().yellow(), Span::from(":Pickup ").dark_gray(),
+            Span::from("Z").bold().yellow(), Span::from(":Dive ").dark_gray(),
+            Span::from("X").bold().yellow(), Span::from(":WarCry ").dark_gray(),
+            Span::from("B").bold().yellow(), Span::from(":QuickDraw ").dark_gray(),
+            Span::from("T").bold().yellow(), Span::from(":Wait ").dark_gray(),
+            Span::from("Q").bold().yellow(), Span::from(":Menu").dark_gray(),
+        ]
     };
-
-    // Clear the area first so no map ASCII bleeds through.
-    frame.render_widget(Clear, help_area);
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
-    for binding in KEYBINDINGS {
-        lines.push(Line::from(vec![
-            Span::from(format!(" {:<16}", binding.key)).bold().yellow(),
-            Span::from(binding.name.to_string()).white(),
-        ]));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(" Press ? or / to close".dark_gray()));
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Controls ")
-                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
-            )
-            .wrap(Wrap { trim: false })
-            .on_black(),
-        help_area,
-    );
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line).on_black(), area);
 }
 
 /// Renders the welcome screen shown at game start.

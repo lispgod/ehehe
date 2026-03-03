@@ -32,6 +32,24 @@ const RANGED_ATTACK_RANGE: i32 = 100;
 /// Maximum inventory slots for the player.
 pub const MAX_INVENTORY_SIZE: usize = 6;
 
+/// Stamina cost for the Dual Wield ability (7 key).
+const DUAL_WIELD_STAMINA_COST: i32 = 15;
+
+/// Stamina cost for the Fan Shot ability (8 key).
+const FAN_SHOT_STAMINA_COST: i32 = 20;
+
+/// Stamina cost for the Throw Sand ability (9 key).
+const SAND_STAMINA_COST: i32 = 5;
+
+/// Stamina cost for the Throw Item ability (0 key).
+const THROW_ITEM_STAMINA_COST: i32 = 10;
+
+/// Stamina cost for the War Cry ability (X key).
+const WAR_CRY_STAMINA_COST: i32 = 25;
+
+/// Stamina cost for the Quick Draw ability (B key).
+const QUICK_DRAW_STAMINA_COST: i32 = 15;
+
 /// Stamina cost for the Dive ability (Z key).
 const DIVE_STAMINA_COST: i32 = 20;
 
@@ -54,20 +72,21 @@ pub struct CommandBinding {
 pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "WASD / ↑↓←→", name: "Move (3 ticks)", docs: "Move the player one tile. Physical movement costs 3 ticks." },
     CommandBinding { key: "IJKL", name: "Cursor (1 tick)", docs: "Move the cursor one tile for aiming. Costs 1 tick." },
-    CommandBinding { key: "C", name: "Center cursor (1 tick)", docs: "Snap cursor onto your position. Costs 1 tick." },
-    CommandBinding { key: "N", name: "Auto-aim (1 tick)", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
-    CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Cap and ball is slow. Costs 6 ticks." },
+    CommandBinding { key: "C", name: "Center cursor", docs: "Snap cursor onto your position. Costs 1 tick." },
+    CommandBinding { key: "V", name: "Auto-aim", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
+    CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 6 ticks." },
     CommandBinding { key: "F", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
     CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
-    CommandBinding { key: "G", name: "Pick up (1 tick)", docs: "Pick up item at your feet. Costs 1 tick." },
+    CommandBinding { key: "G", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
     CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
+    CommandBinding { key: "X", name: "War Cry (25 sta)", docs: "Create smoke cloud around you, disrupting enemy vision." },
+    CommandBinding { key: "B", name: "Quick Draw (15 sta)", docs: "Instantly fire first loaded gun. Costs 0 extra ticks." },
     CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
-    CommandBinding { key: "7", name: "Dual wield", docs: "Fire two random revolvers at once." },
-    CommandBinding { key: "8", name: "Fan shot", docs: "Fire all rounds from a random revolver." },
-    CommandBinding { key: "9", name: "Throw sand", docs: "Create sand cloud blocking vision toward cursor." },
-    CommandBinding { key: "0", name: "Throw item", docs: "Throw a random inventory item toward cursor." },
-    CommandBinding { key: "Q", name: "Menu / Close", docs: "Close help, toggle pause menu, E then Y to quit." },
-    CommandBinding { key: "? /", name: "Help", docs: "Toggle this help screen." },
+    CommandBinding { key: "7", name: "Dual wield (15 sta)", docs: "Fire two random revolvers at once." },
+    CommandBinding { key: "8", name: "Fan shot (20 sta)", docs: "Fire all rounds from a random revolver." },
+    CommandBinding { key: "9", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
+    CommandBinding { key: "0", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
+    CommandBinding { key: "Q", name: "Menu / Close", docs: "Toggle pause menu, E then Y to quit." },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -212,22 +231,14 @@ pub fn input_system(
 
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
-            // ── Q key: close help, toggle ESC menu ──────────────
+            // ── Q key: toggle ESC menu ──────────────────────────
             KeyCode::Char('q') => {
-                if input_state.help_visible {
-                    // Close help screen
-                    input_state.help_visible = false;
-                } else {
-                    // Open ESC menu and pause the game.
-                    input_state.mode = InputMode::EscMenu;
-                    input_state.quit_confirm = false;
-                    if *game_state.get() == GameState::Playing {
-                        next_game_state.set(GameState::Paused);
-                    }
+                // Open ESC menu and pause the game.
+                input_state.mode = InputMode::EscMenu;
+                input_state.quit_confirm = false;
+                if *game_state.get() == GameState::Playing {
+                    next_game_state.set(GameState::Paused);
                 }
-            }
-            KeyCode::Char('?') | KeyCode::Char('/') => {
-                input_state.help_visible = !input_state.help_visible;
             }
             // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
@@ -248,8 +259,8 @@ pub fn input_system(
                 mark_viewshed_dirty(&mut player_viewshed);
                 advance_turn(&mut next_turn_state);
             }
-            // ── Auto-aim (N): move cursor one step toward nearest hostile — advances one tick ──
-            KeyCode::Char('n') if awaiting_input => {
+            // ── Auto-aim (V): move cursor one step toward nearest hostile — advances one tick ──
+            KeyCode::Char('v') if awaiting_input => {
                 let player_vec = player_pos.as_grid_vec();
                 let mut best_dist = i32::MAX;
                 let mut best_pos = None;
@@ -450,26 +461,42 @@ pub fn input_system(
                 }
             }
             // ── Special abilities (7-0) ─────────────────────────
-            // 7: Dual wield shot — shoot once using two random revolvers
+            // 7: Dual wield shot — shoot once using two random revolvers (costs stamina)
             KeyCode::Char('7') if awaiting_input => {
-                handle_dual_wield(
-                    player_entity, player_pos, player_inv, &item_kind_query,
-                    &cursor, &mut intents, &mut extra_world_ticks,
-                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                );
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= DUAL_WIELD_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina for dual wield!".into());
+                } else {
+                    input_state.ability_stamina_pending = DUAL_WIELD_STAMINA_COST;
+                    handle_dual_wield(
+                        player_entity, player_pos, player_inv, &item_kind_query,
+                        &cursor, &mut intents, &mut extra_world_ticks,
+                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                    );
+                }
             }
-            // 8: Fan shot — fire all rounds from a random revolver
+            // 8: Fan shot — fire all rounds from a random revolver (costs stamina)
             KeyCode::Char('8') if awaiting_input => {
-                handle_fan_shot(
-                    player_entity, player_pos, player_inv, &item_kind_query,
-                    &cursor, &mut intents, &mut extra_world_ticks,
-                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                );
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= FAN_SHOT_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina for fan shot!".into());
+                } else {
+                    input_state.ability_stamina_pending = FAN_SHOT_STAMINA_COST;
+                    handle_fan_shot(
+                        player_entity, player_pos, player_inv, &item_kind_query,
+                        &cursor, &mut intents, &mut extra_world_ticks,
+                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                    );
+                }
             }
-            // 9: Throw sand — create sand cloud blocking vision
+            // 9: Throw sand — create sand cloud blocking vision (costs stamina)
             KeyCode::Char('9') if awaiting_input => {
                 let has_stamina = player_stamina
-                    .map(|m| m.current >= 5)
+                    .map(|m| m.current >= SAND_STAMINA_COST)
                     .unwrap_or(false);
                 if !has_stamina {
                     combat_log.push("Not enough stamina!".into());
@@ -487,19 +514,86 @@ pub fn input_system(
                             target: sand_center,
                             grenade_index: usize::MAX, // sentinel: no grenade consumed
                         });
+                        input_state.ability_stamina_pending = SAND_STAMINA_COST;
                         combat_log.push("You throw a handful of sand!".into());
                         extra_world_ticks.0 = 0;
                         advance_turn(&mut next_turn_state);
                     }
                 }
             }
-            // 0: Throw random item from inventory toward cursor
+            // 0: Throw random item from inventory toward cursor (costs stamina)
             KeyCode::Char('0') if awaiting_input => {
-                handle_throw_random(
-                    player_entity, player_pos, player_inv, &item_kind_query,
-                    &cursor, &mut intents, &mut extra_world_ticks,
-                    &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                );
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= THROW_ITEM_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina to throw!".into());
+                } else {
+                    input_state.ability_stamina_pending = THROW_ITEM_STAMINA_COST;
+                    handle_throw_random(
+                        player_entity, player_pos, player_inv, &item_kind_query,
+                        &cursor, &mut intents, &mut extra_world_ticks,
+                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                    );
+                }
+            }
+            // X: War Cry — stun/scare nearby enemies for a few turns (costs stamina)
+            KeyCode::Char('x') if awaiting_input => {
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= WAR_CRY_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina for war cry!".into());
+                } else {
+                    input_state.ability_stamina_pending = WAR_CRY_STAMINA_COST;
+                    // War cry: create a large sand cloud centered on the player
+                    // that temporarily blocks enemy vision in all directions
+                    intents.spell_intents.write(SpellCastIntent {
+                        caster: player_entity,
+                        radius: 3,
+                        target: player_pos.as_grid_vec(),
+                        grenade_index: usize::MAX, // sentinel: no grenade consumed
+                    });
+                    combat_log.push("You let out a deafening war cry!".into());
+                    extra_world_ticks.0 = 0;
+                    advance_turn(&mut next_turn_state);
+                }
+            }
+            // B: Quick Draw — instantly fire the first loaded gun (costs stamina, no extra ticks)
+            KeyCode::Char('b') if awaiting_input => {
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= QUICK_DRAW_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina for quick draw!".into());
+                } else {
+                    let delta = cursor.pos - player_pos.as_grid_vec();
+                    if delta == crate::grid_vec::GridVec::ZERO {
+                        combat_log.push("Cursor is on your position!".into());
+                    } else if let Some(inv) = player_inv {
+                        let gun_ent = inv.items.iter().find(|&&ent| {
+                            item_kind_query.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0))
+                        }).copied();
+                        if let Some(gun) = gun_ent {
+                            input_state.ability_stamina_pending = QUICK_DRAW_STAMINA_COST;
+                            intents.ranged_intents.write(RangedAttackIntent {
+                                attacker: player_entity,
+                                range: RANGED_ATTACK_RANGE,
+                                dx: delta.x,
+                                dy: delta.y,
+                                gun_item: Some(gun),
+                            });
+                            extra_world_ticks.0 = 0; // quick draw costs 0 extra ticks
+                            advance_turn(&mut next_turn_state);
+                            combat_log.push("Quick draw!".into());
+                        } else {
+                            combat_log.push("No loaded gun for quick draw!".into());
+                        }
+                    } else {
+                        combat_log.push("No inventory!".into());
+                    }
+                }
             }
             _ => {}
         }

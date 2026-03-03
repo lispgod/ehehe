@@ -173,4 +173,10 @@ pub fn dive_stamina_system(
         }
         input_state.dive_stamina_pending = 0;
     }
+    if input_state.ability_stamina_pending > 0 {
+        if let Ok(mut stamina) = player_query.single_mut() {
+            stamina.spend(input_state.ability_stamina_pending);
+        }
+        input_state.ability_stamina_pending = 0;
+    }
 }

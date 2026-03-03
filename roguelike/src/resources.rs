@@ -53,6 +53,8 @@ pub struct InputState {
     pub reload_pending: bool,
     /// Stamina cost for a pending dive action.
     pub dive_stamina_pending: i32,
+    /// Stamina cost for a pending special ability action.
+    pub ability_stamina_pending: i32,
 }
 
 impl Default for InputState {
@@ -65,6 +67,7 @@ impl Default for InputState {
             quit_confirm: false,
             reload_pending: false,
             dive_stamina_pending: 0,
+            ability_stamina_pending: 0,
         }
     }
 }

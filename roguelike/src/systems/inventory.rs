@@ -101,12 +101,16 @@ pub fn use_item_system(
                     let healed = hp.heal(heal);
                     combat_log.push(format!("Used {item_name}, healed {healed} HP"));
                 }
-                inv.items.remove(intent.item_index);
+                if intent.item_index < inv.items.len() {
+                    inv.items.remove(intent.item_index);
+                }
                 commands.entity(item_entity).despawn();
             }
             ItemKind::Grenade { .. } => {
                 combat_log.push(format!("Used {item_name}!"));
-                inv.items.remove(intent.item_index);
+                if intent.item_index < inv.items.len() {
+                    inv.items.remove(intent.item_index);
+                }
                 commands.entity(item_entity).despawn();
             }
             ItemKind::Gun { loaded, capacity, caliber, name: gun_name, .. } => {

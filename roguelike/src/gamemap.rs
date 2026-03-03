@@ -92,8 +92,8 @@ impl GameMap {
 
         // ── Step 2: Street grid ─────────────────────────────────────
         // Multiple horizontal avenues spanning the map width.
-        let avenue_spacing = 28;
-        let avenue_half_width = 2;
+        let avenue_spacing = 24;
+        let avenue_half_width = 3;
         let mut avenue_ys: Vec<CoordinateUnit> = Vec::new();
         {
             let first_avenue = 20;
@@ -112,10 +112,10 @@ impl GameMap {
             }
         }
 
-        // Vertical cross streets every ~30 tiles with noise-based jitter.
+        // Vertical cross streets every ~22 tiles with noise-based jitter.
         let cross_seed = seed.wrapping_add(66666);
-        let cross_spacing = 26;
-        let cross_half_width = 1;
+        let cross_spacing = 22;
+        let cross_half_width = 2;
         let mut cross_xs: Vec<CoordinateUnit> = Vec::new();
         {
             let mut cx = 20i32;
@@ -416,9 +416,9 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             let pos = GridVec::new(x, y);
             if let Some(voxel) = map.get_voxel_at_mut(&pos) {
                 let is_border = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
-                // Leave a doorway in the center of the bottom wall
-                let is_door = y == b.y + b.h - 1
-                    && x == b.x + b.w / 2;
+                // Leave a doorway in the center of the bottom wall and one on the top
+                let is_door = (y == b.y + b.h - 1 && x == b.x + b.w / 2)
+                    || (y == b.y && x == b.x + b.w / 2);
 
                 if is_border && !is_door {
                     voxel.props = Some(Props::Wall);
@@ -729,10 +729,10 @@ fn place_parks(
     seed: NoiseSeed,
 ) {
     let park_seed = seed.wrapping_add(555666);
-    let park_count = 3 + (value_noise(0, 0, park_seed) * 3.0) as i32; // 3-5 parks
+    let park_count = 5 + (value_noise(0, 0, park_seed) * 4.0) as i32; // 5-8 parks
     let mut placed = 0;
     let mut pi = 0i32;
-    while placed < park_count && pi < 20 {
+    while placed < park_count && pi < 30 {
         let px_noise = value_noise(pi, 0, park_seed);
         let py_noise = value_noise(0, pi, park_seed.wrapping_add(1));
         let park_cx = 30 + (px_noise * (width - 60) as f64) as CoordinateUnit;

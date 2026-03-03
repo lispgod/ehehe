@@ -114,8 +114,6 @@ pub enum Props {
     Sign,
     /// A bale of hay — blocks movement but not vision, and is flammable.
     HayBale,
-    /// The victory goal at the top-right corner of the map.
-    VictoryGoal,
 }
 
 impl Props {
@@ -129,7 +127,7 @@ impl Props {
     /// Most solid objects block movement; low/open objects like fences and
     /// water troughs allow passage.
     pub fn blocks_movement(&self) -> bool {
-        !matches!(self, Props::Fence | Props::WaterTrough | Props::VictoryGoal)
+        !matches!(self, Props::Fence | Props::WaterTrough)
     }
 
     /// Returns `true` if this prop blocks line-of-sight.
@@ -139,7 +137,7 @@ impl Props {
             // Short/open objects: you can see over/through them
             Props::Fence | Props::WaterTrough | Props::Bush
             | Props::Bench | Props::Chair | Props::HayBale
-            | Props::Sign | Props::VictoryGoal => false,
+            | Props::Sign => false,
             _ => true,
         }
     }
@@ -176,7 +174,6 @@ impl std::fmt::Display for Props {
             Props::Piano => write!(f, "Piano"),
             Props::Sign => write!(f, "Sign"),
             Props::HayBale => write!(f, "Hay Bale"),
-            Props::VictoryGoal => write!(f, "Gold Cache"),
         }
     }
 }

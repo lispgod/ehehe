@@ -116,8 +116,8 @@ pub fn movement_system(
     blood_map.prune(turn_counter.0);
 }
 
-/// Checks if the player has reached the victory goal tile.
-/// Transitions to Victory state when the player steps on a VictoryGoal prop.
+/// Checks if the player has reached any edge of the map.
+/// Transitions to Victory state when the player escapes the town.
 pub fn victory_check_system(
     player_query: Query<&Position, With<Player>>,
     game_map: Res<GameMapResource>,
@@ -130,11 +130,10 @@ pub fn victory_check_system(
     }
     if let Ok(pos) = player_query.single() {
         let gv = pos.as_grid_vec();
-        if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
-            if matches!(voxel.props, Some(Props::VictoryGoal)) {
-                combat_log.push("You found the legendary Gold Cache! YOU WIN!".into());
-                next_state.set(GameState::Victory);
-            }
+        // Win by reaching any edge of the map (escape the town)
+        if gv.x <= 1 || gv.y <= 1 || gv.x >= game_map.0.width - 2 || gv.y >= game_map.0.height - 2 {
+            combat_log.push("You escaped the town! YOU WIN!".into());
+            next_state.set(GameState::Victory);
         }
     }
 }

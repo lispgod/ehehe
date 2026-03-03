@@ -11,6 +11,7 @@ use roguelike::events::*;
 use roguelike::gamemap::GameMap;
 use roguelike::grid_vec::GridVec;
 use roguelike::resources::*;
+use roguelike::typeenums::Props;
 use roguelike::systems::{ai, combat, inventory, movement, projectile, spatial_index, spell, visibility};
 
 // ─── Helper ──────────────────────────────────────────────────────
@@ -103,12 +104,19 @@ fn player_moves_to_passable_tile() {
 #[test]
 fn player_blocked_by_wall() {
     let mut app = test_app();
-    // Place player next to a wall (border at x=0)
-    let player = spawn_test_player(&mut app, 1, 1);
+    // Place player next to a wall tile we explicitly set
+    let player = spawn_test_player(&mut app, 5, 5);
+    // Place a wall at (4, 5) so player can't move west
+    {
+        let mut map = app.world_mut().resource_mut::<GameMapResource>();
+        if let Some(voxel) = map.0.get_voxel_at_mut(&GridVec::new(4, 5)) {
+            voxel.props = Some(Props::Wall);
+        }
+    }
 
     app.update();
 
-    // Try to move west into the wall at x=0
+    // Try to move west into the wall at (4, 5)
     app.world_mut().write_message(MoveIntent {
         entity: player,
         dx: -1,
@@ -117,8 +125,8 @@ fn player_blocked_by_wall() {
     app.update();
 
     let pos = app.world().get::<Position>(player).unwrap();
-    assert_eq!(pos.x, 1, "Player should be blocked by wall");
-    assert_eq!(pos.y, 1);
+    assert_eq!(pos.x, 5, "Player should be blocked by wall");
+    assert_eq!(pos.y, 5);
 }
 
 #[test]
@@ -2747,7 +2755,7 @@ fn spell_particles_respect_max_limit() {
         particles.add_aoe(GridVec::new(i * 10, 0), 6);
     }
     // Should not exceed the internal max
-    assert!(particles.particles.len() <= 800,
+    assert!(particles.particles.len() <= 1200,
         "Particles should respect MAX_PARTICLES limit, count is {}", particles.particles.len());
 }
 
@@ -3273,8 +3281,8 @@ fn ai_memory_expires_after_duration() {
     }
     app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
 
-    // Advance turn counter well past MEMORY_DURATION (15)
-    app.world_mut().resource_mut::<TurnCounter>().0 = 20;
+    // Advance turn counter well past MEMORY_DURATION (25)
+    app.world_mut().resource_mut::<TurnCounter>().0 = 30;
     app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
 
     app.update();

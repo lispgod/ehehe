@@ -15,7 +15,7 @@ use crate::typeenums::Props;
 /// Prevents lag when the target is unreachable or far away.
 /// 256 nodes covers a ~16-tile radius search area, sufficient
 /// for navigating around most local obstacles.
-const MAX_A_STAR_NODES: usize = 256;
+const MAX_A_STAR_NODES: usize = 512;
 
 /// Finds the first step direction from `start` toward `goal` using A*
 /// with the **Chebyshev heuristic** (L∞ norm).
@@ -272,12 +272,22 @@ pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
     }
     matches!(
         (a, b),
+        // Outlaws vs law enforcement
         (Faction::Outlaws, Faction::Lawmen)
         | (Faction::Lawmen, Faction::Outlaws)
+        | (Faction::Outlaws, Faction::Sheriff)
+        | (Faction::Sheriff, Faction::Outlaws)
+        // Wildlife attacks everyone
         | (Faction::Wildlife, _)
         | (_, Faction::Wildlife)
+        // Vaqueros vs Outlaws
         | (Faction::Vaqueros, Faction::Outlaws)
         | (Faction::Outlaws, Faction::Vaqueros)
+        // Indians vs law enforcement
+        | (Faction::Indians, Faction::Lawmen)
+        | (Faction::Lawmen, Faction::Indians)
+        | (Faction::Indians, Faction::Sheriff)
+        | (Faction::Sheriff, Faction::Indians)
     )
 }
 
@@ -291,7 +301,7 @@ const PATROL_RADIUS: i32 = 8;
 const FLEE_HP_THRESHOLD: f64 = 0.3;
 
 /// Number of turns memory persists after losing sight of a target.
-const MEMORY_DURATION: u32 = 15;
+const MEMORY_DURATION: u32 = 25;
 
 // ─────────────────────── AI Decision Helpers ───────────────────────
 

@@ -9,7 +9,7 @@ fn main() {
     App::new()
         .add_plugins((
             MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
-                Duration::from_secs_f32(1. / 12.),
+                Duration::from_secs_f32(1. / 20.),
             )),
             RatatuiPlugins::default(),
             RoguelikePlugin,

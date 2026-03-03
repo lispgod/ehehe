@@ -273,7 +273,7 @@ pub fn draw_system(
                         let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).clamp(MIN_EXPLOSION_INTENSITY, 1.0);
                         let r = (255.0 * intensity) as u8;
                         let g = (165.0 * intensity) as u8;
-                        let symbol = if *lifetime > 5 { "◦" } else if *lifetime > 3 { "·" } else { "." };
+                        let symbol = if *lifetime > 5 { "▓" } else if *lifetime > 3 { "░" } else { "·" };
                         render_packet[screen.y as usize][screen.x as usize] =
                             (symbol.into(), RatColor::Rgb(r, g, 0), bg);
                     }
@@ -449,7 +449,7 @@ pub fn draw_system(
                         if let Some(ref floor) = voxel.floor {
                             let entry: Option<(String, RatColor, String)> = match floor {
                                 crate::typeenums::Floor::SandCloud => {
-                                    Some(("*".into(), RatColor::Rgb(210, 180, 120), "Smoke Cloud".into()))
+                                    Some(("░".into(), RatColor::Rgb(210, 180, 120), "Smoke Cloud".into()))
                                 }
                                 crate::typeenums::Floor::Fire => {
                                     Some(("^".into(), RatColor::Rgb(255, 140, 0), "Fire".into()))
@@ -497,7 +497,7 @@ pub fn draw_system(
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! You found the legendary Gold Cache! Press Q to quit, R to restart. ";
+            let label = " VICTORY! You escaped the town! Press Q to quit, R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;

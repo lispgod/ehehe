@@ -91,11 +91,7 @@ impl GameMap {
 
                 let floor = select_desert_floor(biome, detail);
 
-                let prop = if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
-                    Some(Props::Wall)
-                } else {
-                    None
-                };
+                let prop = None;
 
                 row.push(Voxel {
                     floor: Some(floor),
@@ -172,11 +168,11 @@ impl GameMap {
         // River flows top to bottom with sinusoidal wobble
         for y in 1..height - 1 {
             let fy = y as f64;
-            let wobble = (fy * 0.02).sin() * 20.0
-                + (fy * 0.05).sin() * 8.0
-                + value_noise(0, y, river_seed) * 6.0;
+            let wobble = (fy * 0.015).sin() * 25.0
+                + (fy * 0.04).sin() * 12.0
+                + value_noise(0, y, river_seed) * 8.0;
             let center_x = river_cx + wobble;
-            let river_width = 4.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 3.0;
+            let river_width = 8.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 6.0;
             let beach_width = 2.0;
 
             for x in 1..width - 1 {
@@ -216,7 +212,7 @@ impl GameMap {
             }
         }
         for &by in &bridge_ys {
-            for dy in -2..=2i32 {
+            for dy in -3..=3i32 {
                 let y = by + dy;
                 if y <= 0 || y >= height - 1 { continue; }
                 for x in 1..width - 1 {
@@ -393,6 +389,8 @@ impl GameMap {
 
         // ── Step 5b: Town plaza (open killzone) ─────────────────────
         place_town_plaza(&mut map, width, height, seed);
+        place_cemetery(&mut map, width, height, seed);
+        place_corral(&mut map, width, height, seed);
 
         // ── Step 6: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
@@ -401,24 +399,6 @@ impl GameMap {
 
         // ── Step 7: Decorative elements in open areas ───────────────
         place_desert_decorations(&mut map, width, height, seed);
-
-        // ── Step 8: Victory goal at top-right ───────────────────────
-        let goal_x = width - 15;
-        let goal_y = height - 15;
-        // Clear area and place the goal
-        clear_around(&mut map, GridVec::new(goal_x, goal_y), 4);
-        // Place victory goal markers in a visible pattern
-        for dy in -1..=1i32 {
-            for dx in -1..=1i32 {
-                let pos = GridVec::new(goal_x + dx, goal_y + dy);
-                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                    voxel.floor = Some(Floor::Grass);
-                    if dx == 0 && dy == 0 {
-                        voxel.props = Some(Props::VictoryGoal);
-                    }
-                }
-            }
-        }
 
         // ── Step 9: Spawn clearing (bottom-left) ───────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
@@ -1698,6 +1678,86 @@ fn place_desert_decorations(
     }
 }
 
+/// Places a small cemetery on the outskirts of the town.
+fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let cw: CoordinateUnit = 14;
+    let ch: CoordinateUnit = 10;
+    if width < cw + 20 || height < ch + 20 {
+        return;
+    }
+    let c_seed = seed.wrapping_add(999111);
+    // Place in the lower-right area away from center
+    let cx = width * 3 / 4 + (value_noise(7, 7, c_seed) * 10.0) as CoordinateUnit;
+    let cy = height * 3 / 4 + (value_noise(8, 8, c_seed) * 10.0) as CoordinateUnit;
+    let px = (cx - cw / 2).clamp(2, width - cw - 2);
+    let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    // Fence perimeter with gate
+    for y in py..py + ch {
+        for x in px..px + cw {
+            let pos = GridVec::new(x, y);
+            let is_border = x == px || x == px + cw - 1 || y == py || y == py + ch - 1;
+            let is_gate = y == py + ch - 1 && x == px + cw / 2;
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                if is_border && !is_gate {
+                    voxel.props = Some(Props::Fence);
+                    voxel.floor = Some(Floor::Grass);
+                } else {
+                    voxel.props = None;
+                    voxel.floor = Some(Floor::Grass);
+                }
+            }
+        }
+    }
+
+    // Gravestones (rocks in rows)
+    for row in (2..ch - 2).step_by(2) {
+        for col in (2..cw - 2).step_by(3) {
+            set_prop(map, px + col, py + row, Props::Rock);
+        }
+    }
+}
+
+/// Places a livestock corral with fenced area and hay bales.
+fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let cw: CoordinateUnit = 12;
+    let ch: CoordinateUnit = 8;
+    if width < cw + 20 || height < ch + 20 {
+        return;
+    }
+    let c_seed = seed.wrapping_add(888222);
+    let cx = width / 4 + (value_noise(9, 9, c_seed) * 10.0) as CoordinateUnit;
+    let cy = height * 3 / 4 + (value_noise(10, 10, c_seed) * 10.0) as CoordinateUnit;
+    let px = (cx - cw / 2).clamp(2, width - cw - 2);
+    let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    // Fence perimeter with gate
+    for y in py..py + ch {
+        for x in px..px + cw {
+            let pos = GridVec::new(x, y);
+            let is_border = x == px || x == px + cw - 1 || y == py || y == py + ch - 1;
+            let is_gate = y == py + ch - 1 && x == px + cw / 2;
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                if is_border && !is_gate {
+                    voxel.props = Some(Props::Fence);
+                    voxel.floor = Some(Floor::Dirt);
+                } else {
+                    voxel.props = None;
+                    voxel.floor = Some(Floor::Dirt);
+                }
+            }
+        }
+    }
+
+    // Hay bales and water troughs inside
+    set_prop(map, px + 2, py + 2, Props::HayBale);
+    set_prop(map, px + 5, py + 2, Props::HayBale);
+    set_prop(map, px + 8, py + 2, Props::HayBale);
+    set_prop(map, px + cw / 2, py + ch / 2, Props::WaterTrough);
+    set_prop(map, px + 2, py + ch - 3, Props::HitchingPost);
+    set_prop(map, px + cw - 3, py + ch - 3, Props::HitchingPost);
+}
+
 /// Clears all props within a given radius of a point.
 fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
     let radius_sq = radius * radius;
@@ -1739,40 +1799,29 @@ mod tests {
     }
 
     #[test]
-    fn game_map_border_is_walls() {
+    fn game_map_border_is_passable_for_escape() {
         let map = GameMap::new(20, 15, 42);
-        // Top and bottom rows
+        // Borders should be passable (no wall props) so player can escape
+        let mut any_border_passable = false;
         for x in 0..20 {
-            assert!(
-                map.voxels[0][x as usize].props.is_some(),
-                "Bottom border at x={x} should have wall"
-            );
-            assert!(
-                map.voxels[14][x as usize].props.is_some(),
-                "Top border at x={x} should have wall"
-            );
+            if map.is_passable(&GridVec::new(x, 0)) { any_border_passable = true; }
+            if map.is_passable(&GridVec::new(x, 14)) { any_border_passable = true; }
         }
-        // Left and right columns
         for y in 0..15 {
-            assert!(
-                map.voxels[y as usize][0].props.is_some(),
-                "Left border at y={y} should have wall"
-            );
-            assert!(
-                map.voxels[y as usize][19].props.is_some(),
-                "Right border at y={y} should have wall"
-            );
+            if map.is_passable(&GridVec::new(0, y)) { any_border_passable = true; }
+            if map.is_passable(&GridVec::new(19, y)) { any_border_passable = true; }
         }
+        assert!(any_border_passable, "At least some border tiles should be passable for escape");
     }
 
     #[test]
-    fn game_map_border_not_passable() {
+    fn game_map_border_tiles_exist() {
         let map = GameMap::new(20, 15, 42);
-        // Borders should be impassable
-        assert!(!map.is_passable(&GridVec::new(0, 0)));
-        assert!(!map.is_passable(&GridVec::new(19, 0)));
-        assert!(!map.is_passable(&GridVec::new(0, 14)));
-        assert!(!map.is_passable(&GridVec::new(19, 14)));
+        // Border tiles should have floor data (they exist on the map)
+        assert!(map.get_voxel_at(&GridVec::new(0, 0)).is_some());
+        assert!(map.get_voxel_at(&GridVec::new(19, 0)).is_some());
+        assert!(map.get_voxel_at(&GridVec::new(0, 14)).is_some());
+        assert!(map.get_voxel_at(&GridVec::new(19, 14)).is_some());
     }
 
     #[test]
@@ -2100,7 +2149,6 @@ mod tests {
         assert!(Props::Wall.is_wall());
         assert!(!Props::Table.is_wall());
         assert!(!Props::Barrel.is_wall());
-        assert!(!Props::VictoryGoal.is_wall());
     }
 
     #[test]

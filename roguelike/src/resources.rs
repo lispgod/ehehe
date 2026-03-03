@@ -192,11 +192,11 @@ pub struct SpellParticles {
 }
 
 /// Maximum number of active combat particles to prevent unbounded growth.
-const MAX_PARTICLES: usize = 800;
+const MAX_PARTICLES: usize = 1200;
 
 /// Number of movement sub-steps per tick for particle animations.
 /// Higher values make particles move faster and more visibly.
-const PARTICLE_SUB_STEPS: usize = 2;
+const PARTICLE_SUB_STEPS: usize = 1;
 
 impl SpellParticles {
     /// Adds an expanding ring of particles for a grenade blast.

@@ -68,7 +68,7 @@ impl Furniture {
     pub fn is_flammable(&self) -> bool {
         matches!(
             self,
-            Furniture::Tree | Furniture::DeadTree | Furniture::Bush
+            Furniture::Wall | Furniture::Tree | Furniture::DeadTree | Furniture::Bush
             | Furniture::Barrel | Furniture::Crate | Furniture::Table
             | Furniture::Chair | Furniture::Piano | Furniture::Bench
             | Furniture::HayBale | Furniture::Sign | Furniture::Fence

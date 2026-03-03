@@ -137,13 +137,20 @@ pub fn fire_system(
                         burnout_tiles.push(pos);
                     }
 
-                // Spread fire to adjacent flammable furniture.
+                // Spread fire to adjacent flammable furniture and wooden floors.
                 for neighbor in pos.cardinal_neighbors() {
-                    if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor)
-                        && let Some(ref furn) = n_voxel.furniture
-                            && furn.is_flammable() {
-                                new_fire_tiles.push(neighbor);
-                            }
+                    if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor) {
+                        // Skip tiles already on fire
+                        if matches!(n_voxel.floor, Some(Floor::Fire)) {
+                            continue;
+                        }
+                        let has_flammable_furniture = n_voxel.furniture.as_ref()
+                            .is_some_and(|f| f.is_flammable());
+                        let has_wood_floor = matches!(n_voxel.floor, Some(Floor::WoodPlanks));
+                        if has_flammable_furniture || has_wood_floor {
+                            new_fire_tiles.push(neighbor);
+                        }
+                    }
                 }
             }
         }

@@ -498,10 +498,10 @@ fn place_street_furniture(
     for x in (4..width - 4).step_by(4) {
         let noise = value_noise(x, sidewalk_north, furn_seed);
         let furn = match (noise * 6.0) as u32 {
-            0 => Furniture::LampPost,
+            0 => Furniture::HitchingPost,
             1 => Furniture::Bench,
             2 => Furniture::Barrel,
-            3 => Furniture::HitchingPost,
+            3 => Furniture::WaterTrough,
             4 => Furniture::Sign,
             _ => Furniture::Crate,
         };
@@ -512,7 +512,7 @@ fn place_street_furniture(
         let noise = value_noise(x, sidewalk_south, furn_seed.wrapping_add(1111));
         let furn = match (noise * 6.0) as u32 {
             0 => Furniture::Bench,
-            1 => Furniture::LampPost,
+            1 => Furniture::Crate,
             2 => Furniture::WaterTrough,
             3 => Furniture::Barrel,
             4 => Furniture::HitchingPost,

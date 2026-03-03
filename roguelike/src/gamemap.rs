@@ -586,6 +586,12 @@ const SHAPE_RECT: u32 = 0;
 const SHAPE_ROUNDED: u32 = 1;
 const SHAPE_L: u32 = 2;
 
+/// Corner radius for rounded-corner building shapes.
+const ROUNDED_CORNER_RADIUS: CoordinateUnit = 2;
+
+/// L-shape notch is ~1/N of building dimensions.
+const L_SHAPE_NOTCH_DIVISOR: CoordinateUnit = 3;
+
 fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
     let furn_seed = seed.wrapping_add(55555);
 
@@ -597,14 +603,14 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
         SHAPE_RECT
     };
 
-    // For L-shape, compute notch dimensions (~1/3 of building)
-    let notch_w = b.w / 3;
-    let notch_h = b.h / 3;
+    // For L-shape, compute notch dimensions
+    let notch_w = b.w / L_SHAPE_NOTCH_DIVISOR;
+    let notch_h = b.h / L_SHAPE_NOTCH_DIVISOR;
     // Notch is in top-right corner
     let notch_x_start = b.x + b.w - notch_w;
     let notch_y_start = b.y + b.h - notch_h;
 
-    let corner_radius: CoordinateUnit = 2;
+    let corner_radius = ROUNDED_CORNER_RADIUS;
 
     for y in b.y..b.y + b.h {
         for x in b.x..b.x + b.w {

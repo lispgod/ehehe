@@ -21,6 +21,12 @@ use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
 /// Must match the lifetime used in spell.rs when creating particles.
 const PARTICLE_LIFETIME: f32 = 8.0;
 
+/// Maximum expected lifetime for smoke particles, used to normalize intensity.
+const SMOKE_PARTICLE_MAX_LIFETIME: f32 = 10.0;
+
+/// Minimum intensity for explosion particles so they remain visible.
+const MIN_EXPLOSION_INTENSITY: f32 = 0.15;
+
 
 /// Ticks and renders combat particles each frame. Also computes which
 /// sound indicators should be visible on the map from `SoundEvents`.
@@ -252,8 +258,7 @@ pub fn draw_system(
                     if *is_sand {
                         // Smoke plume: particles fade through different symbols
                         // as they drift and dissipate, creating a visible plume effect.
-                        let max_life = 10.0f32;
-                        let intensity = (*lifetime as f32 / max_life).clamp(0.2, 1.0);
+                        let intensity = (*lifetime as f32 / SMOKE_PARTICLE_MAX_LIFETIME).clamp(0.2, 1.0);
                         let (symbol, r, g, b) = if *lifetime > 6 {
                             ("▓", (220.0 * intensity) as u8, (190.0 * intensity) as u8, (130.0 * intensity) as u8)
                         } else if *lifetime > 3 {
@@ -265,7 +270,7 @@ pub fn draw_system(
                             (symbol.into(), RatColor::Rgb(r, g, b), bg);
                     } else {
                         // Explosion/fire particle: visible movement with changing symbols
-                        let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).clamp(0.15, 1.0);
+                        let intensity = (*lifetime as f32 / PARTICLE_LIFETIME).clamp(MIN_EXPLOSION_INTENSITY, 1.0);
                         let r = (255.0 * intensity) as u8;
                         let g = (165.0 * intensity) as u8;
                         let symbol = if *lifetime > 5 { "◦" } else if *lifetime > 3 { "·" } else { "." };

@@ -8,12 +8,6 @@ use crate::typeenums::Floor;
 /// Stamina regenerated per world turn.
 const STAMINA_REGEN_PER_TURN: i32 = 2;
 
-/// Health regenerated per turn (passive, slower than stamina).
-const HEALTH_REGEN_PER_TURN: i32 = 1;
-
-/// Health regeneration only triggers every N turns to keep it slower than stamina.
-const HEALTH_REGEN_INTERVAL: u32 = 30;
-
 /// Fire spreads every N world turns.
 const FIRE_SPREAD_INTERVAL: u32 = 8;
 
@@ -48,14 +42,9 @@ pub fn end_world_turn(
     dynamic_rng.advance();
     sound_events.tick();
 
-    if let Ok((mut stamina, mut health)) = player_query.single_mut() {
+    if let Ok((mut stamina, _health)) = player_query.single_mut() {
         // Regenerate player stamina using the pool's recover method.
         stamina.recover(STAMINA_REGEN_PER_TURN);
-
-        // Regenerate player health (slower than stamina — every N turns).
-        if turn_counter.0.is_multiple_of(HEALTH_REGEN_INTERVAL) {
-            health.heal(HEALTH_REGEN_PER_TURN);
-        }
     }
 
     // If spectating after death, stay in Playing and go to AwaitingInput

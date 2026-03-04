@@ -408,8 +408,14 @@ const DODGE_CHANCE: f64 = 0.20;
 /// Patrol radius: how far an NPC will wander from its spawn point.
 const PATROL_RADIUS: i32 = 12;
 
-/// HP fraction below which an NPC considers fleeing (if courage is low enough).
-const FLEE_HP_THRESHOLD: f64 = 0.3;
+/// Absolute HP threshold below which an NPC will flee.
+const FLEE_HP_ABSOLUTE: i32 = 20;
+
+/// Base number of turns between random 180° look-around when idle/patrolling.
+const LOOK_AROUND_BASE_INTERVAL: u32 = 20;
+
+/// Additional random turns added to look-around interval (dice roll range).
+const LOOK_AROUND_DICE_RANGE: u32 = 20;
 
 /// Number of turns memory persists after losing sight of a target.
 const MEMORY_DURATION: u32 = 40;
@@ -417,7 +423,7 @@ const MEMORY_DURATION: u32 = 40;
 // ─────────────────────── AI Decision Helpers ───────────────────────
 
 /// Returns `true` if the NPC has any healing item (whiskey) in inventory.
-fn has_healing_item(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+fn _has_healing_item(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
     inventory.as_ref().is_some_and(|inv| {
         inv.items.iter().any(|&ent| {
             item_kinds.get(ent).ok().is_some_and(|k|
@@ -454,13 +460,22 @@ fn has_ranged_weapon(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut
     has_loaded_gun(inventory, item_kinds) || has_bow(inventory, item_kinds)
 }
 
-/// Returns `true` if the NPC should consider fleeing based on health and personality.
-fn should_flee(health: &Option<Mut<Health>>, personality: Option<&AiPersonality>, inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+/// Returns `true` if the NPC has an unloaded (but reloadable) gun.
+fn has_unloaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
+    inventory.as_ref().is_some_and(|inv| {
+        inv.items.iter().any(|&ent| {
+            item_kinds.get(ent).ok().is_some_and(|k|
+                matches!(*k, ItemKind::Gun { loaded, capacity, .. } if loaded < capacity)
+            )
+        })
+    })
+}
+
+/// Returns `true` if the NPC should consider fleeing based on health.
+/// NPCs only flee when below 20 absolute HP.
+fn should_flee(health: &Option<Mut<Health>>, _personality: Option<&AiPersonality>, _inventory: &Option<Mut<Inventory>>, _item_kinds: &Query<&mut ItemKind>) -> bool {
     let Some(hp) = health else { return false; };
-    if hp.fraction() >= FLEE_HP_THRESHOLD { return false; }
-    if has_healing_item(inventory, item_kinds) { return false; }
-    let courage = personality.map(|p| p.courage).unwrap_or(0.5);
-    hp.fraction() < courage * FLEE_HP_THRESHOLD
+    hp.current < FLEE_HP_ABSOLUTE
 }
 
 /// **Dijkstra-enhanced flee**: builds a small threat-distance map centred
@@ -832,42 +847,99 @@ pub fn ai_system(
                             update_look_dir(toward, &mut ai_look_dir, &mut viewshed);
                         }
                     }
-                } else if let Some((_, item_vec)) = nearest_item {
-                    let step = a_star_first_step(my_pos, item_vec, |p| {
-                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
-                    });
-                    if let Some(step) = step
+                } else {
+                    // No enemy visible — prioritize reloading.
+                    let mut reloaded = false;
+                    if has_unloaded_gun(&inventory, &item_kinds) {
+                        if let Some(ref mut inv) = inventory {
+                            let reloadable = inv.items.iter().copied().find(|&ent| {
+                                item_kinds.get(ent).ok().is_some_and(|k|
+                                    matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+                                )
+                            });
+                            if let Some(gun_entity) = reloadable
+                                && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                    && let ItemKind::Gun { ref mut loaded, .. } = *kind {
+                                        *loaded += 1;
+                                        reloaded = true;
+                                    }
+                        }
+                    }
+                    if reloaded {
+                        energy.spend_action();
+                        continue;
+                    }
+
+                    // Scavenge items
+                    if let Some((_, item_vec)) = nearest_item {
+                        let step = a_star_first_step(my_pos, item_vec, |p| {
+                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        });
+                        if let Some(step) = step
+                                && !step.is_zero() {
+                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                            }
+                        energy.spend_action();
+                    } else if let Some(ref mem) = ai_memory
+                        && let Some(remembered_pos) = mem.last_known_pos
+                        && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                        && my_pos != remembered_pos
+                    {
+                        let step = a_star_first_step(my_pos, remembered_pos, |p| {
+                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        });
+                        if let Some(step) = step
                             && !step.is_zero() {
                                 move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                            }
+                        energy.spend_action();
+                    } else {
+                        if let Some(ref mut mem) = ai_memory
+                            && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
+                                mem.last_known_pos = None;
+                            }
+                        // Random 180° look-around every 20+dice turns
+                        let look_hash = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
+                        let look_interval = LOOK_AROUND_BASE_INTERVAL + (look_hash % LOOK_AROUND_DICE_RANGE);
+                        if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval) {
+                            // 180° turn: rotate 4 steps (each step is 45°)
+                            let dir_idx = (look_hash as usize + turn_counter.0 as usize) % 8;
+                            let new_dir = GridVec::DIRECTIONS_8[dir_idx];
+                            update_look_dir(new_dir, &mut ai_look_dir, &mut viewshed);
+                        } else {
+                            rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                         }
-                    energy.spend_action();
-                } else if let Some(ref mem) = ai_memory
-                    && let Some(remembered_pos) = mem.last_known_pos
-                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
-                    && my_pos != remembered_pos
-                {
-                    let step = a_star_first_step(my_pos, remembered_pos, |p| {
-                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
-                    });
-                    if let Some(step) = step
-                        && !step.is_zero() {
-                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                        }
-                    energy.spend_action();
-                } else {
-                    if let Some(ref mut mem) = ai_memory
-                        && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
-                            mem.last_known_pos = None;
-                        }
-                    rotate_look_dir(&mut ai_look_dir, &mut viewshed);
-                    energy.spend_action();
+                        energy.spend_action();
+                    }
                 }
             }
             AiState::Patrolling => {
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
+                    continue;
+                }
+
+                // No enemy visible — prioritize reloading.
+                let mut reloaded_patrol = false;
+                if has_unloaded_gun(&inventory, &item_kinds) {
+                    if let Some(ref mut inv) = inventory {
+                        let reloadable = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+                            )
+                        });
+                        if let Some(gun_entity) = reloadable
+                            && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                && let ItemKind::Gun { ref mut loaded, .. } = *kind {
+                                    *loaded += 1;
+                                    reloaded_patrol = true;
+                                }
+                    }
+                }
+                if reloaded_patrol {
+                    energy.spend_action();
                     continue;
                 }
 
@@ -911,6 +983,16 @@ pub fn ai_system(
 
                 let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
                     .wrapping_add(turn_counter.0 as i32) as u32;
+                // Random 180° look-around every 20+dice turns
+                let look_hash_patrol = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
+                let look_interval_patrol = LOOK_AROUND_BASE_INTERVAL + (look_hash_patrol % LOOK_AROUND_DICE_RANGE);
+                if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval_patrol) {
+                    let dir_idx = (look_hash_patrol as usize + turn_counter.0 as usize) % 8;
+                    let new_dir = GridVec::DIRECTIONS_8[dir_idx];
+                    update_look_dir(new_dir, &mut ai_look_dir, &mut viewshed);
+                    energy.spend_action();
+                    continue;
+                }
                 if pause_hash.is_multiple_of(7) {
                     rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
@@ -1076,7 +1158,95 @@ pub fn ai_system(
 
                 let dist = my_pos.chebyshev_distance(target_vec);
 
-                // Throwable items (grenade/molotov) at medium range
+                // ── PRIORITY 1: Ranged attack — fire guns when enemy is in sights ──
+                // NPCs prioritize shooting at enemies when they have a loaded gun
+                // and clear line of sight. This is the highest combat priority.
+                let mut used_gun = false;
+                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
+                    && let Some(ref mut inv) = inventory {
+                        let gun_ent = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
+                            )
+                        });
+                        if let Some(gun_entity) = gun_ent {
+                            let dx = target_vec.x - my_pos.x;
+                            let dy = target_vec.y - my_pos.y;
+                            ranged_intents.write(RangedAttackIntent {
+                                attacker: entity,
+                                range: AI_RANGED_ATTACK_RANGE,
+                                dx,
+                                dy,
+                                gun_item: Some(gun_entity),
+                            });
+                            used_gun = true;
+                        } else {
+                            // Gun empty but in combat — reload immediately.
+                            let reloadable_gun = inv.items.iter().copied().find(|&ent| {
+                                item_kinds.get(ent).ok().is_some_and(|k|
+                                    matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+                                )
+                            });
+                            if let Some(gun_entity) = reloadable_gun
+                                && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                    && let ItemKind::Gun { ref mut loaded, .. } = *kind {
+                                        *loaded += 1;
+                                        used_gun = true;
+                                    }
+                        }
+                    }
+                if used_gun {
+                    energy.spend_action();
+                    continue;
+                }
+
+                // ── PRIORITY 2: Bow attack (unlimited ammo) ──
+                let mut used_bow = false;
+                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
+                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
+                    && let Some(ref inv) = inventory {
+                        let bow_ent = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Bow { .. })
+                            )
+                        });
+                        if let Some(bow_entity) = bow_ent
+                            && let Ok(kind) = item_kinds.get(bow_entity)
+                                && let ItemKind::Bow { attack: bow_atk, .. } = *kind {
+                                    let dx = target_vec.x - my_pos.x;
+                                    let dy = target_vec.y - my_pos.y;
+                                    let max_comp = dx.abs().max(dy.abs()).max(1);
+                                    let scale = AI_RANGED_ATTACK_RANGE.div_euclid(max_comp).max(1);
+                                    let endpoint = my_pos + GridVec::new(dx * scale, dy * scale);
+                                    crate::systems::projectile::spawn_arrow(
+                                        &mut commands,
+                                        my_pos,
+                                        endpoint,
+                                        bow_atk,
+                                        entity,
+                                    );
+                                    used_bow = true;
+                                }
+                    }
+                if used_bow {
+                    energy.spend_action();
+                    continue;
+                }
+
+                // ── PRIORITY 3: Adjacent melee attack ──
+                if dist == 1 {
+                    attack_intents.write(AttackIntent {
+                        attacker: entity,
+                        target: target_entity,
+                    });
+                    energy.spend_action();
+                    continue;
+                }
+
+                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range ──
                 let mut used_throwable = false;
                 if (3..=6).contains(&dist)
                     && let Some(ref mut inv) = inventory {
@@ -1187,108 +1357,6 @@ pub fn ai_system(
                         energy.spend_action();
                         continue;
                     }
-                }
-
-                // Ranged attack: fire guns via unified RangedAttackIntent
-                // Skip if a friendly entity is in the line of fire.
-                let mut used_gun = false;
-                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
-                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
-                    && let Some(ref mut inv) = inventory {
-                        let gun_ent = inv.items.iter().copied().find(|&ent| {
-                            item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
-                            )
-                        });
-                        if let Some(gun_entity) = gun_ent {
-                            let dx = target_vec.x - my_pos.x;
-                            let dy = target_vec.y - my_pos.y;
-                            ranged_intents.write(RangedAttackIntent {
-                                attacker: entity,
-                                range: AI_RANGED_ATTACK_RANGE,
-                                dx,
-                                dy,
-                                gun_item: Some(gun_entity),
-                            });
-                            used_gun = true;
-                        } else {
-                            let reloadable_gun = inv.items.iter().copied().find(|&ent| {
-                                item_kinds.get(ent).ok().is_some_and(|k|
-                                    matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
-                                )
-                            });
-                            if let Some(gun_entity) = reloadable_gun
-                                && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
-                                    && let ItemKind::Gun { ref mut loaded, .. } = *kind {
-                                        *loaded += 1;
-                                        used_gun = true;
-                                    }
-                        }
-                    }
-                // Proactive reload: if not in LOS or out of range but have
-                // an empty gun, reload while closing distance.
-                if !used_gun && dist > 2
-                    && let Some(ref mut inv) = inventory {
-                        let empty_gun = inv.items.iter().copied().find(|&ent| {
-                            item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded == 0 && *capacity > 0)
-                            )
-                        });
-                        if let Some(gun_entity) = empty_gun
-                            && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
-                                && let ItemKind::Gun { ref mut loaded, .. } = *kind {
-                                    *loaded += 1;
-                                    used_gun = true;
-                                }
-                    }
-                if used_gun {
-                    energy.spend_action();
-                    continue;
-                }
-
-                // Bow attack: fire an arrow projectile (unlimited ammo).
-                let mut used_bow = false;
-                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
-                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
-                    && let Some(ref inv) = inventory {
-                        let bow_ent = inv.items.iter().copied().find(|&ent| {
-                            item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(k, ItemKind::Bow { .. })
-                            )
-                        });
-                        if let Some(bow_entity) = bow_ent
-                            && let Ok(kind) = item_kinds.get(bow_entity)
-                                && let ItemKind::Bow { attack: bow_atk, .. } = *kind {
-                                    let dx = target_vec.x - my_pos.x;
-                                    let dy = target_vec.y - my_pos.y;
-                                    let max_comp = dx.abs().max(dy.abs()).max(1);
-                                    let scale = AI_RANGED_ATTACK_RANGE.div_euclid(max_comp).max(1);
-                                    let endpoint = my_pos + GridVec::new(dx * scale, dy * scale);
-                                    crate::systems::projectile::spawn_arrow(
-                                        &mut commands,
-                                        my_pos,
-                                        endpoint,
-                                        bow_atk,
-                                        entity,
-                                    );
-                                    used_bow = true;
-                                }
-                    }
-                if used_bow {
-                    energy.spend_action();
-                    continue;
-                }
-
-                // Adjacent to target? Melee attack.
-                if dist == 1 {
-                    attack_intents.write(AttackIntent {
-                        attacker: entity,
-                        target: target_entity,
-                    });
-                    energy.spend_action();
-                    continue;
                 }
 
                 // Tactical range management (kiting) for ranged NPCs

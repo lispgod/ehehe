@@ -10,129 +10,90 @@ use crate::grid_vec::GridVec;
 use crate::typedefs::RatColor;
 
 // ───────────────────────── Procedural NPC Names ───────────────────
+//
+// All NPC names are single-word for UI readability and variety.
+// Each faction has a distinct name generator:
+//   - Cowboys (Outlaws/Lawmen): Western first names and surnames
+//   - Indians: Compound nature names (e.g., Eaglefoot, SittingBear)
+//   - Mexicans (Vaqueros): Spanish names
+//   - Sheriff: Famous lawman surnames
+//   - Civilians: Nicknames (e.g., Dusty, Slim, Maverick)
 
-const FIRST_NAMES: &[&str] = &[
-    "Silas", "Ezekiel", "Cornelius", "Jebediah", "Obadiah",
-    "Elijah", "Caleb", "Josiah", "Amos", "Enoch",
-    "Rufus", "Virgil", "Cyrus", "Hector", "Magnus",
-    "Bartholomew", "Thaddeus", "Solomon", "Augustus", "Percival",
-    "Clayton", "Emmett", "Levi", "Abel", "Jesse",
+/// Cowboy names — used by Outlaws and Lawmen factions.
+const COWBOY_NAMES: &[&str] = &[
     "Wyatt", "Morgan", "Hank", "Earl", "Jasper",
+    "Clayton", "Emmett", "Levi", "Abel", "Jesse",
+    "Silas", "Caleb", "Josiah", "Amos", "Enoch",
+    "Rufus", "Virgil", "Cyrus", "Hector", "Magnus",
+    "Colt", "Boone", "Clint", "Deacon", "Flint",
+    "Gideon", "Harlan", "Knox", "Nash", "Quinn",
+    "Redford", "Briggs", "Dalton", "Graves", "Hollis",
+    "Larkin", "Mcgraw", "Pickett", "Slade", "Tucker",
 ];
 
-const NICKNAMES: &[&str] = &[
+/// Indian compound names — nature-inspired single words.
+const INDIAN_NAMES: &[&str] = &[
+    "Eaglefoot", "SittingBear", "RedCloud", "IronHawk", "TallElk",
+    "SwiftWolf", "RunningDeer", "LoneBull", "ThunderSky", "SilentArrow",
+    "PaintedMoon", "BrokenFeather", "RisingFire", "BurningWind", "HighStar",
+    "Chayton", "Takoda", "Nashoba", "Akecheta", "Wahkan",
+    "DarkCrow", "WildHorse", "StrongBear", "GreyWolf", "WhiteEagle",
+    "Kohana", "Kuruk", "Mato", "Ohanzee", "Hototo",
+    "StillWater", "StoneFox", "Blackwind", "Sunhawk", "Crowfoot",
+    "Ironbow", "Dustwolf", "Ashfeather", "Deepsky", "Fireheart",
+];
+
+/// Mexican names — used by Vaqueros faction.
+const MEXICAN_NAMES: &[&str] = &[
+    "Carlos", "Miguel", "Diego", "Rafael", "Alejandro",
+    "Fernando", "Santiago", "Joaquin", "Esteban", "Mateo",
+    "Rodrigo", "Emilio", "Ignacio", "Salvador", "Teodoro",
+    "Montoya", "Vega", "Salazar", "Guerrero", "Delgado",
+    "Reyes", "Espinoza", "Castillo", "Navarro", "Fuentes",
+    "Herrera", "Rojas", "Mendoza", "Coronado", "Cortez",
+    "Pancho", "Cisco", "Lobo", "Cruz", "Rico",
+    "Bravo", "Diablo", "Fuego", "Oro", "Toro",
+];
+
+/// Sheriff names — famous lawman surnames.
+const SHERIFF_NAMES: &[&str] = &[
+    "Bassett", "Tilghman", "Hickok", "Wallace", "Masterson",
+    "Garrett", "Heck", "Reeves", "Selman", "Canton",
+    "Plummer", "Allison", "Earp", "Holiday", "Bullock",
+    "Horn", "Hardin", "Holliday", "Ringo", "Dillon",
+    "Mather", "Stoudenmire", "Courtright", "Breckinridge", "Bridges",
+];
+
+/// Civilian nicknames — colorful Wild West nicknames.
+const CIVILIAN_NAMES: &[&str] = &[
     "Dusty", "Slim", "Rattlesnake", "Two-Gun", "One-Eye",
     "Whiskey", "Ironjaw", "Red", "Trigger", "Sidewinder",
     "Buckshot", "Tombstone", "Cactus", "Copperhead", "Dynamite",
     "Grizzly", "Hawk", "Longshot", "Maverick", "Sundown",
+    "Tex", "Lucky", "Bones", "Doc", "Shorty",
+    "Patches", "Rusty", "Ace", "Preacher", "Dutch",
+    "Smiley", "Pops", "Gopher", "Yank", "Pepper",
 ];
 
-const LAST_NAMES_FIRST: &[&str] = &[
-    "Red", "Black", "White", "Green", "Brown",
-    "Wood", "Win", "North", "South", "West",
-    "East", "High", "Low", "Long", "Short",
-    "Stone", "Iron", "Gold", "Silver", "Ash",
-];
-
-const LAST_NAMES_SECOND: &[&str] = &[
-    "shire", "berry", "wood", "field", "ley",
-    "ford", "ton", "ham", "bridge", "well",
-    "worth", "wick", "stead", "stone", "dale",
-    "grove", "ridge", "croft", "brook", "lake",
-];
-
-// ── Faction-specific name pools ──────────────────────────────────
-
-const INDIAN_FIRST_NAMES: &[&str] = &[
-    "Chayton", "Takoda", "Ahanu", "Koda", "Enapay",
-    "Makya", "Tohopka", "Nashoba", "Akecheta", "Wahkan",
-    "Hototo", "Kitchi", "Mato", "Nayati", "Ohanzee",
-    "Tashunka", "Wicasa", "Tatanka", "Kohana", "Kuruk",
-];
-
-const INDIAN_LAST_ADJ: &[&str] = &[
-    "Red", "Black", "Iron", "Tall", "Grey",
-    "Swift", "Running", "Sitting", "Lone", "Thunder",
-    "Silent", "Painted", "Broken", "Rising", "Burning",
-    "White", "Dark", "Wild", "Strong", "High",
-];
-
-const INDIAN_LAST_NOUN: &[&str] = &[
-    "Cloud", "Elk", "Hawk", "Bull", "Dog",
-    "Bear", "Wolf", "Eagle", "Arrow", "Horse",
-    "Moon", "Sky", "River", "Feather", "Stone",
-    "Fire", "Wind", "Star", "Crow", "Deer",
-];
-
-const VAQUERO_FIRST_NAMES: &[&str] = &[
-    "Carlos", "Miguel", "Diego", "Rafael", "Alejandro",
-    "Fernando", "Santiago", "Joaquin", "Esteban", "Mateo",
-    "Rodrigo", "Emilio", "Ignacio", "Salvador", "Teodoro",
-    "Guillermo", "Cristobal", "Hernando", "Arturo", "Benito",
-];
-
-const VAQUERO_LAST_NAMES: &[&str] = &[
-    "Montoya", "Vega", "Salazar", "Guerrero", "Delgado",
-    "Reyes", "Espinoza", "Castillo", "Navarro", "Fuentes",
-    "Herrera", "Rojas", "Mendoza", "Villarreal", "Coronado",
-];
-
-const SHERIFF_FIRST_NAMES: &[&str] = &[
-    "William", "James", "Thomas", "Robert", "Charles",
-    "Henry", "Edward", "Samuel", "Benjamin", "Franklin",
-    "Theodore", "Abraham", "Ulysses", "Andrew", "John",
-];
-
-const SHERIFF_LAST_NAMES: &[&str] = &[
-    "Bassett", "Tilghman", "Hickok", "Wallace", "Masterson",
-    "Garrett", "Heck", "Reeves", "Selman", "Breckinridge",
-    "Plummer", "Canton", "Stoudenmire", "Courtright", "Allison",
-];
-
-/// Generates a procedural faction-appropriate name from position hash.
-/// About 30% of NPCs get a nickname (e.g., "Dusty" Silas Crowley).
-/// Indian last names use an adjective+noun system (e.g., "Red Cloud").
-/// Anglo last names use a compound word system (e.g., "Redshire").
+/// Generates a single-word faction-appropriate name from position hash.
+/// Each faction has its own distinct pool:
+///   - Indians: Compound nature names (Eaglefoot, SittingBear)
+///   - Vaqueros: Spanish first names or surnames
+///   - Sheriff: Famous lawman surnames
+///   - Civilians: Wild West nicknames
+///   - Outlaws/Lawmen/default: Cowboy first names or surnames
 fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
-    /// Out of 10, how many NPCs receive a nickname prefix.
-    const NICKNAME_CHANCE: usize = 3;
+    let hash = (x.wrapping_mul(7919) ^ y.wrapping_mul(104729)).unsigned_abs() as usize;
 
-    let hash1 = (x.wrapping_mul(7919) ^ y.wrapping_mul(104729)).unsigned_abs() as usize;
-    let hash2 = (x.wrapping_mul(1009) ^ y.wrapping_mul(7529)).unsigned_abs() as usize;
-    let hash3 = (x.wrapping_mul(2903) ^ y.wrapping_mul(3571)).unsigned_abs() as usize;
-    let hash4 = (x.wrapping_mul(5381) ^ y.wrapping_mul(9103)).unsigned_abs() as usize;
-    let hash5 = (x.wrapping_mul(6173) ^ y.wrapping_mul(8219)).unsigned_abs() as usize;
-
-    let first = match faction {
-        Faction::Indians => INDIAN_FIRST_NAMES[hash1 % INDIAN_FIRST_NAMES.len()],
-        Faction::Vaqueros => VAQUERO_FIRST_NAMES[hash1 % VAQUERO_FIRST_NAMES.len()],
-        Faction::Sheriff => SHERIFF_FIRST_NAMES[hash1 % SHERIFF_FIRST_NAMES.len()],
-        _ => FIRST_NAMES[hash1 % FIRST_NAMES.len()],
+    let pool = match faction {
+        Faction::Indians => INDIAN_NAMES,
+        Faction::Vaqueros => MEXICAN_NAMES,
+        Faction::Sheriff => SHERIFF_NAMES,
+        Faction::Civilians => CIVILIAN_NAMES,
+        _ => COWBOY_NAMES,
     };
 
-    let last: String = match faction {
-        Faction::Indians => {
-            // Adjective + Noun system for Indian last names.
-            let adj = INDIAN_LAST_ADJ[hash2 % INDIAN_LAST_ADJ.len()];
-            let noun = INDIAN_LAST_NOUN[hash5 % INDIAN_LAST_NOUN.len()];
-            format!("{adj} {noun}")
-        }
-        Faction::Vaqueros => VAQUERO_LAST_NAMES[hash2 % VAQUERO_LAST_NAMES.len()].into(),
-        Faction::Sheriff => SHERIFF_LAST_NAMES[hash2 % SHERIFF_LAST_NAMES.len()].into(),
-        _ => {
-            // Compound word system for Anglo last names.
-            let first_part = LAST_NAMES_FIRST[hash2 % LAST_NAMES_FIRST.len()];
-            let second_part = LAST_NAMES_SECOND[hash5 % LAST_NAMES_SECOND.len()];
-            format!("{first_part}{second_part}")
-        }
-    };
-
-    if hash3 % 10 < NICKNAME_CHANCE {
-        let nick = NICKNAMES[hash4 % NICKNAMES.len()];
-        format!("\"{nick}\" {first} {last}")
-    } else {
-        format!("{first} {last}")
-    }
+    pool[hash % pool.len()].to_string()
 }
 
 /// Monster archetype for procedural spawning.
@@ -302,15 +263,16 @@ pub fn spawn_monster(
     };
 
     // Compute personality based on faction and position hash.
+    // AI is highly aggressive — all factions are combat-ready.
     let is_ranged = template.has_gun || matches!(template.faction, Faction::Indians);
     let personality_hash = item_hash.wrapping_mul(7) ^ (x.wrapping_add(y)).unsigned_abs();
-    let aggression = 0.3 + (personality_hash % 7) as f64 * 0.1; // 0.3 – 0.9
+    let aggression = 0.7 + (personality_hash % 4) as f64 * 0.075; // 0.7 – 0.925
     let courage = if matches!(template.faction, Faction::Wildlife) {
         0.2 // Animals flee easily
     } else {
-        0.3 + (personality_hash % 5) as f64 * 0.15 // 0.3 – 0.9
+        0.7 + (personality_hash % 4) as f64 * 0.075 // 0.7 – 0.925
     };
-    let preferred_range = if is_ranged { 5 + (personality_hash % 6) as i32 } else { 1 };
+    let preferred_range = if is_ranged { 3 + (personality_hash % 4) as i32 } else { 1 };
 
     // Humanoid NPCs get a small stamina pool for special actions.
     let npc_stamina = if matches!(template.faction, Faction::Wildlife) {

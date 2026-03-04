@@ -172,9 +172,9 @@ impl GameMap {
                 + value_noise(y, 0, river_seed.wrapping_add(222)) * 5.0;
             let center_x = river_cx + wobble;
             // River width varies smoothly along its length.
-            let base_width = 7.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 5.0;
-            let width_pulse = (fy * 0.012).sin() * 3.0; // gentle widening/narrowing
-            let river_width = (base_width + width_pulse).max(4.0);
+            let base_width = 14.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 10.0;
+            let width_pulse = (fy * 0.012).sin() * 6.0; // gentle widening/narrowing
+            let river_width = (base_width + width_pulse).max(8.0);
             let beach_width = 2.0;
 
             for x in 1..width - 1 {

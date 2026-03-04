@@ -445,6 +445,24 @@ pub fn draw_system(
             }
         }
 
+        // ── Final pass: re-draw entities OVER everything else ──
+        // Player and NPC symbols should always be drawn over every other symbol
+        // (particles, projectiles, blood, etc.)
+        for (pos, renderable, _) in &renderables {
+            let screen = pos.as_grid_vec() - bottom_left;
+            if in_bounds(screen, render_width, render_height)
+            {
+                let entity_visible = visible_tiles
+                    .map(|vt| vt.contains(&pos.as_grid_vec()))
+                    .unwrap_or(true);
+                if entity_visible {
+                    let bg = render_packet[screen.y as usize][screen.x as usize].2;
+                    render_packet[screen.y as usize][screen.x as usize] =
+                        (renderable.symbol.clone(), renderable.fg, bg);
+                }
+            }
+        }
+
         // ── Apply per-tile color noise (final step before rendering) ──
         // Each tile gets a deterministic ±TILE_COLOR_NOISE_RANGE jitter
         // on every RGB channel, seeded by its world coordinates.

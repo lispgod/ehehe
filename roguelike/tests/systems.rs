@@ -4573,6 +4573,7 @@ fn test_app_sandbox() -> App {
         (
             spatial_index::spatial_index_system,
             interaction::interaction_system,
+            interaction::saloon_effect_system,
             wanted::crime_system,
             brawl::brawl_escalation_system,
             brawl::brawl_witness_system,
@@ -5247,4 +5248,130 @@ fn gold_starts_at_twenty() {
     let app = test_app_sandbox();
     let gold = app.world().resource::<Gold>();
     assert_eq!(gold.0, 20, "Starting gold should be 20");
+}
+
+// ─── New player-facing feature tests ──────────────────────────────
+
+#[test]
+fn matches_item_has_display_name() {
+    let matches = ItemKind::Matches { uses: 5, blunt_damage: 1 };
+    assert_eq!(matches.display_name(), "Matches");
+    assert_eq!(matches.blunt_damage(), 1);
+}
+
+#[test]
+fn matches_item_uses_decrement() {
+    let mut matches = ItemKind::Matches { uses: 3, blunt_damage: 1 };
+    if let ItemKind::Matches { ref mut uses, .. } = matches {
+        *uses -= 1;
+        assert_eq!(*uses, 2);
+    }
+}
+
+#[test]
+fn input_mode_saloon_menu_exists() {
+    let mode = InputMode::SaloonMenu;
+    assert_eq!(mode, InputMode::SaloonMenu);
+}
+
+#[test]
+fn input_mode_interact_menu_exists() {
+    let mode = InputMode::InteractMenu;
+    assert_eq!(mode, InputMode::InteractMenu);
+}
+
+#[test]
+fn input_state_has_interact_target() {
+    let state = InputState::default();
+    assert!(state.interact_target.is_none());
+    assert_eq!(state.saloon_heal_pending, 0);
+    assert!(!state.saloon_drunk_pending);
+}
+
+#[test]
+fn outhouse_is_hiding_spot_and_flammable() {
+    assert!(Props::Outhouse.is_hiding_spot());
+    assert!(Props::Outhouse.is_flammable());
+}
+
+#[test]
+fn wardrobe_is_hiding_spot_and_flammable() {
+    assert!(Props::Wardrobe.is_hiding_spot());
+    assert!(Props::Wardrobe.is_flammable());
+}
+
+#[test]
+fn saloon_effect_system_heals_player() {
+    let mut app = test_app_sandbox();
+    let player = spawn_sandbox_player(&mut app, 60, 40);
+
+    // Damage the player first (player has 30/30 HP)
+    if let Some(mut hp) = app.world_mut().get_mut::<Health>(player) {
+        hp.apply_damage(20);
+        assert_eq!(hp.current, 10);
+    }
+
+    // Set saloon heal pending
+    app.world_mut().resource_mut::<InputState>().saloon_heal_pending = 15;
+    app.update();
+
+    let hp = app.world().entity(player).get::<Health>().unwrap();
+    assert!(hp.current > 10, "Player should have been healed by saloon food (got {})", hp.current);
+}
+
+#[test]
+fn saloon_effect_system_applies_drunk() {
+    let mut app = test_app_sandbox();
+    let player = spawn_sandbox_player(&mut app, 60, 40);
+
+    // Set saloon drunk pending
+    app.world_mut().resource_mut::<InputState>().saloon_drunk_pending = true;
+    app.update();
+
+    let has_drunk = app.world().entity(player).get::<DrunkStatus>().is_some();
+    assert!(has_drunk, "Player should have DrunkStatus after buying whiskey");
+
+    // Verify the pending flag is cleared
+    let state = app.world().resource::<InputState>();
+    assert!(!state.saloon_drunk_pending, "Saloon drunk pending should be cleared");
+}
+
+#[test]
+fn gamemap_generates_outhouses() {
+    // Full-size map (same as game) should contain at least one outhouse
+    let map = GameMap::new(400, 280, 42);
+    let mut found_outhouse = false;
+    for y in 0..map.height {
+        for x in 0..map.width {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                if matches!(voxel.props, Some(Props::Outhouse)) {
+                    found_outhouse = true;
+                    break;
+                }
+            }
+        }
+        if found_outhouse { break; }
+    }
+    assert!(found_outhouse, "Map should generate at least one outhouse behind buildings");
+}
+
+#[test]
+fn gamemap_generates_wardrobes() {
+    // Full-size map (same as game) should contain at least one wardrobe in houses/hotels
+    let map = GameMap::new(400, 280, 42);
+    let mut found_wardrobe = false;
+    for y in 0..map.height {
+        for x in 0..map.width {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                if matches!(voxel.props, Some(Props::Wardrobe)) {
+                    found_wardrobe = true;
+                    break;
+                }
+            }
+        }
+        if found_wardrobe { break; }
+    }
+    assert!(found_wardrobe, "Map should generate at least one wardrobe in houses");
 }

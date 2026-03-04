@@ -9,59 +9,169 @@ use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
 use crate::typeenums::Props;
 
-// ───────────────────────── A* Pathfinding ──────────────────────────
+// ───────────────────── Influence Map / Tile Cost ───────────────────
+//
+// Classic roguelike influence map: every tile gets a weighted traversal
+// cost that encodes environmental desirability.  Higher cost = less
+// desirable; `None` = impassable.  A* uses these costs as edge weights
+// so NPCs *naturally* prefer covered routes and avoid hazards without
+// any special-case movement code.
+//
+// **Positive influences** (reduce cost → attract NPCs):
+//   • Cover near walls: each adjacent blocking prop lowers cost.
+//   • Bridges / sidewalks: civilised terrain slightly preferred.
+//
+// **Negative influences** (increase cost → repel NPCs):
+//   • Fire, smoke/sand clouds on the tile itself.
+//   • Adjacent cactus or fire (splash danger zone).
+//   • Deep/shallow water (slows movement).
+//   • Open terrain with no adjacent cover (exposed killzone).
+
+/// Tile cost weights for the AI influence map.
+mod cost {
+    /// Base movement cost for a normal, safe tile.
+    pub const BASE: i32 = 10;
+    /// Penalty for a tile that is actively on fire.
+    pub const FIRE: i32 = 50;
+    /// Penalty for tiles adjacent to a fire tile (radiant heat).
+    pub const NEAR_FIRE: i32 = 25;
+    /// Penalty for tiles adjacent to a cactus (thorns).
+    pub const NEAR_CACTUS: i32 = 30;
+    /// Penalty for sand / smoke cloud tiles (blocks vision, chokes).
+    pub const SAND_CLOUD: i32 = 20;
+    /// Penalty for shallow water (movement slow-down).
+    pub const SHALLOW_WATER: i32 = 8;
+    /// Penalty for deep water (severe slow-down, drowning risk).
+    pub const DEEP_WATER: i32 = 15;
+    /// Per-wall bonus subtracted from cost when adjacent to blocking props
+    /// (cover). Capped so cost never drops below 1.
+    pub const COVER_PER_WALL: i32 = 2;
+    /// Penalty for open terrain with zero adjacent blocking props.
+    pub const EXPOSED: i32 = 3;
+}
+
+/// Returns the AI traversal cost for `pos`, or `None` if impassable.
+///
+/// The cost integrates terrain type, environmental hazards, and tactical
+/// cover into a single value that A* and Dijkstra use as edge weight.
+/// This replaces the old binary `is_walkable_for_ai` + `is_near_danger`
+/// pair with a unified, graduated influence map.
+fn tile_cost(pos: GridVec, game_map: &GameMapResource) -> Option<i32> {
+    if !game_map.0.is_passable(&pos) {
+        return None;
+    }
+
+    let mut c = cost::BASE;
+
+    // ── Tile's own floor type ──
+    if let Some(voxel) = game_map.0.get_voxel_at(&pos) {
+        match &voxel.floor {
+            Some(crate::typeenums::Floor::Fire) => c += cost::FIRE,
+            Some(crate::typeenums::Floor::SandCloud) => c += cost::SAND_CLOUD,
+            Some(crate::typeenums::Floor::ShallowWater) => c += cost::SHALLOW_WATER,
+            Some(crate::typeenums::Floor::DeepWater) => c += cost::DEEP_WATER,
+            _ => {}
+        }
+    }
+
+    // ── Neighbor scan: hazards (repel) and cover (attract) ──
+    let mut wall_count: i32 = 0;
+    let mut near_fire = false;
+    let mut near_cactus = false;
+    for neighbor in pos.all_neighbors() {
+        if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
+            if matches!(voxel.props, Some(Props::Cactus)) {
+                near_cactus = true;
+            }
+            if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire)) {
+                near_fire = true;
+            }
+            if voxel.props.as_ref().is_some_and(|p| p.blocks_movement()) {
+                wall_count += 1;
+            }
+        }
+    }
+
+    if near_fire { c += cost::NEAR_FIRE; }
+    if near_cactus { c += cost::NEAR_CACTUS; }
+
+    // Cover bonus: more adjacent walls → lower cost (safer position).
+    // Open terrain with zero cover gets an exposure penalty instead.
+    if wall_count > 0 {
+        c -= (wall_count * cost::COVER_PER_WALL).min(c - 1);
+    } else {
+        c += cost::EXPOSED;
+    }
+
+    Some(c)
+}
+
+/// Returns the AI traversal cost for `pos` including dynamic entity blocking.
+/// Combines the static influence map (`tile_cost`) with per-tick entity
+/// collision checks from the `SpatialIndex`.
+fn tile_cost_for_ai(
+    pos: GridVec,
+    self_entity: Entity,
+    game_map: &GameMapResource,
+    spatial: &SpatialIndex,
+    blockers: &Query<(), With<BlocksMovement>>,
+) -> Option<i32> {
+    // Dynamic entity blocking — another entity occupies this tile.
+    if spatial.entities_at(&pos).iter().any(|&e| e != self_entity && blockers.contains(e)) {
+        return None;
+    }
+    tile_cost(pos, game_map)
+}
+
+// ───────────── Weighted A* Pathfinding ─────────────────────────────
 
 /// Maximum number of nodes A* may explore before giving up.
-/// Prevents lag when the target is unreachable or far away.
-/// 256 nodes covers a ~16-tile radius search area, sufficient
+/// 512 nodes covers roughly a 16-tile radius search area, sufficient
 /// for navigating around most local obstacles.
 const MAX_A_STAR_NODES: usize = 512;
 
-/// Finds the first step direction from `start` toward `goal` using A*
-/// with the **Chebyshev heuristic** (L∞ norm).
+/// Finds the first step direction from `start` toward `goal` using **weighted A***
+/// with the **Chebyshev heuristic** (L∞ norm) scaled by `cost::BASE`.
+///
+/// The `cost_fn` closure returns `Some(cost)` for traversable tiles
+/// (higher = less desirable) or `None` for impassable tiles.  This lets
+/// A* naturally route around hazards and prefer covered paths via the
+/// influence map, without any special-case movement logic.
 ///
 /// **Mathematical properties:**
-/// - **Optimal**: Chebyshev distance is admissible (`h(n) ≤ h*(n)`)
-///   and consistent (`h(n) ≤ c(n,n') + h(n')`) for 8-connected grids
-///   with uniform cost. A* therefore finds the shortest path.
-/// - **Complete**: if a path exists within the exploration budget,
-///   it will be found.
-/// - **Time**: O(k log k) where k = nodes explored (≤ `MAX_A_STAR_NODES`).
-/// - **Space**: O(k) for the open/closed sets and came-from map.
-///
-/// The `is_walkable` closure abstracts over game map + entity collision
-/// checks, making the algorithm reusable and testable in isolation.
+/// - **Admissible**: `h(n) = chebyshev(n, goal) × BASE` never overestimates
+///   because every tile costs at least `BASE` (or more for hazards).
+///   Therefore A* finds the lowest-cost path.
+/// - **Consistent**: `h(n) ≤ c(n,n') + h(n')` holds because one king-step
+///   reduces Chebyshev distance by at most 1, contributing `≥ BASE` cost.
+/// - **Time**: O(k log k), **Space**: O(k), where k ≤ `MAX_A_STAR_NODES`.
 ///
 /// Returns the direction `GridVec` of the first step, or `None` if no
 /// path is found within the exploration budget.
 fn a_star_first_step(
     start: GridVec,
     goal: GridVec,
-    is_walkable: impl Fn(GridVec) -> bool,
+    cost_fn: impl Fn(GridVec) -> Option<i32>,
 ) -> Option<GridVec> {
     // Already at the goal — no step needed.
     if start == goal {
         return None;
     }
 
-    // Adjacent and walkable — return the direct step without full search.
-    if start.chebyshev_distance(goal) == 1 {
+    // Adjacent shortcut: if the goal tile is reachable, step directly.
+    if start.chebyshev_distance(goal) == 1 && cost_fn(goal).is_some() {
         return Some(goal - start);
     }
 
     // Min-heap: (f_score, h_score, position). Reverse gives min-first ordering.
     //
-    // **Tie-breaking**: when two nodes share the same f-score, we prefer the
-    // one with the lower h-score (i.e., higher g-score, meaning closer to the
-    // goal along the discovered path). This is a standard A* optimisation that
-    // reduces the number of expanded nodes while preserving optimality, since
-    // among equal-f nodes, those with smaller h are nearer to the goal.
+    // Tie-breaking: among equal-f nodes, prefer lower h (closer to goal).
     let mut open: BinaryHeap<Reverse<(i32, i32, GridVec)>> = BinaryHeap::new();
     let mut came_from: HashMap<GridVec, GridVec> = HashMap::new();
     let mut g_score: HashMap<GridVec, i32> = HashMap::new();
     let mut closed: HashSet<GridVec> = HashSet::new();
 
-    let h_start = start.chebyshev_distance(goal);
+    let h_start = start.chebyshev_distance(goal) * cost::BASE;
     g_score.insert(start, 0);
     open.push(Reverse((h_start, h_start, start)));
 
@@ -98,16 +208,21 @@ fn a_star_first_step(
                 continue;
             }
 
-            // The goal tile is always "walkable" (we want to reach it).
-            if neighbor != goal && !is_walkable(neighbor) {
-                continue;
-            }
+            // The goal tile is always reachable (we want to path into it).
+            let edge_cost = if neighbor == goal {
+                cost::BASE
+            } else {
+                match cost_fn(neighbor) {
+                    Some(c) => c,
+                    None => continue, // Impassable.
+                }
+            };
 
-            let new_g = current_g + 1; // Uniform edge cost.
+            let new_g = current_g + edge_cost;
             if new_g < *g_score.get(&neighbor).unwrap_or(&i32::MAX) {
                 came_from.insert(neighbor, current);
                 g_score.insert(neighbor, new_g);
-                let h = neighbor.chebyshev_distance(goal);
+                let h = neighbor.chebyshev_distance(goal) * cost::BASE;
                 let f = new_g + h;
                 open.push(Reverse((f, h, neighbor)));
             }
@@ -117,58 +232,79 @@ fn a_star_first_step(
     None // No path found within budget.
 }
 
-/// Public wrapper for `a_star_first_step` to allow integration testing.
-/// See [`a_star_first_step`] for full documentation.
+/// Public wrapper for `a_star_first_step` that accepts a boolean walkability
+/// closure (for backward-compatible integration testing).
+/// Internally converts `true` → `Some(cost::BASE)`, `false` → `None`.
 pub fn a_star_first_step_pub(
     start: GridVec,
     goal: GridVec,
     is_walkable: impl Fn(GridVec) -> bool,
 ) -> Option<GridVec> {
-    a_star_first_step(start, goal, is_walkable)
+    a_star_first_step(start, goal, |pos| {
+        if is_walkable(pos) { Some(cost::BASE) } else { None }
+    })
+}
+
+// ─────────── Dijkstra Flood-Fill (Goal Maps) ──────────────────────
+//
+// Classic roguelike technique: flood outward from one or more source
+// positions using Dijkstra's algorithm with weighted tile costs.
+// The resulting distance map can be used in two ways:
+//   • **Move downhill** (toward lower values) → approach the sources.
+//   • **Move uphill** (toward higher values) → flee from the sources.
+//
+// Budget-limited to prevent expensive map-wide floods.
+
+/// Maximum tiles the Dijkstra flood may visit.
+const MAX_DIJKSTRA_NODES: usize = 512;
+
+/// Multi-source Dijkstra flood fill.  Returns a map of `tile → weighted
+/// distance from nearest source`.  Respects the same influence-map costs
+/// as A*, so flee paths naturally prefer cover and avoid hazards.
+fn dijkstra_map(
+    sources: &[GridVec],
+    cost_fn: impl Fn(GridVec) -> Option<i32>,
+) -> HashMap<GridVec, i32> {
+    let mut dist: HashMap<GridVec, i32> = HashMap::with_capacity(MAX_DIJKSTRA_NODES);
+    let mut open: BinaryHeap<Reverse<(i32, GridVec)>> = BinaryHeap::new();
+
+    for &src in sources {
+        dist.insert(src, 0);
+        open.push(Reverse((0, src)));
+    }
+
+    let mut explored = 0usize;
+
+    while let Some(Reverse((d, current))) = open.pop() {
+        if d > *dist.get(&current).unwrap_or(&i32::MAX) {
+            continue; // Stale entry.
+        }
+        explored += 1;
+        if explored >= MAX_DIJKSTRA_NODES {
+            break;
+        }
+
+        for dir in GridVec::DIRECTIONS_8 {
+            let neighbor = current + dir;
+            let edge = match cost_fn(neighbor) {
+                Some(c) => c,
+                None => continue,
+            };
+            let new_d = d + edge;
+            if new_d < *dist.get(&neighbor).unwrap_or(&i32::MAX) {
+                dist.insert(neighbor, new_d);
+                open.push(Reverse((new_d, neighbor)));
+            }
+        }
+    }
+
+    dist
 }
 
 // ───────────────────────── AI System ───────────────────────────────
 
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
-
-/// Returns `true` if `pos` or any neighbor of `pos` contains a dangerous
-/// hazard: cactus, fire, or smoke/sand clouds. NPCs avoid walking into or
-/// adjacent to these hazards during pathfinding.
-fn is_near_danger(pos: GridVec, game_map: &GameMapResource) -> bool {
-    // Check the tile itself for fire or sand/smoke clouds.
-    if let Some(voxel) = game_map.0.get_voxel_at(&pos)
-        && matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::SandCloud)) {
-            return true;
-        }
-    // Check all 8 neighbors for cactus or fire.
-    for neighbor in pos.all_neighbors() {
-        if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
-            if matches!(voxel.props, Some(Props::Cactus)) {
-                return true;
-            }
-            if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire)) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Returns `true` if `pos` is walkable for AI pathfinding: the tile is passable
-/// on the game map, not occupied by a blocking entity other than `self_entity`,
-/// and not near any dangerous hazards (cactus, fire, smoke).
-fn is_walkable_for_ai(
-    pos: GridVec,
-    self_entity: Entity,
-    game_map: &GameMapResource,
-    spatial: &SpatialIndex,
-    blockers: &Query<(), With<BlocksMovement>>,
-) -> bool {
-    game_map.0.is_passable(&pos)
-        && !spatial.entities_at(&pos).iter().any(|&e| e != self_entity && blockers.contains(e))
-        && !is_near_danger(pos, game_map)
-}
 
 /// Updates the NPC's look direction and marks the viewshed dirty.
 /// Used after movement or rotation to ensure FOV is recalculated.
@@ -350,7 +486,14 @@ fn should_flee(health: &Option<Mut<Health>>, personality: Option<&AiPersonality>
     hp.fraction() < courage * FLEE_HP_THRESHOLD
 }
 
-/// Find a direction to flee away from a threat position.
+/// **Dijkstra-enhanced flee**: builds a small threat-distance map centred
+/// on `threat_pos`, then picks the adjacent tile with the *highest*
+/// weighted distance (furthest from threat along safe, covered paths).
+///
+/// This replaces the old greedy "step away" heuristic.  Because the
+/// Dijkstra flood uses the same influence-map costs as A*, the NPC
+/// naturally flees *through cover* and *around hazards* rather than
+/// blindly running in the opposite direction.
 fn flee_direction(
     my_pos: GridVec,
     threat_pos: GridVec,
@@ -359,27 +502,39 @@ fn flee_direction(
     spatial: &SpatialIndex,
     blockers: &Query<(), With<BlocksMovement>>,
 ) -> Option<GridVec> {
-    let away = (my_pos - threat_pos).king_step();
-    if !away.is_zero() {
-        let target = my_pos + away;
-        if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
-            return Some(away);
-        }
-    }
+    // Flood from the threat through the influence map.
+    let threat_map = dijkstra_map(
+        &[threat_pos],
+        |p| tile_cost_for_ai(p, entity, game_map, spatial, blockers),
+    );
+
+    let my_dist = *threat_map.get(&my_pos).unwrap_or(&0);
+
+    // Pick the neighbor that is furthest from the threat while still being
+    // traversable.  When Dijkstra hasn't reached a neighbor (it's outside
+    // the flood budget), treat it as very far — a reasonable default.
+    let mut best_dir = None;
+    let mut best_score = i32::MIN;
     for dir in GridVec::DIRECTIONS_8 {
-        let dot_toward_threat = dir.x * (threat_pos.x - my_pos.x).signum()
-            + dir.y * (threat_pos.y - my_pos.y).signum();
-        if dot_toward_threat <= 0 {
-            let target = my_pos + dir;
-            if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
-                return Some(dir);
-            }
+        let neighbor = my_pos + dir;
+        if tile_cost_for_ai(neighbor, entity, game_map, spatial, blockers).is_none() {
+            continue;
+        }
+        let neighbor_dist = *threat_map.get(&neighbor).unwrap_or(&(my_dist + cost::BASE * 4));
+        // Score: prefer higher distance from threat, penalised by tile cost.
+        let tile_c = tile_cost(neighbor, game_map).unwrap_or(cost::BASE);
+        let score = neighbor_dist * 2 - tile_c;
+        if score > best_score {
+            best_score = score;
+            best_dir = Some(dir);
         }
     }
-    None
+    best_dir
 }
 
 /// Find the best direction to maintain preferred range from a target.
+/// Uses the influence map for approach (weighted A*) and Dijkstra-aware
+/// flee when too close.
 fn kite_direction(
     my_pos: GridVec,
     target_pos: GridVec,
@@ -399,12 +554,12 @@ fn kite_direction(
         let toward = (target_pos - my_pos).king_step();
         if !toward.is_zero() {
             let target = my_pos + toward;
-            if is_walkable_for_ai(target, entity, game_map, spatial, blockers) {
+            if tile_cost_for_ai(target, entity, game_map, spatial, blockers).is_some() {
                 return Some(toward);
             }
         }
         a_star_first_step(my_pos, target_pos, |p| {
-            is_walkable_for_ai(p, entity, game_map, spatial, blockers)
+            tile_cost_for_ai(p, entity, game_map, spatial, blockers)
         })
     }
 }
@@ -633,26 +788,31 @@ pub fn ai_system(
             count
         };
 
-        // NPC Dodge: sidestep when projectile is nearby
+        // NPC Dodge: sidestep when projectile is nearby.
+        // Uses tile cost as secondary criterion: among tiles equally far
+        // from the nearest projectile, prefer covered/safe tiles.
         let dodge_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0xD0D6);
         let nearby_danger = spell_particles.particles.iter().any(|(p, life, delay, _, _, _)| {
             *delay == 0 && *life > 0 && my_pos.chebyshev_distance(*p) <= 2
         });
         if nearby_danger && dodge_roll < DODGE_CHANCE {
             let mut best_dir = None;
-            let mut best_dist = 0;
+            let mut best_score = (0i32, i32::MAX); // (particle_dist, -tile_cost)
             for dir in GridVec::DIRECTIONS_8 {
                 let target = my_pos + dir;
-                if is_walkable_for_ai(target, entity, &game_map, &spatial, &blockers) {
-                    let min_particle_dist = spell_particles.particles.iter()
-                        .filter(|(_, life, delay, _, _, _)| *delay == 0 && *life > 0)
-                        .map(|(p, _, _, _, _, _)| target.chebyshev_distance(*p))
-                        .min()
-                        .unwrap_or(i32::MAX);
-                    if min_particle_dist > best_dist {
-                        best_dist = min_particle_dist;
-                        best_dir = Some(dir);
-                    }
+                let tc = match tile_cost_for_ai(target, entity, &game_map, &spatial, &blockers) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let min_particle_dist = spell_particles.particles.iter()
+                    .filter(|(_, life, delay, _, _, _)| *delay == 0 && *life > 0)
+                    .map(|(p, _, _, _, _, _)| target.chebyshev_distance(*p))
+                    .min()
+                    .unwrap_or(i32::MAX);
+                let score = (min_particle_dist, -tc);
+                if score > best_score {
+                    best_score = score;
+                    best_dir = Some(dir);
                 }
             }
             if let Some(dir) = best_dir {
@@ -684,7 +844,7 @@ pub fn ai_system(
                     }
                 } else if let Some((_, item_vec)) = nearest_item {
                     let step = a_star_first_step(my_pos, item_vec, |p| {
-                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                             && !step.is_zero() {
@@ -698,7 +858,7 @@ pub fn ai_system(
                     && my_pos != remembered_pos
                 {
                     let step = a_star_first_step(my_pos, remembered_pos, |p| {
-                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                         && !step.is_zero() {
@@ -723,7 +883,7 @@ pub fn ai_system(
 
                 if let Some((_, item_vec)) = nearest_item {
                     let step = a_star_first_step(my_pos, item_vec, |p| {
-                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                             && !step.is_zero() {
@@ -741,7 +901,7 @@ pub fn ai_system(
                     && my_pos != remembered_pos
                 {
                     let step = a_star_first_step(my_pos, remembered_pos, |p| {
-                        is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
                             && !step.is_zero() {
@@ -767,7 +927,8 @@ pub fn ai_system(
                     continue;
                 }
 
-                let patrol_step = match my_faction {
+                // Faction-specific patrol direction (preferred heading).
+                let patrol_heading: Option<GridVec> = match my_faction {
                     Some(Faction::Lawmen) => {
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
                             Some((origin - my_pos).king_step())
@@ -799,16 +960,34 @@ pub fn ai_system(
                     }
                 };
 
-                if let Some(step) = patrol_step
-                    && !step.is_zero() {
-                        let target = my_pos + step;
-                        if game_map.0.is_passable(&target)
-                            && !spatial.entities_at(&target).iter().any(|&e| e != entity && blockers.contains(e))
-                        {
-                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                // Influence-weighted patrol: score each neighbor tile by
+                // combining the preferred heading with the tile's influence
+                // cost. Lower tile cost (cover, safe terrain) is preferred;
+                // tiles aligned with the patrol heading get a bonus.
+                if let Some(heading) = patrol_heading
+                    && !heading.is_zero()
+                {
+                    let mut best_dir = None;
+                    let mut best_score = i32::MIN;
+                    for dir in GridVec::DIRECTIONS_8 {
+                        let candidate = my_pos + dir;
+                        let tc = match tile_cost_for_ai(candidate, entity, &game_map, &spatial, &blockers) {
+                            Some(c) => c,
+                            None => continue,
+                        };
+                        // Heading alignment bonus: dot product with heading.
+                        let alignment = dir.x * heading.x + dir.y * heading.y;
+                        let score = alignment * cost::BASE - tc;
+                        if score > best_score {
+                            best_score = score;
+                            best_dir = Some(dir);
                         }
                     }
+                    if let Some(step) = best_dir {
+                        move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                    }
+                }
 
                 energy.spend_action();
             }
@@ -825,7 +1004,7 @@ pub fn ai_system(
                     let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
                     if my_pos != origin {
                         let step = a_star_first_step(my_pos, origin, |p| {
-                            is_walkable_for_ai(p, entity, &game_map, &spatial, &blockers)
+                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                         });
                         if let Some(step) = step
                                 && !step.is_zero() {
@@ -863,7 +1042,7 @@ pub fn ai_system(
                         {
                             // Memory pursuit: navigate to remembered position.
                             let step = a_star_first_step(my_pos, remembered_pos, |pos| {
-                                is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
+                                tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
                             })
                             .unwrap_or_else(|| (remembered_pos - my_pos).king_step());
 
@@ -1134,9 +1313,10 @@ pub fn ai_system(
                         continue;
                     }
 
-                // A* pathfinding toward target.
-                // Occasionally attempt to flank by adding a perpendicular
-                // offset to the goal so the NPC approaches from the side.
+                // Weighted A* pathfinding toward target.
+                // The influence map naturally routes the NPC through cover
+                // and around hazards.  Occasionally attempt to flank by
+                // adding a perpendicular offset to the goal.
                 let flank_hash = (my_pos.x.wrapping_mul(31) ^ my_pos.y.wrapping_mul(17))
                     .wrapping_add(turn_counter.0 as i32) as u32;
                 let flank_goal = if dist > 3 && flank_hash.is_multiple_of(3) {
@@ -1147,7 +1327,7 @@ pub fn ai_system(
                     target_vec
                 };
                 let step = a_star_first_step(my_pos, flank_goal, |pos| {
-                    is_walkable_for_ai(pos, entity, &game_map, &spatial, &blockers)
+                    tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
                 })
                 .unwrap_or_else(|| (target_vec - my_pos).king_step());
 
@@ -1204,17 +1384,27 @@ pub fn leader_death_system(
     }
 }
 
-// ───────────────────────── A* Tests ────────────────────────────────
+// ─────────── Influence Map / A* / Dijkstra Tests ──────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Helper: uniform-cost walkable closure (all tiles cost BASE).
+    fn walkable(_: GridVec) -> Option<i32> { Some(cost::BASE) }
+
+    /// Helper: convert a wall set into a cost closure (walls → None, rest → BASE).
+    fn walls_to_cost(wall: &HashSet<GridVec>) -> impl Fn(GridVec) -> Option<i32> + '_ {
+        move |pos| if wall.contains(&pos) { None } else { Some(cost::BASE) }
+    }
+
+    // ── A* core tests ─────────────────────────────────────────────
+
     #[test]
     fn a_star_adjacent_returns_direct_step() {
         let start = GridVec::new(5, 5);
         let goal = GridVec::new(6, 5);
-        let step = a_star_first_step(start, goal, |_| true);
+        let step = a_star_first_step(start, goal, walkable);
         assert_eq!(step, Some(GridVec::new(1, 0)));
     }
 
@@ -1222,10 +1412,9 @@ mod tests {
     fn a_star_straight_line_path() {
         let start = GridVec::new(0, 0);
         let goal = GridVec::new(5, 0);
-        let step = a_star_first_step(start, goal, |_| true);
+        let step = a_star_first_step(start, goal, walkable);
         assert!(step.is_some(), "A* should find a step toward the goal");
         let s = step.unwrap();
-        // The step should move closer to the goal in Chebyshev distance.
         let new_pos = start + s;
         assert!(
             new_pos.chebyshev_distance(goal) < start.chebyshev_distance(goal),
@@ -1237,13 +1426,12 @@ mod tests {
     fn a_star_diagonal_path() {
         let start = GridVec::new(0, 0);
         let goal = GridVec::new(3, 3);
-        let step = a_star_first_step(start, goal, |_| true);
+        let step = a_star_first_step(start, goal, walkable);
         assert_eq!(step, Some(GridVec::new(1, 1)));
     }
 
     #[test]
     fn a_star_navigates_around_wall() {
-        // Wall blocks direct east path: tiles (3,2), (3,3), (3,4)
         let start = GridVec::new(2, 3);
         let goal = GridVec::new(5, 3);
         let wall: HashSet<GridVec> = [
@@ -1254,38 +1442,142 @@ mod tests {
         .into_iter()
         .collect();
 
-        let step = a_star_first_step(start, goal, |pos| !wall.contains(&pos));
-        // A* should find a path around the wall (step should not be directly east)
+        let step = a_star_first_step(start, goal, walls_to_cost(&wall));
         assert!(step.is_some(), "A* should find a path around the wall");
         let s = step.unwrap();
-        // Should not step into the wall
         let next = start + s;
         assert!(!wall.contains(&next), "First step should not be into a wall");
     }
 
     #[test]
     fn a_star_returns_none_when_unreachable() {
-        // Completely surround the goal
         let start = GridVec::new(0, 0);
         let goal = GridVec::new(10, 10);
         let step = a_star_first_step(start, goal, |pos| {
-            // Block a complete ring around the goal
+            // Block exactly the ring at Chebyshev distance 1 from goal.
             let d = pos.chebyshev_distance(goal);
-            d == 0 || d > 1 // Block exactly the ring at distance 1
+            if d == 1 { None } else { Some(cost::BASE) }
         });
-        // Might return None (blocked) or find a path to adjacent tile
-        // that's reachable. The goal itself is walkable but ring at d=1 isn't.
-        // With our implementation, the goal is always walkable, so we need
-        // the ring to truly block. Since the neighbor check skips non-walkable
-        // tiles (except goal), and all d=1 tiles from goal are blocked,
-        // no path should be found from (0,0).
         assert!(step.is_none(), "Should return None when goal is surrounded");
     }
 
     #[test]
     fn a_star_zero_distance_returns_none() {
         let pos = GridVec::new(5, 5);
-        let step = a_star_first_step(pos, pos, |_| true);
+        let step = a_star_first_step(pos, pos, walkable);
         assert_eq!(step, None, "No step needed when already at goal");
+    }
+
+    // ── Weighted A* tests ─────────────────────────────────────────
+
+    #[test]
+    fn a_star_prefers_low_cost_path() {
+        // Two paths from (0,0) to (4,0):
+        //   Direct (y=0): interior tiles cost 50 each (expensive / hazardous)
+        //   Detour (y≠0): tiles cost BASE each (safe / covered)
+        // A* should route through the cheaper detour.
+        let start = GridVec::new(0, 0);
+        let goal = GridVec::new(4, 0);
+        let step = a_star_first_step(start, goal, |pos| {
+            if pos.y == 0 && pos.x > 0 && pos.x < 4 {
+                Some(50) // Hazardous corridor
+            } else {
+                Some(cost::BASE) // Safe detour
+            }
+        });
+        assert!(step.is_some());
+        let s = step.unwrap();
+        // Should step off the y=0 line to avoid the expensive corridor.
+        assert_ne!(s.y, 0, "Should detour around the hazardous corridor, got ({}, {})", s.x, s.y);
+    }
+
+    #[test]
+    fn a_star_uses_cover_bonus() {
+        // y=2 has low cost (simulating cover near walls), y=0 has high cost.
+        let start = GridVec::new(0, 1);
+        let goal = GridVec::new(5, 1);
+        let step = a_star_first_step(start, goal, |pos| {
+            if pos.y == 2 { Some(5) } // "Covered" path
+            else if pos.y == 0 { Some(20) } // Exposed path
+            else { Some(cost::BASE) }
+        });
+        assert!(step.is_some());
+        let s = step.unwrap();
+        // Should prefer moving toward the cheaper (covered) y=2 row.
+        assert!(s.y > 0, "Should prefer moving toward cover (y=2), got y={}", s.y);
+    }
+
+    // ── Dijkstra map tests ────────────────────────────────────────
+
+    #[test]
+    fn dijkstra_source_has_zero_distance() {
+        let src = GridVec::new(5, 5);
+        let map = dijkstra_map(&[src], walkable);
+        assert_eq!(*map.get(&src).unwrap(), 0);
+    }
+
+    #[test]
+    fn dijkstra_distance_increases_outward() {
+        let src = GridVec::new(5, 5);
+        let map = dijkstra_map(&[src], walkable);
+        // Adjacent tile should have distance == BASE (one step away).
+        let adj = GridVec::new(6, 5);
+        assert_eq!(*map.get(&adj).unwrap_or(&0), cost::BASE);
+        // Two steps away should be 2*BASE.
+        let far = GridVec::new(7, 5);
+        assert_eq!(*map.get(&far).unwrap_or(&0), cost::BASE * 2);
+    }
+
+    #[test]
+    fn dijkstra_blocked_tiles_not_reached() {
+        let src = GridVec::new(0, 0);
+        // Surround the source with walls (block at distance 1).
+        let map = dijkstra_map(&[src], |pos| {
+            if pos == src { return Some(cost::BASE); }
+            if pos.chebyshev_distance(src) == 1 { return None; }
+            Some(cost::BASE)
+        });
+        // Source is reachable.
+        assert!(map.contains_key(&src));
+        // Tiles beyond the ring should NOT be reached.
+        let beyond = GridVec::new(2, 0);
+        assert!(!map.contains_key(&beyond), "Tiles beyond blocked ring should be unreachable");
+    }
+
+    #[test]
+    fn dijkstra_multi_source_picks_nearest() {
+        let a = GridVec::new(0, 0);
+        let b = GridVec::new(10, 0);
+        let map = dijkstra_map(&[a, b], walkable);
+        // Midpoint (5,0) should have distance 5*BASE from nearest source.
+        let mid = GridVec::new(5, 0);
+        assert_eq!(*map.get(&mid).unwrap_or(&0), 5 * cost::BASE);
+    }
+
+    #[test]
+    fn dijkstra_high_cost_tiles_have_larger_distance() {
+        let src = GridVec::new(0, 0);
+        let map = dijkstra_map(&[src], |pos| {
+            if pos.y > 0 { Some(50) } // Expensive tiles north
+            else { Some(cost::BASE) } // Cheap tiles along y=0
+        });
+        // (1,0) via cheap path: cost BASE
+        // (0,1) via expensive path: cost 50
+        let cheap = *map.get(&GridVec::new(1, 0)).unwrap_or(&0);
+        let expensive = *map.get(&GridVec::new(0, 1)).unwrap_or(&0);
+        assert!(expensive > cheap, "Expensive tiles should have larger Dijkstra distance");
+    }
+
+    // ── Tile cost module constants sanity check ───────────────────
+
+    #[test]
+    fn cost_constants_are_positive() {
+        assert!(cost::BASE > 0);
+        assert!(cost::FIRE > cost::BASE);
+        assert!(cost::NEAR_FIRE > cost::BASE);
+        assert!(cost::NEAR_CACTUS > cost::BASE);
+        assert!(cost::SAND_CLOUD > cost::BASE);
+        assert!(cost::COVER_PER_WALL > 0);
+        assert!(cost::EXPOSED > 0);
     }
 }

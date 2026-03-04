@@ -27,6 +27,10 @@ const SMOKE_PARTICLE_MAX_LIFETIME: f32 = 10.0;
 /// Minimum intensity for explosion particles so they remain visible.
 const MIN_EXPLOSION_INTENSITY: f32 = 0.15;
 
+/// Number of render frames between water animation symbol cycles.
+/// At 60 FPS, 20 → water ripples change ~3 times per second.
+const WATER_ANIM_FRAMES: u32 = 20;
+
 /// Ticks and renders combat particles each frame. Also computes which
 /// sound indicators should be visible on the map from `SoundEvents`.
 pub fn particle_tick_system(
@@ -147,8 +151,8 @@ pub fn draw_system(
         // ── Water animation: animate water tiles with cycling symbols and color variety ──
         {
             let anim_frame = cursor.blink_frame();
-            // Water symbol frames cycle every ~20 render frames for a gentle ripple.
-            let water_phase = (anim_frame / 20) as usize;
+            // Water symbol frames cycle every WATER_ANIM_FRAMES for a gentle ripple.
+            let water_phase = (anim_frame / WATER_ANIM_FRAMES) as usize;
             const SHALLOW_SYMS: [&str; 4] = ["~", "~", "∼", "~"];
             const DEEP_SYMS: [&str; 4] = ["≈", "≈", "~", "≈"];
 

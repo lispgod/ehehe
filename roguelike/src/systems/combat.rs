@@ -510,6 +510,9 @@ pub fn ai_ranged_attack_system(
 /// attacker by one tile. Only pushes if the destination tile is unoccupied and passable.
 /// Deals damage to all adjacent entities (not just hostile ones).
 /// Also damages adjacent props; props are only destroyed when their health reaches zero.
+///
+/// Minimum prop damage per kick to ensure weak kicks still damage props.
+const MIN_PROP_DAMAGE: i32 = 5;
 pub fn melee_wide_system(
     mut commands: Commands,
     mut intents: MessageReader<MeleeWideIntent>,
@@ -597,7 +600,7 @@ pub fn melee_wide_system(
                         }
                         // Initialize prop health if not yet tracked
                         let current_hp = prop_health.hp.entry(tile).or_insert(max_hp);
-                        *current_hp -= damage.max(5); // minimum 5 damage to props
+                        *current_hp -= damage.max(MIN_PROP_DAMAGE);
                         props_damaged += 1;
                         if *current_hp <= 0 {
                             // Destroy the prop

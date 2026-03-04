@@ -270,7 +270,7 @@ pub fn star_level_system(
     mut commands: Commands,
     mut star_level: ResMut<crate::resources::StarLevel>,
     player_query: Query<&Position, With<Player>>,
-    hostile_viewsheds: Query<(&crate::components::Viewshed, Option<&crate::components::Faction>), With<crate::components::Hostile>>,
+    hostile_viewsheds: Query<&crate::components::Viewshed, With<crate::components::Hostile>>,
     turn_counter: Res<TurnCounter>,
     game_map: Res<GameMapResource>,
     _seed: Res<MapSeed>,
@@ -285,7 +285,7 @@ pub fn star_level_system(
 
     // Check if the player is in any hostile/sheriff vision
     let mut player_seen = false;
-    for (vs, _faction) in &hostile_viewsheds {
+    for vs in &hostile_viewsheds {
         if vs.visible_tiles.contains(&player_gv) {
             player_seen = true;
             break;

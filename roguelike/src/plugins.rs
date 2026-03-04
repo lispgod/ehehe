@@ -69,7 +69,7 @@ impl Plugin for RoguelikePlugin {
 
         let game_map = GameMap::new(400, 280, seed);
         // Compute actual player spawn position so camera+cursor start centered on it.
-        let player_spawn = game_map.find_house_exterior()
+        let player_spawn = game_map.find_bridge_center()
             .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
 
         app.add_plugins(bevy::state::app::StatesPlugin)
@@ -235,7 +235,7 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
 /// Helper: spawns the player entity.
 fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
     // Find a saloon interior tile, falling back to default spawn point.
-    let spawn_pos = map.0.find_house_exterior()
+    let spawn_pos = map.0.find_bridge_center()
         .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
 
     // Spawn starting weapon: Colt Pocket (.31 caliber)
@@ -565,7 +565,7 @@ fn restart_system(
     spell_particles.particles.clear();
     *input_state = InputState::default();
     *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
-    let player_spawn = game_map.0.find_house_exterior()
+    let player_spawn = game_map.0.find_bridge_center()
         .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
     camera.0 = player_spawn;
     *cursor = CursorPosition::at(player_spawn);

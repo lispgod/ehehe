@@ -113,7 +113,9 @@ impl Props {
             // Short/open objects: you can see over/through them
             Props::Fence | Props::WaterTrough | Props::Bush
             | Props::Bench | Props::Chair | Props::HayBale
-            | Props::Sign | Props::RailTrack | Props::LampPost => false,
+            | Props::Sign | Props::RailTrack | Props::LampPost
+            | Props::Barrel | Props::Crate | Props::Table
+            | Props::HitchingPost | Props::Rock | Props::Cactus => false,
             _ => true,
         }
     }

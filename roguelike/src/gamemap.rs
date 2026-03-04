@@ -423,6 +423,19 @@ impl GameMap {
             map.breach_points.remove(&pos);
         }
 
+        // ── Final pass: clear props from water/beach tiles ──────────
+        // Later generation steps may have placed props on river tiles.
+        for y in 0..height {
+            for x in 0..width {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                        voxel.props = None;
+                    }
+                }
+            }
+        }
+
         map
     }
 
@@ -497,6 +510,27 @@ impl GameMap {
             }
         }
         None
+    }
+
+    /// Finds a Bridge tile near the horizontal center of the map.
+    /// Returns a point on the bridge closest to `width / 2`.
+    pub fn find_bridge_center(&self) -> Option<GridVec> {
+        let target_x = self.width / 2;
+        let mut best: Option<(i32, GridVec)> = None;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = self.get_voxel_at(&pos)
+                    && matches!(voxel.floor, Some(Floor::Bridge))
+                {
+                    let dist = (x - target_x).abs();
+                    if best.is_none() || dist < best.unwrap().0 {
+                        best = Some((dist, pos));
+                    }
+                }
+            }
+        }
+        best.map(|(_, pos)| pos)
     }
 
     /// Creates a RenderPacket with visibility-based dimming.

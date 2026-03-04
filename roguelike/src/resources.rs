@@ -101,7 +101,6 @@ pub struct InputState {
     pub inv_selection: usize,
     pub help_visible: bool,
     pub welcome_visible: bool,
-    pub quit_confirm: bool,
     /// Set to true when the player requests a reload (R key).
     pub reload_pending: bool,
     /// Stamina cost for a pending dive action.
@@ -119,7 +118,6 @@ impl Default for InputState {
             inv_selection: 0,
             help_visible: false,
             welcome_visible: true, // shown on first launch
-            quit_confirm: false,
             reload_pending: false,
             dive_stamina_pending: 0,
             ability_stamina_pending: 0,

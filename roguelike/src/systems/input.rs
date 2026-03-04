@@ -1,4 +1,4 @@
-use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
+use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
@@ -9,7 +9,6 @@ use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, G
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
 pub struct IntentWriters<'w> {
-    exit: MessageWriter<'w, AppExit>,
     move_intents: MessageWriter<'w, MoveIntent>,
     spell_intents: MessageWriter<'w, SpellCastIntent>,
     molotov_intents: MessageWriter<'w, MolotovCastIntent>,
@@ -75,7 +74,7 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "8", name: "Fan shot (20 sta)", docs: "Fire all rounds from a random revolver." },
     CommandBinding { key: "9", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
     CommandBinding { key: "0", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
-    CommandBinding { key: "Q", name: "Menu / Close", docs: "Toggle pause menu, E then Y to quit." },
+    CommandBinding { key: "Q", name: "Menu", docs: "Toggle pause menu" },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -102,13 +101,10 @@ pub fn input_system(
     (mut extra_world_ticks, mut spectating, dynamic_rng, seed): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>),
     mut god_mode: ResMut<crate::resources::GodMode>,
 ) {
-    // Handle Dead and Victory states: Q to quit, R to restart, T to spectate.
+    // Handle Dead and Victory states: R to restart, T to spectate.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
         for message in messages.read() {
             match message.code {
-                KeyCode::Char('q') => {
-                    intents.exit.write_default();
-                }
                 KeyCode::Char('r') => {
                     restart_requested.0 = true;
                 }
@@ -125,11 +121,7 @@ pub fn input_system(
 
     let Ok((player_entity, player_pos, player_stamina, player_inv)) = player_query.single() else {
         // Player entity is gone (should only happen transiently).
-        for message in messages.read() {
-            if matches!(message.code, KeyCode::Char('q')) {
-                intents.exit.write_default();
-            }
-        }
+        messages.read().for_each(|_| {});
         return;
     };
 
@@ -138,14 +130,10 @@ pub fn input_system(
         .is_some_and(|s| *s.get() == TurnState::AwaitingInput);
 
     // When spectating after death, automatically advance to WorldTurn
-    // without waiting for player input. Allow Q/R to quit/restart.
+    // without waiting for player input. Allow R to restart.
     if spectating.0 && awaiting_input {
         for message in messages.read() {
             match message.code {
-                KeyCode::Char('q') => {
-                    intents.exit.write_default();
-                    return;
-                }
                 KeyCode::Char('r') => {
                     restart_requested.0 = true;
                     spectating.0 = false;
@@ -161,19 +149,6 @@ pub fn input_system(
     // ── ESC menu input mode ─────────────────────────────────────
     if input_state.mode == InputMode::EscMenu {
         for message in messages.read() {
-            // Handle exit confirmation sub-mode within ESC menu.
-            if input_state.quit_confirm {
-                match message.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        intents.exit.write_default();
-                    }
-                    _ => {
-                        input_state.quit_confirm = false;
-                    }
-                }
-                continue;
-            }
-
             match message.code {
                 KeyCode::Char('q') => {
                     // Resume game (Q toggles ESC menu)
@@ -186,10 +161,6 @@ pub fn input_system(
                     // Restart
                     input_state.mode = InputMode::Game;
                     restart_requested.0 = true;
-                }
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    // Exit — requires Y confirmation
-                    input_state.quit_confirm = true;
                 }
                 _ => {}
             }
@@ -205,26 +176,12 @@ pub fn input_system(
             continue; // consume the key that dismissed the welcome
         }
 
-        // Handle exit confirmation mode.
-        if input_state.quit_confirm {
-            match message.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    intents.exit.write_default();
-                }
-                _ => {
-                    input_state.quit_confirm = false;
-                }
-            }
-            continue;
-        }
-
         // Exhaustive input handling — every arm here corresponds to a KEYBINDINGS entry.
         match message.code {
             // ── Q key: toggle ESC menu ──────────────────────────
             KeyCode::Char('q') => {
                 // Open ESC menu and pause the game.
                 input_state.mode = InputMode::EscMenu;
-                input_state.quit_confirm = false;
                 if *game_state.get() == GameState::Playing {
                     next_game_state.set(GameState::Paused);
                 }

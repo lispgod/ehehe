@@ -172,7 +172,7 @@ pub fn death_system(
         // treatment as NPC deaths. The player entity itself is NOT despawned
         // so the UI can continue reading stats (HP, inventory, etc.).
         if is_player.is_some() {
-            combat_log.push("You have fallen... Press T to continue watching, Q to quit, or R to restart.".into());
+            combat_log.push("You have fallen... Press T to continue watching, or R to restart.".into());
             next_game_state.set(GameState::Dead);
             commands.entity(entity).insert(Dead);
             if let Some(p) = pos {

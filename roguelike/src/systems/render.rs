@@ -593,12 +593,12 @@ pub fn draw_system(
 
         // Show ESC menu overlay when in EscMenu mode (replaces old PAUSED overlay)
         if input_state.mode == InputMode::EscMenu {
-            render_esc_menu_overlay(frame, game_area, input_state.quit_confirm);
+            render_esc_menu_overlay(frame, game_area);
         }
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
         if *state.get() == GameState::Victory {
-            let label = " VICTORY! You escaped the town! Press Q to quit, R to restart. ";
+            let label = " VICTORY! You escaped the town! Press R to restart. ";
             let label_width = label.len() as u16;
             if render_width >= label_width && render_height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -620,7 +620,7 @@ pub fn draw_system(
         // Show it right above the UI panel, not in the center of the screen.
         let player_is_dead = player_hp.is_some_and(|hp| hp.is_dead());
         if *state.get() == GameState::Dead || player_is_dead {
-            let label = " YOU DIED — Press T to continue watching, Q to quit, R to restart ";
+            let label = " YOU DIED — Press T to continue watching, R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && game_area.height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;
@@ -862,7 +862,6 @@ fn render_command_bar(frame: &mut ratatui::Frame, area: Rect, input_state: &Inpu
         vec![
             Span::from(" Q").bold().yellow(), Span::from(":Resume ").dark_gray(),
             Span::from("R").bold().yellow(), Span::from(":Restart ").dark_gray(),
-            Span::from("E").bold().yellow(), Span::from(":Exit").dark_gray(),
         ]
     } else {
         vec![
@@ -949,11 +948,10 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     );
 }
 
-/// Renders the ESC menu overlay with Resume, Restart, and Quit options.
-fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, quit_confirm: bool) {
+/// Renders the ESC menu overlay with Resume and Restart options.
+fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     let w = 40u16.min(game_area.width.saturating_sub(4));
-    let h = if quit_confirm { 12u16 } else { 10u16 };
-    let h = h.min(game_area.height.saturating_sub(4));
+    let h = 8u16.min(game_area.height.saturating_sub(4));
 
     if w < 20 || h < 5 {
         return;
@@ -970,20 +968,14 @@ fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, quit_con
 
     frame.render_widget(Clear, menu_area);
 
-    let mut lines = vec![
+    let lines = vec![
         Line::from(""),
         Line::from("  PAUSED").bold().yellow(),
         Line::from(""),
         Line::from("  Q   — Resume").white(),
         Line::from("  R   — Restart").white(),
-        Line::from("  E   — Exit (then Y to confirm)").white(),
         Line::from(""),
     ];
-
-    if quit_confirm {
-        lines.push(Line::from("  Would you really like to exit?").bold().red());
-        lines.push(Line::from("  Press Y to confirm.").dark_gray());
-    }
 
     frame.render_widget(
         Paragraph::new(lines)

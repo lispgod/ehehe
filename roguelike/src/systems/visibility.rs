@@ -144,7 +144,7 @@ pub fn visibility_system(
                 }
                 let ray = origin.bresenham_line(tile);
                 let mut remaining = effective_range as f64;
-                for (i, &ray_tile) in ray.iter().enumerate().skip(1) {
+                for &ray_tile in ray.iter().skip(1) {
                     remaining -= 1.0;
                     if remaining < 0.0 {
                         return false;
@@ -154,9 +154,6 @@ pub fn visibility_system(
                             .is_some_and(|v| matches!(v.floor, Some(crate::typeenums::Floor::SandCloud)));
                     if is_smoke && ray_tile != tile {
                         remaining /= 2.0;
-                    }
-                    if i == ray.len() - 1 {
-                        return true; // reached the target tile
                     }
                 }
                 true

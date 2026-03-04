@@ -496,7 +496,7 @@ pub fn bullet_animation_tick_system(
         return;
     }
     // Advance one step every BULLET_ANIM_FRAMES_PER_STEP render frames.
-    if cursor.blink_frame().wrapping_rem(crate::resources::BULLET_ANIM_FRAMES_PER_STEP) == 0 {
+    if cursor.blink_frame() % crate::resources::BULLET_ANIM_FRAMES_PER_STEP == 0 {
         bullet_anims.advance();
     }
 }

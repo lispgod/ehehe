@@ -660,13 +660,12 @@ impl BulletAnimations {
     /// Advance all bullet trail animations by one step.
     /// Returns `true` if any trails are still in progress.
     pub fn advance(&mut self) -> bool {
-        for trail in &mut self.trails {
-            if trail.render_index < trail.positions.len().saturating_sub(1) {
-                trail.render_index += 1;
-            }
-        }
-        // Remove completed trails.
+        // Remove trails that finished rendering on the previous advance.
         self.trails.retain(|t| t.render_index < t.positions.len().saturating_sub(1));
+        // Advance remaining trails.
+        for trail in &mut self.trails {
+            trail.render_index += 1;
+        }
         !self.trails.is_empty()
     }
 

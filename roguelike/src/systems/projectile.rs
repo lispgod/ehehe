@@ -170,6 +170,8 @@ pub fn spawn_shrapnel(
                     penetration: damage,
                     source,
                     tail_pos: None,
+                    // Shrapnel shares BulletTrail visual (center dots + tail)
+                    // per the animation spec — same style as bullets.
                     visual: ProjectileVisual::BulletTrail,
                     is_bullet: false,
                 },
@@ -261,6 +263,13 @@ pub fn projectile_system(
         // Look up the name of the entity that fired this projectile.
         let source_name = display_name(source_names.get(proj.source).ok().flatten());
 
+        // Label for combat log messages based on projectile type.
+        let proj_label = match proj.visual {
+            ProjectileVisual::SpinningBlade => "thrown weapon",
+            ProjectileVisual::BulletTrail if proj.is_bullet => "bullet",
+            _ => "shrapnel",
+        };
+
         for _ in 0..steps {
             // Check current tile for damage before advancing.
             let tile = proj.path[proj.path_index];
@@ -322,7 +331,7 @@ pub fn projectile_system(
                         source: Some(proj.source),
                     });
                     combat_log.push_at(
-                        format!("{source_name}'s bullet hits {t_name} for {hit_damage} damage!"),
+                        format!("{source_name}'s {proj_label} hits {t_name} for {hit_damage} damage!"),
                         tile,
                     );
                     sound_events.add(tile);
@@ -376,7 +385,7 @@ pub fn projectile_system(
                         }
                     }
                 } else {
-                    // Non-bullet (shrapnel) always hits.
+                    // Non-bullet projectile always hits.
                     let hit_damage = proj.penetration;
                     damage_events.write(DamageEvent {
                         target: *player_entity,
@@ -384,7 +393,7 @@ pub fn projectile_system(
                         source: Some(proj.source),
                     });
                     let p_name = display_name(*player_name);
-                    combat_log.push(format!("Shrapnel hits {p_name} for {hit_damage} damage!"));
+                    combat_log.push(format!("{source_name}'s {proj_label} hits {p_name} for {hit_damage} damage!"));
                     sound_events.add(tile);
                     despawn = true;
                     break;

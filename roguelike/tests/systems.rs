@@ -3117,6 +3117,111 @@ fn thrown_at_least_as_fast_as_shrapnel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  UNIFIED ANIMATION SYSTEM TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn bullet_projectile_has_bullet_trail_visual() {
+    use roguelike::components::ProjectileVisual;
+    let mut app = test_app_with_ranged();
+    let (player, gun) = spawn_test_player_with_gun(&mut app, 60, 40, 5);
+    app.update();
+
+    app.world_mut().write_message(RangedAttackIntent {
+        attacker: player,
+        range: 30,
+        dx: 1,
+        dy: 0,
+        gun_item: Some(gun),
+    });
+    app.update(); // ranged_attack_system spawns bullet
+
+    let proj = app.world_mut().query::<&Projectile>()
+        .iter(app.world())
+        .next()
+        .expect("Bullet projectile should exist");
+    assert_eq!(proj.visual, ProjectileVisual::BulletTrail,
+        "Bullet should use BulletTrail visual");
+    assert!(proj.is_bullet, "Bullet should have is_bullet=true");
+}
+
+#[test]
+fn shrapnel_projectile_has_bullet_trail_visual() {
+    use roguelike::components::ProjectileVisual;
+    let mut app = test_app_with_spells();
+    let grenade = app.world_mut().spawn((
+        Item,
+        Name("Dynamite".into()),
+        ItemKind::Grenade { damage: 10, radius: 3, blunt_damage: 5 },
+    )).id();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5 },
+        Stamina { current: 100, max: 100 },
+        Inventory { items: vec![grenade] },
+    )).id();
+    app.update();
+
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+        target: GridVec::new(60, 40),
+        grenade_index: 0,
+    });
+    app.update(); // spell_system spawns explosive projectile
+    app.update(); // explosive detonates, spawns shrapnel
+
+    let shrapnel_count = app.world_mut().query::<&Projectile>()
+        .iter(app.world())
+        .filter(|p| p.visual == ProjectileVisual::BulletTrail && !p.is_bullet)
+        .count();
+    assert!(shrapnel_count > 0, "Shrapnel should use BulletTrail visual with is_bullet=false");
+}
+
+#[test]
+fn explosive_projectile_has_asterisk_visual() {
+    use roguelike::components::ProjectileVisual;
+    let mut app = test_app_with_spells();
+    let grenade = app.world_mut().spawn((
+        Item,
+        Name("Dynamite".into()),
+        ItemKind::Grenade { damage: 10, radius: 3, blunt_damage: 5 },
+    )).id();
+    let player = app.world_mut().spawn((
+        Position { x: 60, y: 40 },
+        Player,
+        BlocksMovement,
+        Name("Player".into()),
+        Health { current: 30, max: 30 },
+        CombatStats { attack: 5 },
+        Stamina { current: 100, max: 100 },
+        Inventory { items: vec![grenade] },
+    )).id();
+    app.update();
+
+    // Throw grenade to a distant position so the explosive projectile is in-flight
+    app.world_mut().write_message(SpellCastIntent {
+        caster: player,
+        radius: 3,
+        target: GridVec::new(70, 40),
+        grenade_index: 0,
+    });
+    app.update(); // spell_system spawns explosive projectile
+
+    let explosive_visuals: Vec<_> = app.world_mut().query::<(&Projectile, &ThrownExplosive)>()
+        .iter(app.world())
+        .map(|(p, _)| p.visual)
+        .collect();
+    assert!(!explosive_visuals.is_empty(), "Explosive projectile should exist in-flight");
+    assert!(explosive_visuals.iter().all(|v| *v == ProjectileVisual::Asterisk),
+        "Explosive projectiles should use Asterisk visual");
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  NPC FOV NARROWNESS TESTS
 // ═══════════════════════════════════════════════════════════════════
 

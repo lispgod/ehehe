@@ -160,14 +160,21 @@ impl GameMap {
         // ── Step 2: River through center ────────────────────────────
         let river_seed = seed.wrapping_add(88800);
         let river_cx = width as f64 / 2.0;
-        // River flows top to bottom with sinusoidal wobble
+        // River flows top to bottom with layered sinusoidal wobble and
+        // noise-driven meanders for a more natural, organic shape.
         for y in 1..height - 1 {
             let fy = y as f64;
-            let wobble = (fy * 0.015).sin() * 25.0
-                + (fy * 0.04).sin() * 12.0
-                + value_noise(0, y, river_seed) * 8.0;
+            // Multi-octave wobble: large sweeping bends + medium curves + fine noise
+            let wobble = (fy * 0.008).sin() * 40.0      // large meander
+                + (fy * 0.020).sin() * 20.0              // medium curve
+                + (fy * 0.045).cos() * 8.0               // small ripple
+                + value_noise(0, y, river_seed) * 10.0   // per-row noise jitter
+                + value_noise(y, 0, river_seed.wrapping_add(222)) * 5.0;
             let center_x = river_cx + wobble;
-            let river_width = 8.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 6.0;
+            // River width varies smoothly along its length.
+            let base_width = 7.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 5.0;
+            let width_pulse = (fy * 0.012).sin() * 3.0; // gentle widening/narrowing
+            let river_width = (base_width + width_pulse).max(4.0);
             let beach_width = 2.0;
 
             for x in 1..width - 1 {

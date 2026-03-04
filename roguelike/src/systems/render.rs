@@ -144,6 +144,64 @@ pub fn draw_system(
         let h_radius = render_height as CoordinateUnit / 2;
         let bottom_left = camera.0 - GridVec::new(w_radius, h_radius);
 
+        // ── Water animation: animate water tiles with cycling symbols and color variety ──
+        {
+            let anim_frame = cursor.blink_frame();
+            // Water symbol frames cycle every ~20 render frames for a gentle ripple.
+            let water_phase = (anim_frame / 20) as usize;
+            const SHALLOW_SYMS: [&str; 4] = ["~", "~", "∼", "~"];
+            const DEEP_SYMS: [&str; 4] = ["≈", "≈", "~", "≈"];
+
+            for (screen_y, row) in render_packet.iter_mut().enumerate() {
+                for (screen_x, cell) in row.iter_mut().enumerate() {
+                    let world = bottom_left + GridVec::new(screen_x as i32, screen_y as i32);
+                    if let Some(voxel) = game_map.0.get_voxel_at(&world) {
+                        let is_visible = visible_tiles
+                            .map(|vt| vt.contains(&world))
+                            .unwrap_or(true);
+                        if !is_visible { continue; }
+                        match &voxel.floor {
+                            Some(crate::typeenums::Floor::ShallowWater) => {
+                                // Position-based phase offset for varied ripple timing.
+                                let pos_hash = ((world.x.wrapping_mul(7) ^ world.y.wrapping_mul(13)) as usize) & 3;
+                                let sym_idx = (water_phase + pos_hash) % SHALLOW_SYMS.len();
+                                cell.0 = SHALLOW_SYMS[sym_idx].into();
+                                // Slight color variation based on position.
+                                let color_var = ((world.x.wrapping_mul(3) ^ world.y.wrapping_mul(11)) & 15) as u8;
+                                cell.1 = RatColor::Rgb(
+                                    90_u8.wrapping_add(color_var),
+                                    160_u8.wrapping_add(color_var / 2),
+                                    210_u8.saturating_add(color_var),
+                                );
+                                cell.2 = RatColor::Rgb(
+                                    50_u8.wrapping_add(color_var / 2),
+                                    110_u8.wrapping_add(color_var),
+                                    170_u8.saturating_add(color_var),
+                                );
+                            }
+                            Some(crate::typeenums::Floor::DeepWater) => {
+                                let pos_hash = ((world.x.wrapping_mul(11) ^ world.y.wrapping_mul(7)) as usize) & 3;
+                                let sym_idx = (water_phase + pos_hash) % DEEP_SYMS.len();
+                                cell.0 = DEEP_SYMS[sym_idx].into();
+                                let color_var = ((world.x.wrapping_mul(5) ^ world.y.wrapping_mul(9)) & 15) as u8;
+                                cell.1 = RatColor::Rgb(
+                                    20_u8.wrapping_add(color_var),
+                                    70_u8.wrapping_add(color_var / 2),
+                                    170_u8.saturating_add(color_var),
+                                );
+                                cell.2 = RatColor::Rgb(
+                                    10_u8.wrapping_add(color_var / 2),
+                                    35_u8.wrapping_add(color_var),
+                                    110_u8.saturating_add(color_var),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         /// Returns `true` if the screen-relative coordinate is within the render area.
         #[inline]
         fn in_bounds(screen: GridVec, render_width: u16, render_height: u16) -> bool {

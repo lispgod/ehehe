@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
+use crate::components::{AiState, Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
@@ -47,7 +47,12 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
 /// a bottle). Both players and NPCs use this system.
 /// Uses `CombatStats::damage_against` for the base damage model.
 /// Emits a `DamageEvent` for each successful hit and logs combat messages.
+///
+/// After dealing damage, adds `Hostile` to both attacker and target.
+/// Nearby same-faction NPCs within 8 tiles also become hostile;
+/// other-faction NPCs within 8 tiles start fleeing.
 pub fn combat_system(
+    mut commands: Commands,
     mut intents: MessageReader<AttackIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
     stats_query: Query<(&CombatStats, Option<&Name>, Option<&Position>)>,
@@ -56,7 +61,12 @@ pub fn combat_system(
     dynamic_rng: Res<crate::resources::DynamicRng>,
     seed: Res<crate::resources::MapSeed>,
     mut combat_log: ResMut<CombatLog>,
+    faction_query: Query<(Option<&Faction>, Option<&Position>)>,
+    npc_query: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
 ) {
+    // Collect aggro events to apply after processing all intents
+    let mut aggro_targets: Vec<(Entity, Entity, Option<GridVec>)> = Vec::new(); // (attacker, target, target_pos)
+
     for intent in intents.read() {
         let Ok((attacker_stats, attacker_name, attacker_pos)) = stats_query.get(intent.attacker) else {
             continue;
@@ -104,6 +114,42 @@ pub fn combat_system(
             });
         } else {
             combat_log.push_opt(format!("{a_name} attacks {t_name} but deals no damage"), pos);
+        }
+
+        // Collect aggro info
+        let target_pos = if let Ok((_, _, tp)) = stats_query.get(intent.target) {
+            tp.map(|p| p.as_grid_vec())
+        } else {
+            None
+        };
+        aggro_targets.push((intent.attacker, intent.target, target_pos));
+    }
+
+    // Apply aggro: make attacker and target Hostile, propagate to nearby NPCs
+    for (attacker, target, target_pos) in aggro_targets {
+        commands.entity(target).insert(Hostile);
+        commands.entity(attacker).insert(Hostile);
+
+        // Get target's faction for propagation
+        let target_faction = faction_query.get(target).ok().and_then(|(f, _)| f.copied());
+
+        if let Some(t_pos) = target_pos {
+            const AGGRO_RADIUS: i32 = 8;
+            for (nearby_ent, nearby_pos, nearby_fac) in &npc_query {
+                if nearby_ent == target || nearby_ent == attacker { continue; }
+                let nv = nearby_pos.as_grid_vec();
+                if nv.chebyshev_distance(t_pos) > AGGRO_RADIUS { continue; }
+
+                if let Some(&nf) = nearby_fac {
+                    if target_faction.is_some_and(|tf| tf == nf) {
+                        // Same faction as target: become hostile too
+                        commands.entity(nearby_ent).insert(Hostile);
+                    } else {
+                        // Different faction: start fleeing
+                        commands.entity(nearby_ent).insert(AiState::Fleeing);
+                    }
+                }
+            }
         }
     }
 }

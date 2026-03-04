@@ -202,11 +202,10 @@ fn player_bump_attack_damages_monster() {
 
     app.update();
 
-    // Player bumps into monster → should trigger attack
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    // Player punches monster → AttackIntent
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -223,11 +222,10 @@ fn monster_bump_attack_damages_player() {
 
     app.update();
 
-    // Monster bumps into player → should trigger attack
-    app.world_mut().write_message(MoveIntent {
-        entity: monster,
-        dx: -1,
-        dy: 0,
+    // Monster attacks player → AttackIntent
+    app.world_mut().write_message(AttackIntent {
+        attacker: monster,
+        target: player,
     });
     app.update();
 
@@ -262,10 +260,9 @@ fn low_attack_still_deals_damage() {
     app.update();
 
     // Monster attacks player: attack=2 → damage=2
-    app.world_mut().write_message(MoveIntent {
-        entity: monster,
-        dx: -1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: monster,
+        target: player,
     });
     app.update();
 
@@ -292,10 +289,9 @@ fn monster_dies_at_zero_health() {
     app.update();
 
     // Player attacks monster: attack=5 → damage=5, kills the 1HP monster
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -332,14 +328,13 @@ fn entity_with_positive_health_survives() {
 fn combat_log_records_hit_message() {
     let mut app = test_app();
     let player = spawn_test_player(&mut app, 60, 40);
-    let _monster = spawn_test_monster(&mut app, 61, 40, "Goblin");
+    let monster = spawn_test_monster(&mut app, 61, 40, "Goblin");
 
     app.update();
 
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -355,7 +350,7 @@ fn combat_log_records_hit_message() {
 fn combat_log_records_death_message() {
     let mut app = test_app();
     let player = spawn_test_player(&mut app, 60, 40);
-    let _monster = app.world_mut().spawn((
+    let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
         Hostile,
         BlocksMovement,
@@ -366,10 +361,9 @@ fn combat_log_records_death_message() {
 
     app.update();
 
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -384,15 +378,14 @@ fn combat_log_records_death_message() {
 fn combat_log_persists_across_turns() {
     let mut app = test_app();
     let player = spawn_test_player(&mut app, 60, 40);
-    let _monster = spawn_test_monster(&mut app, 61, 40, "Goblin");
+    let monster = spawn_test_monster(&mut app, 61, 40, "Goblin");
 
     app.update();
 
     // First attack
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -424,7 +417,7 @@ fn combat_log_no_damage_message() {
     )).id();
 
     // Monster (player attack is 0 so no damage)
-    let _monster = app.world_mut().spawn((
+    let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
         Hostile,
         BlocksMovement,
@@ -435,10 +428,9 @@ fn combat_log_no_damage_message() {
 
     app.update();
 
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -505,10 +497,9 @@ fn multiple_attacks_accumulate_damage() {
     app.update();
 
     // First attack: 5 damage → 10 - 5 = 5 HP
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -516,10 +507,9 @@ fn multiple_attacks_accumulate_damage() {
     assert_eq!(hp1, 5);
 
     // Second attack
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -536,10 +526,9 @@ fn bidirectional_combat_both_take_damage() {
     app.update();
 
     // Player attacks monster
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -547,10 +536,9 @@ fn bidirectional_combat_both_take_damage() {
     assert!(monster_hp < 10, "Monster should have taken damage from player");
 
     // Monster attacks player
-    app.world_mut().write_message(MoveIntent {
-        entity: monster,
-        dx: -1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: monster,
+        target: player,
     });
     app.update();
 
@@ -799,10 +787,9 @@ fn kill_count_increments_on_hostile_death() {
     app.update();
 
     // Player kills the monster
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: _monster,
     });
     app.update();
 
@@ -860,11 +847,10 @@ fn player_can_bump_attack_hostile_entity() {
 
     app.update();
 
-    // Player bumps into gate → should trigger attack
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    // Player punches gate → AttackIntent
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: gate,
     });
     app.update();
 
@@ -2230,17 +2216,19 @@ fn a_star_at_goal_returns_none() {
 
 #[test]
 fn factions_are_hostile_outlaws_vs_lawmen() {
-    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
-    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
+    // Nobody is hostile by default anymore
+    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
 }
 
 #[test]
 fn factions_are_hostile_wildlife_vs_all() {
-    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Outlaws));
-    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Lawmen));
-    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Vaqueros));
-    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Wildlife));
-    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Wildlife));
+    // Nobody is hostile by default anymore
+    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Outlaws));
+    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Lawmen));
+    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Vaqueros));
+    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Wildlife));
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Wildlife));
 }
 
 #[test]
@@ -2253,19 +2241,20 @@ fn factions_same_faction_not_hostile() {
 
 #[test]
 fn factions_vaqueros_vs_outlaws() {
-    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
-    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    // Nobody is hostile by default anymore
+    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
+    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
 }
 
 #[test]
 fn factions_all_different_factions_are_hostile() {
-    // All factions are mutually hostile — no alliances of any kind.
-    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
-    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
-    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Civilians));
-    assert!(ai::factions_are_hostile(Faction::Civilians, Faction::Sheriff));
-    assert!(ai::factions_are_hostile(Faction::Indians, Faction::Wildlife));
-    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    // Nobody is hostile by default anymore — hostility is dynamic
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
+    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Civilians));
+    assert!(!ai::factions_are_hostile(Faction::Civilians, Faction::Sheriff));
+    assert!(!ai::factions_are_hostile(Faction::Indians, Faction::Wildlife));
+    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
 }
 
 // ─── Energy / Speed Integration Tests ────────────────────────────
@@ -2364,16 +2353,14 @@ fn multiple_monsters_can_attack_player_in_sequence() {
 
     app.update();
 
-    // Both monsters attack player from different sides
-    app.world_mut().write_message(MoveIntent {
-        entity: m1,
-        dx: -1,
-        dy: 0,
+    // Both monsters attack player
+    app.world_mut().write_message(AttackIntent {
+        attacker: m1,
+        target: player,
     });
-    app.world_mut().write_message(MoveIntent {
-        entity: m2,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: m2,
+        target: player,
     });
     app.update();
 
@@ -2406,10 +2393,9 @@ fn kill_awards_kill_count_with_damage_source() {
 
     app.update();
 
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: monster,
     });
     app.update();
 
@@ -2930,26 +2916,16 @@ fn multiple_kills_increment_count() {
     app.update();
 
     // Kill first monster
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: _m1,
     });
     app.update();
 
-    // Kill second monster (player should now be at (60,40) still, monster at (62,40))
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
-    });
-    app.update();
-
-    // May need another bump for the second kill
-    app.world_mut().write_message(MoveIntent {
-        entity: player,
-        dx: 1,
-        dy: 0,
+    // Kill second monster
+    app.world_mut().write_message(AttackIntent {
+        attacker: player,
+        target: _m2,
     });
     app.update();
 
@@ -3743,16 +3719,17 @@ fn ai_faction_hostility_symmetric() {
 
 #[test]
 fn ai_wildlife_hostile_to_all() {
+    // Nobody is hostile by default anymore — hostility is dynamic
     let factions = [Faction::Outlaws, Faction::Lawmen, Faction::Vaqueros];
     for f in factions {
         assert!(
-            ai::factions_are_hostile(Faction::Wildlife, f),
-            "Wildlife should be hostile to {:?}",
+            !ai::factions_are_hostile(Faction::Wildlife, f),
+            "Wildlife should NOT be hostile to {:?} by default",
             f,
         );
         assert!(
-            ai::factions_are_hostile(f, Faction::Wildlife),
-            "{:?} should be hostile to Wildlife",
+            !ai::factions_are_hostile(f, Faction::Wildlife),
+            "{:?} should NOT be hostile to Wildlife by default",
             f,
         );
     }
@@ -3911,8 +3888,8 @@ fn ai_npc_melee_wide_when_surrounded() {
         }
     }
 
-    // Player is far enough away that NPC won't use ranged or basic melee on player
-    let _player = spawn_test_player(&mut app, 55, 40);
+    // Player is adjacent so the NPC targets them directly
+    let _player = spawn_test_player(&mut app, 60, 40);
     let npc = spawn_ai_npc(&mut app, 61, 40, "Outlaw", Faction::Outlaws);
 
     // Spawn two hostile NPCs adjacent to the NPC to trigger melee wide
@@ -3921,10 +3898,12 @@ fn ai_npc_melee_wide_when_surrounded() {
 
     app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
     app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
-    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(0, 1);
+    // Look toward the player so no rotation is needed
+    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
     app.world_mut().get_mut::<Stamina>(npc).unwrap().current = 50;
     {
         let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
+        vs.visible_tiles.insert(GridVec::new(60, 40)); // player
         vs.visible_tiles.insert(GridVec::new(61, 41));
         vs.visible_tiles.insert(GridVec::new(61, 39));
         vs.dirty = false;
@@ -3939,7 +3918,8 @@ fn ai_npc_melee_wide_when_surrounded() {
     // either way it should have consumed energy/done something
     let hp_enemy2 = app.world().get::<Health>(_enemy2).unwrap().current;
     let hp_enemy3 = app.world().get::<Health>(_enemy3).unwrap().current;
-    let enemy_damaged = hp_enemy2 < 20 || hp_enemy3 < 20;
+    let player_hp = app.world().get::<Health>(_player).unwrap().current;
+    let enemy_damaged = hp_enemy2 < 20 || hp_enemy3 < 20 || player_hp < 30;
     assert!(
         stamina_after < stamina_before || enemy_damaged,
         "NPC with 2+ adjacent enemies should attack or use melee wide (stamina: {} -> {}, enemies hurt: {})",

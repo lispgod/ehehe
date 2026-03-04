@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Faction,
-    GroupFollower, GroupLeader,
+    GroupLeader,
     Health, Inventory, Item, ItemKind, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
@@ -345,182 +345,162 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
     ));
 }
 
-/// Helper: spawns monsters in distinct faction groups across the map.
-/// Each human faction is assigned to a specific quadrant of the map.
-/// Human NPC spawn rate is 10x, animal spawn rate is 1/10x.
+/// Helper: spawns NPCs in faction groups near the first bridge.
+/// Indians on the left bank, Mexicans/Vaqueros on the right bank,
+/// plus Civilians and Sheriffs near their faction anchor buildings.
 fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) {
     let group_seed = seed.wrapping_add(54321);
     let min_spawn_dist_sq = 10 * 10; // keep clear zone around player spawn
-    let group_radius = 5i32; // NPCs spawn within this radius of group center
 
-    let map_cx = map.0.width / 2;
-    let map_cy = map.0.height / 2;
+    // Find bridge center for faction placement
+    let bridge_center = map.0.find_bridge_center()
+        .unwrap_or(GridVec::new(map.0.width / 2, map.0.height / 2));
+    let river_cx = map.0.river_center_x(bridge_center.y) as i32;
+    let bridge_y = bridge_center.y;
 
-    /// Returns the quadrant index (0-3) for a position:
-    /// 0 = top-left (NW), 1 = top-right (NE), 2 = bottom-left (SW), 3 = bottom-right (SE)
-    fn quadrant_of(pos: GridVec, cx: i32, cy: i32) -> usize {
-        let right = pos.x >= cx;
-        let bottom = pos.y >= cy;
-        match (right, bottom) {
-            (false, false) => 0, // NW
-            (true, false)  => 1, // NE
-            (false, true)  => 2, // SW
-            (true, true)   => 3, // SE
+    // ── Indians on left bank (x < river_center), facing right ──────
+    let indian_templates: &[usize] = &[7, 8]; // Indian Brave, Indian Scout
+    let mut indian_count = 0;
+    let target_indians = 8 + (value_noise(bridge_center.x, bridge_center.y, group_seed.wrapping_add(1111)) * 4.0) as i32;
+    for dy in -15i32..=15 {
+        for dx in -15i32..=-1 {
+            if indian_count >= target_indians { break; }
+            let pos = GridVec::new(river_cx + dx, bridge_y + dy);
+            if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
+            if !map.0.is_spawnable(&pos) { continue; }
+            // Only spawn on Beach or Sand/Dirt tiles (not water)
+            let ok_floor = map.0.get_voxel_at(&pos).is_some_and(|v| {
+                matches!(v.floor, Some(crate::typeenums::Floor::Beach)
+                    | Some(crate::typeenums::Floor::Sand)
+                    | Some(crate::typeenums::Floor::Dirt)
+                    | Some(crate::typeenums::Floor::Gravel)
+                    | Some(crate::typeenums::Floor::Grass)
+                    | Some(crate::typeenums::Floor::Sidewalk)
+                    | Some(crate::typeenums::Floor::Bridge))
+            });
+            if !ok_floor { continue; }
+            let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
+            if tile_noise > 0.40 { continue; }
+            let template_idx = indian_templates[(indian_count as usize) % indian_templates.len()];
+            let template = &MONSTER_TEMPLATES[template_idx];
+            let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
+            // Indians look right (toward Mexicans)
+            commands.entity(ent).insert(crate::components::AiLookDir(GridVec::new(1, 0)));
+            if indian_count == 0 {
+                commands.entity(ent).insert(GroupLeader);
+            }
+            indian_count += 1;
         }
+        if indian_count >= target_indians { break; }
     }
 
-    /// Returns the faction templates for a given quadrant.
-    /// Each faction starts in a different quadrant:
-    ///   NW = Outlaws/Gunslingers, NE = Indians,
-    ///   SW = Vaqueros, SE = Sheriff/Lawmen
-    fn quadrant_faction_templates(quadrant: usize) -> &'static [usize] {
-        match quadrant {
-            0 => &[2, 5],   // NW: Outlaws + Gunslingers
-            1 => &[7, 8],   // NE: Indians (Brave + Scout)
-            2 => &[3],      // SW: Vaqueros
-            3 => &[4, 9, 10], // SE: Lawmen + Sheriff + Deputies
-            _ => &[6],      // fallback: Civilians
+    // ── Mexicans/Vaqueros on right bank (x > river_center), facing left ──
+    let vaquero_templates: &[usize] = &[3]; // Vaquero
+    let mut vaquero_count = 0;
+    let target_vaqueros = 8 + (value_noise(bridge_center.x + 1, bridge_center.y, group_seed.wrapping_add(2222)) * 4.0) as i32;
+    for dy in -15i32..=15 {
+        for dx in 1i32..=15 {
+            if vaquero_count >= target_vaqueros { break; }
+            let pos = GridVec::new(river_cx + dx, bridge_y + dy);
+            if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
+            if !map.0.is_spawnable(&pos) { continue; }
+            let ok_floor = map.0.get_voxel_at(&pos).is_some_and(|v| {
+                matches!(v.floor, Some(crate::typeenums::Floor::Beach)
+                    | Some(crate::typeenums::Floor::Sand)
+                    | Some(crate::typeenums::Floor::Dirt)
+                    | Some(crate::typeenums::Floor::Gravel)
+                    | Some(crate::typeenums::Floor::Grass)
+                    | Some(crate::typeenums::Floor::Sidewalk)
+                    | Some(crate::typeenums::Floor::Bridge))
+            });
+            if !ok_floor { continue; }
+            let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(33333));
+            if tile_noise > 0.40 { continue; }
+            let template_idx = vaquero_templates[(vaquero_count as usize) % vaquero_templates.len()];
+            let template = &MONSTER_TEMPLATES[template_idx];
+            let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
+            // Vaqueros look left (toward Indians)
+            commands.entity(ent).insert(crate::components::AiLookDir(GridVec::new(-1, 0)));
+            if vaquero_count == 0 {
+                commands.entity(ent).insert(GroupLeader);
+            }
+            vaquero_count += 1;
         }
+        if vaquero_count >= target_vaqueros { break; }
     }
 
-    // ── Faction anchor spawns ──────────────────────────────────────
+    // ── Civilians near town buildings (from faction_anchors) ────────
     let anchor_radius = 8i32;
     for (anchor_pos, faction, _name) in &map.0.faction_anchors {
         let templates: &[usize] = match faction {
-            crate::components::Faction::Outlaws => &[2, 5],
-            crate::components::Faction::Vaqueros => &[3],
-            crate::components::Faction::Sheriff => &[9, 10],
-            crate::components::Faction::Lawmen => &[4],
             crate::components::Faction::Civilians => &[6],
-            crate::components::Faction::Indians => &[7, 8],
-            crate::components::Faction::Wildlife => &[0, 1],
+            _ => continue,
         };
-
-        // 10x human anchors, 1/10 animal anchors
-        let is_wildlife = matches!(faction, crate::components::Faction::Wildlife);
-        let base_size = 5 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(77777)) * 4.0) as i32;
-        let anchor_group_size = if is_wildlife { (base_size / 10).max(1) } else { base_size * 10 };
+        let base_size = 3 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(44444)) * 4.0) as i32;
         let mut spawned = 0;
-        let mut leader_entity: Option<Entity> = None;
         for dy in -anchor_radius..=anchor_radius {
             for dx in -anchor_radius..=anchor_radius {
-                if spawned >= anchor_group_size { break; }
+                if spawned >= base_size { break; }
                 let pos = GridVec::new(anchor_pos.x + dx, anchor_pos.y + dy);
                 if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
                 if !map.0.is_spawnable(&pos) { continue; }
-                let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(88888));
+                let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(55555));
                 if tile_noise > 0.40 { continue; }
-
                 let template_idx = templates[(spawned as usize) % templates.len()];
                 let template = &MONSTER_TEMPLATES[template_idx];
-                let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
-
-                if spawned == 0 && !matches!(template.faction, crate::components::Faction::Wildlife) {
-                    commands.entity(ent).insert(GroupLeader);
-                    leader_entity = Some(ent);
-                } else if let Some(leader) = leader_entity {
-                    commands.entity(ent).insert(GroupFollower { leader });
-                }
+                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
                 spawned += 1;
             }
-            if spawned >= anchor_group_size { break; }
+            if spawned >= base_size { break; }
         }
     }
 
-    // ── Grid-based spawns (quadrant-based faction assignment) ──────
-    // Each cell's position determines which quadrant it's in, and that
-    // determines which faction spawns there.
-    let cell_size = 18i32;
-
-    for cy in (cell_size..map.0.height - cell_size).step_by(cell_size as usize) {
-        for cx in (cell_size..map.0.width - cell_size).step_by(cell_size as usize) {
-            let center = GridVec::new(cx, cy);
-
-            if center.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
-                continue;
+    // ── Sheriffs near sheriff office buildings ──────────────────────
+    for (anchor_pos, faction, _name) in &map.0.faction_anchors {
+        let templates: &[usize] = match faction {
+            crate::components::Faction::Sheriff => &[9, 10],
+            _ => continue,
+        };
+        let base_size = 2 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(66666)) * 3.0) as i32;
+        let mut spawned = 0;
+        for dy in -anchor_radius..=anchor_radius {
+            for dx in -anchor_radius..=anchor_radius {
+                if spawned >= base_size { break; }
+                let pos = GridVec::new(anchor_pos.x + dx, anchor_pos.y + dy);
+                if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
+                if !map.0.is_spawnable(&pos) { continue; }
+                let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(77777));
+                if tile_noise > 0.40 { continue; }
+                let template_idx = templates[(spawned as usize) % templates.len()];
+                let template = &MONSTER_TEMPLATES[template_idx];
+                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
+                spawned += 1;
             }
+            if spawned >= base_size { break; }
+        }
+    }
 
-            let noise = value_noise(cx, cy, group_seed);
-
-            let quad = quadrant_of(center, map_cx, map_cy);
-
-            // Decide whether to spawn wildlife or faction NPCs
-            let is_wildlife_cell = noise > 0.90; // ~10% of cells get wildlife
-            let is_human_cell = noise < 0.55; // ~55% of cells get humans
-            let is_civilian_cell = noise >= 0.55 && noise < 0.70; // ~15% civilians
-
-            if is_wildlife_cell {
-                // Reduced wildlife: 1/10 spawn rate
-                let templates: &[usize] = &[0, 1];
-                let group_size = 1; // very few animals
-                let mut spawned = 0;
-                for dy in -group_radius..=group_radius {
-                    for dx in -group_radius..=group_radius {
-                        if spawned >= group_size { break; }
-                        let pos = GridVec::new(cx + dx, cy + dy);
-                        if !map.0.is_spawnable(&pos) { continue; }
-                        let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
-                        if tile_noise > 0.10 { continue; } // very sparse
-                        let template_idx = templates[(spawned as usize) % templates.len()];
-                        let template = &MONSTER_TEMPLATES[template_idx];
-                        spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
-                        spawned += 1;
-                    }
-                    if spawned >= group_size { break; }
-                }
-            } else if is_human_cell {
-                // Quadrant-based faction assignment with 10x spawn rate
-                let templates = quadrant_faction_templates(quad);
-                let group_size_noise = value_noise(cx, cy, group_seed.wrapping_add(11111));
-                let group_size = 8 + (group_size_noise * 12.0) as i32; // 8-20 per group (10x)
-
-                let mut spawned = 0;
-                let mut leader_entity: Option<Entity> = None;
-                for dy in -group_radius..=group_radius {
-                    for dx in -group_radius..=group_radius {
-                        if spawned >= group_size { break; }
-                        let pos = GridVec::new(cx + dx, cy + dy);
-                        if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
-                        if !map.0.is_spawnable(&pos) { continue; }
-                        let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
-                        if tile_noise > 0.50 { continue; }
-
-                        let template_idx = templates[(spawned as usize) % templates.len()];
-                        let template = &MONSTER_TEMPLATES[template_idx];
-                        let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
-
-                        if spawned == 0 && !matches!(template.faction, crate::components::Faction::Wildlife) {
-                            commands.entity(ent).insert(GroupLeader);
-                            leader_entity = Some(ent);
-                        } else if let Some(leader) = leader_entity {
-                            commands.entity(ent).insert(GroupFollower { leader });
-                        }
-                        spawned += 1;
-                    }
-                    if spawned >= group_size { break; }
-                }
-            } else if is_civilian_cell {
-                // Civilians scatter everywhere
-                let templates: &[usize] = &[6];
-                let group_size = 2 + (value_noise(cx, cy, group_seed.wrapping_add(44444)) * 4.0) as i32;
-                let mut spawned = 0;
-                for dy in -group_radius..=group_radius {
-                    for dx in -group_radius..=group_radius {
-                        if spawned >= group_size { break; }
-                        let pos = GridVec::new(cx + dx, cy + dy);
-                        if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
-                        if !map.0.is_spawnable(&pos) { continue; }
-                        let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(55555));
-                        if tile_noise > 0.40 { continue; }
-
-                        let template_idx = templates[(spawned as usize) % templates.len()];
-                        let template = &MONSTER_TEMPLATES[template_idx];
-                        spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
-                        spawned += 1;
-                    }
-                    if spawned >= group_size { break; }
-                }
-            }
+    // ── Flavor: scatter a few of each faction around the map ───────
+    let scatter_seed = group_seed.wrapping_add(99999);
+    let scatter_factions: &[(usize, u64)] = &[
+        (7, 1), (8, 2), // Indians
+        (3, 3),         // Vaqueros
+        (6, 4),         // Civilians
+        (9, 5),         // Sheriff
+    ];
+    for &(template_idx, offset) in scatter_factions {
+        let template = &MONSTER_TEMPLATES[template_idx];
+        let mut placed = 0;
+        let max_place = 1 + (value_noise(0, offset as i32, scatter_seed) * 2.0) as i32;
+        for attempt in 0..200 {
+            if placed >= max_place { break; }
+            let ax = (value_noise(attempt, offset as i32, scatter_seed.wrapping_add(1)) * map.0.width as f64) as i32;
+            let ay = (value_noise(offset as i32, attempt, scatter_seed.wrapping_add(2)) * map.0.height as f64) as i32;
+            let pos = GridVec::new(ax.clamp(1, map.0.width - 2), ay.clamp(1, map.0.height - 2));
+            if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
+            if !map.0.is_spawnable(&pos) { continue; }
+            spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
+            placed += 1;
         }
     }
 }

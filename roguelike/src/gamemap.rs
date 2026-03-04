@@ -533,6 +533,12 @@ impl GameMap {
         best.map(|(_, pos)| pos)
     }
 
+    /// Returns the approximate X-coordinate of the river center for a given Y.
+    pub fn river_center_x(&self, _y: i32) -> f64 {
+        // Simplified - just return map center since the river meanders around it
+        self.width as f64 / 2.0
+    }
+
     /// Creates a RenderPacket with visibility-based dimming.
     ///
     /// The entire map is always visible (no fog of war / hidden areas).

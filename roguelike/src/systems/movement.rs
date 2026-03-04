@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::components::{BlocksMovement, Dead, Health, Hostile, Player, Position, Stamina, Viewshed};
-use crate::events::{AttackIntent, MoveIntent};
+use crate::components::{BlocksMovement, Dead, Health, Player, Position, Stamina, Viewshed};
+use crate::events::MoveIntent;
 use crate::grid_vec::GridVec;
 use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, GameState, InputState, SpatialIndex, TurnCounter, TurnState};
 use crate::typeenums::{Floor, Props};
@@ -18,11 +18,9 @@ const WOUND_DAMAGE_INTERVAL: u32 = 5;
 /// Processes `MoveIntent` events: checks the target tile on the `GameMap` for
 /// walkability *and* the `SpatialIndex` for entities that block movement.
 ///
-/// **Bump-to-attack**: if the target tile contains an entity the mover would
-/// attack, emits an `AttackIntent` instead of moving. For the player, this
-/// means walking into a `Hostile` entity. For `Hostile` entities, this means
-/// walking into the `Player`. This is the standard roguelike mechanic where
-/// walking into an enemy initiates melee combat.
+/// When the target tile is blocked by another entity, movement is simply
+/// skipped (no bump-to-attack). Combat is now initiated explicitly via
+/// the punch command (G key).
 ///
 /// **Spatial index atomicity**: after each successful move, the spatial index
 /// is updated inline (entity removed from old tile, added to new tile). This
@@ -40,10 +38,8 @@ pub fn movement_system(
     mut blood_map: ResMut<BloodMap>,
     turn_counter: Res<TurnCounter>,
     blockers: Query<(), With<BlocksMovement>>,
-    hostiles: Query<(), With<Hostile>>,
     players: Query<(), With<Player>>,
     mut healths: Query<&mut Health>,
-    mut attack_intents: MessageWriter<AttackIntent>,
     mut movers: Query<(&mut Position, Option<&mut Viewshed>)>,
     dead_query: Query<(), With<Dead>>,
 ) {
@@ -53,32 +49,6 @@ pub fn movement_system(
         };
 
         let target = pos.as_grid_vec() + GridVec::new(intent.dx, intent.dy);
-
-        // ── Bump-to-attack ──────────────────────────────────────
-        // Check if a hostile entity occupies the target tile (player attacks monster).
-        let hostile_at_target = spatial.entities_at(&target).iter().find(|&&e| {
-            e != intent.entity && hostiles.contains(e)
-        });
-        if let Some(&target_entity) = hostile_at_target {
-            attack_intents.write(AttackIntent {
-                attacker: intent.entity,
-                target: target_entity,
-            });
-            continue;
-        }
-
-        // Check if the player occupies the target tile (monster attacks player).
-        let player_at_target = spatial.entities_at(&target).iter().find(|&&e| {
-            e != intent.entity && players.contains(e)
-        });
-        if let Some(&target_entity) = player_at_target
-            && hostiles.contains(intent.entity) {
-                attack_intents.write(AttackIntent {
-                    attacker: intent.entity,
-                    target: target_entity,
-                });
-                continue;
-            }
 
         // 1. Check map tile walkability (no blocking props).
         let tile_passable = game_map.0.is_passable(&target);

@@ -2,14 +2,16 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
-use crate::events::{MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::components::{Health, Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
+use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
 pub struct IntentWriters<'w> {
     move_intents: MessageWriter<'w, MoveIntent>,
+    attack_intents: MessageWriter<'w, AttackIntent>,
     spell_intents: MessageWriter<'w, SpellCastIntent>,
     molotov_intents: MessageWriter<'w, MolotovCastIntent>,
     use_item_intents: MessageWriter<'w, UseItemIntent>,
@@ -67,7 +69,8 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 6 ticks." },
     CommandBinding { key: "F", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
     CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
-    CommandBinding { key: "G", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
+    CommandBinding { key: "G", name: "Punch (2 ticks)", docs: "Punch in cursor direction. Costs 2 ticks." },
+    CommandBinding { key: "E", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
     CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
     CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
     CommandBinding { key: "7", name: "Dual wield (15 sta)", docs: "Fire two random revolvers at once." },
@@ -89,7 +92,7 @@ pub fn input_system(
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>), With<Player>>,
     mut player_viewshed: Query<&mut Viewshed, With<Player>>,
     item_kind_query: Query<&ItemKind>,
-    hostiles_query: Query<&Position, With<Hostile>>,
+    (hostiles_query, health_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,
@@ -98,7 +101,7 @@ pub fn input_system(
     mut input_state: ResMut<InputState>,
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
-    (mut extra_world_ticks, mut spectating, dynamic_rng, seed): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>),
+    (mut extra_world_ticks, mut spectating, dynamic_rng, seed, spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
     mut god_mode: ResMut<crate::resources::GodMode>,
 ) {
     // Handle Dead and Victory states: R to restart, T to spectate.
@@ -264,8 +267,32 @@ pub fn input_system(
                 });
                 advance_turn(&mut next_turn_state);
             }
-            // ── Pickup item on ground ───────────────────────────
+            // ── Punch in cursor direction (G key) — costs 2 ticks ──
             KeyCode::Char('g') if awaiting_input => {
+                let delta = cursor.pos - player_pos.as_grid_vec();
+                let step = if delta == crate::grid_vec::GridVec::ZERO {
+                    GridVec::new(0, -1) // default: punch south
+                } else {
+                    delta.king_step()
+                };
+                let punch_target = player_pos.as_grid_vec() + step;
+                // Find any entity with Health on that tile
+                let target_entity = spatial.entities_at(&punch_target).iter().find(|&&e| {
+                    e != player_entity && health_query.contains(e)
+                }).copied();
+                if let Some(target) = target_entity {
+                    extra_world_ticks.0 = 1;
+                    intents.attack_intents.write(AttackIntent {
+                        attacker: player_entity,
+                        target,
+                    });
+                    advance_turn(&mut next_turn_state);
+                } else {
+                    combat_log.push("Nothing to punch there.".into());
+                }
+            }
+            // ── Pickup item on ground (E key) ───────────────────
+            KeyCode::Char('e') if awaiting_input => {
                 intents.pickup_intents.write(PickupItemIntent {
                     picker: player_entity,
                 });

@@ -397,9 +397,9 @@ fn has_friendly_in_path(
 }
 
 /// Returns `true` if two factions are hostile to each other.
-/// All factions are mutually hostile — no alliances of any kind.
-pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
-    a != b
+/// Nobody is hostile by default — hostility is added dynamically when attacked.
+pub fn factions_are_hostile(_a: Faction, _b: Faction) -> bool {
+    false
 }
 
 /// Dodge probability: chance per turn that an NPC sidesteps nearby explosions.
@@ -569,7 +569,7 @@ fn kite_direction(
 pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, (Option<&Faction>, Option<&Hostile>), Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position, &Health), With<Player>>,
@@ -599,7 +599,7 @@ pub fn ai_system(
     // When the player is dead, clear all NPC memory so they stop
     // pathfinding toward the player's last known position.
     if !player_alive {
-        for (_, _, mut ai_state, _, _, _, _, _, _, _, _, _, mut mem_opt, _) in &mut ai_query {
+        for (_, _, mut ai_state, _, _, (_, _), _, _, _, _, _, _, mut mem_opt, _) in &mut ai_query {
             if let Some(ref mut mem) = mem_opt {
                 mem.last_known_pos = None;
             }
@@ -621,7 +621,7 @@ pub fn ai_system(
     // faction response (e.g., lawmen converging on a shooter).
     const ALLY_SHARE_RANGE: i32 = 20;
     let mut faction_alerts: HashMap<Faction, Vec<GridVec>> = HashMap::new();
-    for (_, _pos_ref, ai_state, _, _, faction_opt, _, _, _, _, _, _, mem_opt, _) in &ai_query {
+    for (_, _pos_ref, ai_state, _, _, (faction_opt, _), _, _, _, _, _, _, mem_opt, _) in &ai_query {
         if !matches!(*ai_state, AiState::Chasing) { continue; }
         let Some(&f) = faction_opt else { continue; };
         if let Some(mem) = mem_opt
@@ -633,13 +633,14 @@ pub fn ai_system(
             }
     }
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, (faction, is_hostile), mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
 
         let my_pos = pos.as_grid_vec();
         let my_faction = faction.copied();
+        let npc_is_hostile = is_hostile.is_some();
 
         // Find the nearest hostile faction entity visible to this NPC.
         // This includes the player if they are hostile (which they always are to Hostile entities).
@@ -665,14 +666,13 @@ pub fn ai_system(
             None
         };
 
-        let player_visible = player_vec.is_some_and(|pv|
+        let player_visible = npc_is_hostile && player_vec.is_some_and(|pv|
             viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
         );
 
         // Target the closest hostile entity — not always the player.
-        // If the player is visible, compare distance to player vs nearest faction target.
-        // Faction targets are preferred only when strictly closer than the player.
-        let chase_target: Option<(Entity, GridVec)> = {
+        // Only chase if this NPC has the Hostile marker (aggroed).
+        let chase_target: Option<(Entity, GridVec)> = if npc_is_hostile {
             let player_option = if player_visible {
                 player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
             } else {
@@ -688,6 +688,8 @@ pub fn ai_system(
                 (None, Some(ft)) => Some(ft),
                 (None, None) => None,
             }
+        } else {
+            None
         };
 
         // Update memory when target is visible

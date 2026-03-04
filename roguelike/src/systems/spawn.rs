@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::components::{
-    AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, Caliber, CombatStats, Energy, Faction, Health, Hostile,
+    AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, Caliber, CombatStats, Energy, Faction, Health,
     Inventory, Item, ItemKind, LootTable, Name, PatrolOrigin, Position, Renderable, Speed, Stamina, Viewshed,
 };
 use crate::grid_vec::GridVec;
@@ -259,7 +259,47 @@ pub fn spawn_monster(
     let npc_name: String = if matches!(template.faction, Faction::Wildlife) {
         template.name.into()
     } else {
-        generate_npc_name(x, y, &template.faction)
+        let base_name = generate_npc_name(x, y, &template.faction);
+        // Deterministic profession prefix based on position hash
+        let prefix_hash = (x.wrapping_mul(13) ^ y.wrapping_mul(9973)).unsigned_abs() as usize;
+        let prefix_roll = prefix_hash % 100;
+        let prefix: Option<&str> = match template.faction {
+            Faction::Civilians => {
+                if prefix_roll < 30 {
+                    let prefixes = ["Dr.", "Barman", "Sailor", "Cowboy", "Farmer", "Miner", "Preacher", "Rancher", "Baker", "Tailor"];
+                    Some(prefixes[prefix_hash / 100 % prefixes.len()])
+                } else { None }
+            }
+            Faction::Indians => {
+                if prefix_roll < 15 {
+                    let prefixes = ["Chief", "Brave", "Shaman", "Elder"];
+                    Some(prefixes[prefix_hash / 100 % prefixes.len()])
+                } else { None }
+            }
+            Faction::Vaqueros => {
+                if prefix_roll < 15 {
+                    let prefixes = ["Capitan", "Bandido", "Vaquero", "Don"];
+                    Some(prefixes[prefix_hash / 100 % prefixes.len()])
+                } else { None }
+            }
+            Faction::Sheriff => {
+                if template.name.contains("Sheriff") {
+                    Some("Sheriff")
+                } else {
+                    Some("Deputy")
+                }
+            }
+            _ => {
+                if prefix_roll < 10 {
+                    let prefixes = ["Outlaw", "Gunslinger", "Drifter"];
+                    Some(prefixes[prefix_hash / 100 % prefixes.len()])
+                } else { None }
+            }
+        };
+        match prefix {
+            Some(p) => format!("{p} {base_name}"),
+            None => base_name,
+        }
     };
 
     // Compute personality based on faction and position hash.
@@ -290,7 +330,6 @@ pub fn spawn_monster(
             bg: RatColor::Black,
         },
         BlocksMovement,
-        Hostile,
         template.faction,
         Health {
             current: scaled_health,
@@ -302,7 +341,7 @@ pub fn spawn_monster(
         Speed(template.speed),
         Energy(0),
     )).insert((
-        AiState::Patrolling,
+        AiState::Idle,
         AiLookDir(GridVec::new(0, -1)), // default: looking south
         PatrolOrigin(GridVec::new(x, y)),
         AiMemory::default(),

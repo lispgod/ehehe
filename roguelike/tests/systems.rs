@@ -2463,19 +2463,17 @@ fn projectile_despawns_on_wall_collision() {
         gun_item: Some(gun),
     });
     app.update(); // Spawn projectile
-    // Advance projectile enough ticks to reach the border wall (60 tiles at 3/tick)
+    // Advance projectile enough ticks to reach the border wall (60 tiles at 12/tick)
     for _ in 0..25 {
         app.update();
     }
 
-    // Projectile should be pending despawn after hitting wall.
-    // (Actual despawn happens in the display system, which is not
-    // registered in this test app — we check pending_despawn instead.)
-    let pending = app.world_mut().query::<&Projectile>()
+    // Projectile should be fully despawned after hitting a wall.
+    let remaining = app.world_mut().query::<&Projectile>()
         .iter(app.world())
-        .all(|p| p.pending_despawn);
-    assert!(pending,
-        "Projectile should be pending despawn after hitting a wall");
+        .count();
+    assert_eq!(remaining, 0,
+        "Projectile should be despawned after hitting a wall");
 }
 
 #[test]

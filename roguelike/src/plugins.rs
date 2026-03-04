@@ -166,13 +166,6 @@ impl Plugin for RoguelikePlugin {
                     .in_set(RoguelikeSet::Action)
                     .run_if(in_state(GameState::Playing)),
             )
-            // ── Projectile display (runs every frame for smooth visual travel) ──
-            .add_systems(
-                Update,
-                projectile::projectile_display_system
-                    .after(projectile::projectile_system)
-                    .in_set(RoguelikeSet::Action),
-            )
             // ── Consequence (gated on Playing state) ──
             .add_systems(
                 Update,

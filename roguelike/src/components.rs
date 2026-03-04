@@ -424,14 +424,13 @@ pub enum ProjectileVisual {
 /// Each tick the projectile advances `tiles_per_tick` steps along its precomputed
 /// Bresenham path. When it reaches a hostile entity, it applies damage and despawns.
 ///
-/// The visual position (`display_index`) trails behind the logical position
-/// (`path_index`), advancing one tile every 100ms so the player can see each
-/// tile the projectile crosses.
+/// Each tick the projectile advances one tile every 10ms along its path,
+/// applying damage and collision at each step.
 #[derive(Component, Debug)]
 pub struct Projectile {
     /// Precomputed path tiles (Bresenham line from origin to endpoint).
     pub path: Vec<GridVec>,
-    /// Current logical index along the path (game-logic: damage, collision).
+    /// Current index along the path (game-logic and display combined).
     pub path_index: usize,
     /// Number of tiles the projectile advances per tick.
     pub tiles_per_tick: usize,
@@ -447,14 +446,8 @@ pub struct Projectile {
     pub visual: ProjectileVisual,
     /// Whether this is a firearm bullet (uses hit-chance / headshot rolls).
     pub is_bullet: bool,
-    /// Current visual display index — trails behind `path_index` and advances
-    /// one tile every 100ms for perceptible projectile travel.
-    pub display_index: usize,
-    /// Accumulated real time (seconds) since the last visual tile step.
+    /// Accumulated real time (seconds) since the last tile step.
     pub tile_timer: f32,
-    /// Whether the game logic has finished (hit something or end of path)
-    /// and the projectile is waiting for the visual display to catch up.
-    pub pending_despawn: bool,
 }
 
 /// A thrown explosive (dynamite or molotov) traveling through the air.

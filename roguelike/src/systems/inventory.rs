@@ -313,7 +313,7 @@ pub fn throw_system(
             landing = tile;
 
             if let Some((target_entity, t_name)) = target_by_pos.get(&tile) {
-                let dmg = crate::components::compute_damage(intent.damage);
+                let dmg = intent.damage.max(0);
                 if dmg > 0 {
                     damage_events.write(crate::events::DamageEvent {
                         target: *target_entity,

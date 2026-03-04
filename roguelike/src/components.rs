@@ -135,14 +135,6 @@ impl CombatStats {
     }
 }
 
-/// Pure function: computes damage from attack value.
-///
-/// `damage(atk) = max(0, atk)`
-#[inline]
-pub fn compute_damage(attack: CoordinateUnit) -> CoordinateUnit {
-    attack.max(0)
-}
-
 /// Display name for any entity. Used in combat messages, UI, and logs.
 #[derive(Component, Clone, Debug)]
 pub struct Name(pub String);
@@ -715,44 +707,43 @@ mod tests {
     fn damage_formula_positive() {
         let attacker = CombatStats { attack: 5 };
         assert_eq!(attacker.damage_against(), 5);
-        assert_eq!(compute_damage(5), 5);
     }
 
     #[test]
     fn damage_formula_equals_attack() {
         let attacker = CombatStats { attack: 3 };
         assert_eq!(attacker.damage_against(), 3);
-        assert_eq!(compute_damage(3), 3);
     }
 
     #[test]
     fn damage_formula_zero_attack() {
         let attacker = CombatStats { attack: 2 };
         assert_eq!(attacker.damage_against(), 2);
-        assert_eq!(compute_damage(2), 2);
     }
 
     #[test]
-    fn compute_damage_non_negative() {
-        // Property: ∀ atk: compute_damage(atk) ≥ 0
+    fn damage_against_non_negative() {
+        // Property: ∀ atk: damage_against(atk) ≥ 0
         for atk in 0..20 {
-            assert!(compute_damage(atk) >= 0);
+            assert!(CombatStats { attack: atk }.damage_against() >= 0);
         }
     }
 
     #[test]
-    fn compute_damage_monotone_in_attack() {
+    fn damage_against_monotone_in_attack() {
         // Property: atk₁ ≤ atk₂ ⟹ damage(atk₁) ≤ damage(atk₂)
         for atk in 0..19 {
-            assert!(compute_damage(atk) <= compute_damage(atk + 1));
+            let d1 = CombatStats { attack: atk }.damage_against();
+            let d2 = CombatStats { attack: atk + 1 }.damage_against();
+            assert!(d1 <= d2);
         }
     }
 
     #[test]
-    fn compute_damage_zero_only_for_zero_attack() {
+    fn damage_against_zero_only_for_zero_attack() {
         // damage = max(0, atk), so it's 0 only when atk <= 0
         for atk in 0..15 {
-            let d = compute_damage(atk);
+            let d = CombatStats { attack: atk }.damage_against();
             if atk <= 0 {
                 assert_eq!(d, 0);
             } else {

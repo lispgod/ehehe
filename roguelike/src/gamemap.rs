@@ -455,6 +455,19 @@ impl GameMap {
             })
     }
 
+    /// Returns `true` if the tile is suitable for spawning an entity:
+    /// passable, no props, and not fire or water.
+    pub fn is_spawnable(&self, point: &MyPoint) -> bool {
+        if !self.is_passable(point) { return false; }
+        match self.get_voxel_at(point) {
+            Some(v) => {
+                v.props.is_none()
+                    && !matches!(v.floor, Some(Floor::Fire) | Some(Floor::DeepWater) | Some(Floor::ShallowWater))
+            }
+            None => false,
+        }
+    }
+
     /// Finds a passable tile right outside the door of a house.
     /// Scans the map near the bottom-left for a building doorway.
     /// Returns `None` if no suitable location is found.

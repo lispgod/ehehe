@@ -387,13 +387,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 if spawned >= anchor_group_size { break; }
                 let pos = GridVec::new(anchor_pos.x + dx, anchor_pos.y + dy);
                 if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
-                if !map.0.is_passable(&pos) { continue; }
-                if let Some(voxel) = map.0.get_voxel_at(&pos) {
-                    if voxel.props.is_some() { continue; }
-                    if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
-                        continue;
-                    }
-                }
+                if !map.0.is_spawnable(&pos) { continue; }
                 let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(88888));
                 if tile_noise > 0.40 { continue; }
 
@@ -451,17 +445,8 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                     if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
                         continue;
                     }
-                    if !map.0.is_passable(&pos) {
+                    if !map.0.is_spawnable(&pos) {
                         continue;
-                    }
-                    // Skip tiles with props or water/fire
-                    if let Some(voxel) = map.0.get_voxel_at(&pos) {
-                        if voxel.props.is_some() {
-                            continue;
-                        }
-                        if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
-                            continue;
-                        }
                     }
 
                     let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
@@ -521,17 +506,8 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq {
                     continue;
                 }
-                if !map.0.is_passable(&pos) {
+                if !map.0.is_spawnable(&pos) {
                     continue;
-                }
-                // Skip tiles with props or water/fire
-                if let Some(voxel) = map.0.get_voxel_at(&pos) {
-                    if voxel.props.is_some() {
-                        continue;
-                    }
-                    if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire) | Some(crate::typeenums::Floor::DeepWater) | Some(crate::typeenums::Floor::ShallowWater)) {
-                        continue;
-                    }
                 }
                 let tile_noise = value_noise(pos.x, pos.y, near_seed.wrapping_add(33333));
                 if tile_noise > 0.25 {

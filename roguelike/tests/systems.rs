@@ -2722,17 +2722,17 @@ fn health_heal_from_zero() {
     assert_eq!(hp.current, 10);
 }
 
-// ─── Compute Damage Edge Cases ───────────────────────────────────
+// ─── CombatStats Damage Edge Cases ───────────────────────────────
 
 #[test]
-fn compute_damage_large_values() {
-    assert_eq!(compute_damage(1000), 1000);
-    assert_eq!(compute_damage(0), 0);
+fn damage_against_large_values() {
+    assert_eq!(CombatStats { attack: 1000 }.damage_against(), 1000);
+    assert_eq!(CombatStats { attack: 0 }.damage_against(), 0);
 }
 
 #[test]
-fn compute_damage_equal_zero() {
-    assert_eq!(compute_damage(0), 0);
+fn damage_against_equal_zero() {
+    assert_eq!(CombatStats { attack: 0 }.damage_against(), 0);
 }
 
 // ─── Stamina Edge Cases ──────────────────────────────────────────

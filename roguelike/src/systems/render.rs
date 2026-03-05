@@ -410,8 +410,8 @@ pub fn draw_system(
                         (proj_render.symbol.clone(), fg, bg);
 
                     // Render tail (only for BulletTrail visuals)
-                    if proj.visual == ProjectileVisual::BulletTrail {
-                        if let Some(tail) = proj.tail_pos {
+                    if proj.visual == ProjectileVisual::BulletTrail
+                        && let Some(tail) = proj.tail_pos {
                             let tail_screen = tail - bottom_left;
                             if in_bounds(tail_screen, render_width, render_height) {
                                 let tail_visible = visible_tiles
@@ -433,7 +433,6 @@ pub fn draw_system(
                                 }
                             }
                         }
-                    }
                 }
             }
         }
@@ -572,8 +571,8 @@ pub fn draw_system(
 
         // NPCs and ground items at cursor
         for (npc_pos, npc_name, npc_fac, npc_inv, npc_hp, npc_hostile) in &npc_info_query {
-            if npc_pos.as_grid_vec() == cursor_world {
-                if cursor_npc_name.is_empty() {
+            if npc_pos.as_grid_vec() == cursor_world
+                && cursor_npc_name.is_empty() {
                     cursor_npc_name = display_name(npc_name).to_string();
                     cursor_npc_faction = npc_fac.map_or("".into(), |f| format!("{f:?}"));
                     cursor_npc_hostile = npc_hostile.is_some();
@@ -589,7 +588,6 @@ pub fn draw_system(
                         }
                     }
                 }
-            }
         }
 
         // Ground items at cursor (items with Position that are NOT in NPC inventories)

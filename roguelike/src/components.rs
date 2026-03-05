@@ -299,15 +299,6 @@ pub enum Faction {
     Sheriff,
 }
 
-impl Faction {
-    /// Returns `true` if this faction considers `other` an ally.
-    /// All factions are mutually hostile — no alliances of any kind.
-    /// Only members of the same faction are allied.
-    pub fn is_allied(&self, other: &Faction) -> bool {
-        self == other
-    }
-}
-
 /// Bullet caliber for period-accurate cap-and-ball revolvers and rifles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Caliber {

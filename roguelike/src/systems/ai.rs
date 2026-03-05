@@ -841,8 +841,8 @@ pub fn ai_system(
                 } else {
                     // No enemy visible — prioritize reloading.
                     let mut reloaded = false;
-                    if has_unloaded_gun(&inventory, &item_kinds) {
-                        if let Some(ref mut inv) = inventory {
+                    if has_unloaded_gun(&inventory, &item_kinds)
+                        && let Some(ref mut inv) = inventory {
                             let reloadable = inv.items.iter().copied().find(|&ent| {
                                 item_kinds.get(ent).ok().is_some_and(|k|
                                     matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
@@ -855,7 +855,6 @@ pub fn ai_system(
                                         reloaded = true;
                                     }
                         }
-                    }
                     if reloaded {
                         energy.spend_action();
                         continue;
@@ -914,8 +913,8 @@ pub fn ai_system(
 
                 // No enemy visible — prioritize reloading.
                 let mut reloaded_patrol = false;
-                if has_unloaded_gun(&inventory, &item_kinds) {
-                    if let Some(ref mut inv) = inventory {
+                if has_unloaded_gun(&inventory, &item_kinds)
+                    && let Some(ref mut inv) = inventory {
                         let reloadable = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
@@ -928,7 +927,6 @@ pub fn ai_system(
                                     reloaded_patrol = true;
                                 }
                     }
-                }
                 if reloaded_patrol {
                     energy.spend_action();
                     continue;

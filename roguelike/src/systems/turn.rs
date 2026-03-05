@@ -316,7 +316,7 @@ pub fn star_level_system(
         let spawn_pos = player_gv + dirs[dir_idx] * dist;
         if game_map.0.is_spawnable(&spawn_pos) {
             // Use the sheriff template (index 9)
-            let template = &crate::systems::spawn::MONSTER_TEMPLATES[9];
+            let template = &crate::systems::spawn::MONSTER_TEMPLATES[4];
             crate::systems::spawn::spawn_monster(&mut commands, template, spawn_pos.x, spawn_pos.y, 0, 0);
             // The spawned sheriff starts hostile since the player is wanted
             // (the combat system will handle this via the existing Hostile mechanism)

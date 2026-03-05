@@ -136,13 +136,10 @@ pub fn input_system(
     // without waiting for player input. Allow R to restart.
     if spectating.0 && awaiting_input {
         for message in messages.read() {
-            match message.code {
-                KeyCode::Char('r') => {
-                    restart_requested.0 = true;
-                    spectating.0 = false;
-                    return;
-                }
-                _ => {}
+            if let KeyCode::Char('r') = message.code {
+                restart_requested.0 = true;
+                spectating.0 = false;
+                return;
             }
         }
         advance_turn(&mut next_turn_state);

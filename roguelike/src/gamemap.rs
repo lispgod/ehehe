@@ -375,11 +375,10 @@ impl GameMap {
         for y in 0..height {
             for x in 0..width {
                 let pos = GridVec::new(x, y);
-                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                    if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                if let Some(voxel) = map.get_voxel_at_mut(&pos)
+                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                         voxel.props = None;
                     }
-                }
             }
         }
 

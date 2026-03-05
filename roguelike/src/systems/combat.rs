@@ -592,8 +592,8 @@ pub fn melee_wide_system(
                     continue;
                 }
                 let tile = origin + GridVec::new(dx, dy);
-                if let Some(voxel) = game_map.0.get_voxel_at(&tile) {
-                    if let Some(ref prop) = voxel.props {
+                if let Some(voxel) = game_map.0.get_voxel_at(&tile)
+                    && let Some(ref prop) = voxel.props {
                         let max_hp = prop.max_health();
                         if max_hp == i32::MAX {
                             continue; // indestructible
@@ -611,7 +611,6 @@ pub fn melee_wide_system(
                             combat_log.push(format!("{a_name} destroys a prop!"));
                         }
                     }
-                }
             }
         }
 

@@ -360,7 +360,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     let bridge_y = bridge_center.y;
 
     // ── Indians on left bank (x < river_center), facing right ──────
-    let indian_templates: &[usize] = &[7, 8]; // Indian Brave, Indian Scout
+    let indian_templates: &[usize] = &[2, 3]; // Indian Brave, Indian Scout
     let mut indian_count = 0;
     let target_indians = 8 + (value_noise(bridge_center.x, bridge_center.y, group_seed.wrapping_add(1111)) * 4.0) as i32;
     for dy in -15i32..=15 {
@@ -393,7 +393,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     }
 
     // ── Mexicans/Vaqueros on right bank (x > river_center), facing left ──
-    let vaquero_templates: &[usize] = &[3]; // Vaquero
+    let vaquero_templates: &[usize] = &[0]; // Vaquero
     let mut vaquero_count = 0;
     let target_vaqueros = 8 + (value_noise(bridge_center.x + 1, bridge_center.y, group_seed.wrapping_add(2222)) * 4.0) as i32;
     for dy in -15i32..=15 {
@@ -428,7 +428,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     let anchor_radius = 8i32;
     for (anchor_pos, faction, _name) in &map.0.faction_anchors {
         let templates: &[usize] = match faction {
-            crate::components::Faction::Civilians => &[6],
+            crate::components::Faction::Civilians => &[1],
             _ => continue,
         };
         let base_size = 3 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(44444)) * 4.0) as i32;
@@ -453,7 +453,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     // ── Sheriffs near sheriff office buildings ──────────────────────
     for (anchor_pos, faction, _name) in &map.0.faction_anchors {
         let templates: &[usize] = match faction {
-            crate::components::Faction::Sheriff => &[9, 10],
+            crate::components::Faction::Sheriff => &[4, 5],
             _ => continue,
         };
         let base_size = 2 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(66666)) * 3.0) as i32;
@@ -478,10 +478,10 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     // ── Flavor: scatter a few of each faction around the map ───────
     let scatter_seed = group_seed.wrapping_add(99999);
     let scatter_factions: &[(usize, u64)] = &[
-        (7, 1), (8, 2), // Indians
-        (3, 3),         // Vaqueros
-        (6, 4),         // Civilians
-        (9, 5),         // Sheriff
+        (2, 1), (3, 2), // Indians
+        (0, 3),         // Vaqueros
+        (1, 4),         // Civilians
+        (4, 5),         // Sheriff
     ];
     for &(template_idx, offset) in scatter_factions {
         let template = &MONSTER_TEMPLATES[template_idx];

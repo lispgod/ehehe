@@ -71,13 +71,12 @@ pub fn movement_system(
 
             // ── Wound damage: wounded entities lose HP every few steps ─
             if turn_counter.0.is_multiple_of(WOUND_DAMAGE_INTERVAL)
-                && !dead_query.contains(intent.entity) {
-                    if let Ok(mut hp) = healths.get_mut(intent.entity)
+                && !dead_query.contains(intent.entity)
+                    && let Ok(mut hp) = healths.get_mut(intent.entity)
                         && hp.current < hp.max
                         && hp.current > 0 {
                             hp.apply_damage(WOUND_DAMAGE_PER_TICK);
                         }
-                }
 
             let delta = GridVec::new(intent.dx, intent.dy);
             pos.x = target.x;

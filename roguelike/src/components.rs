@@ -309,6 +309,9 @@ pub enum Faction {
     Indians,
     /// Sheriff and deputies. No allies.
     Sheriff,
+    /// Bounty hunters — spawn based on player's wanted level.
+    /// Target the player specifically; more dangerous than regular law NPCs.
+    BountyHunter,
 }
 
 impl Faction {

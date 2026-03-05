@@ -75,6 +75,14 @@ const CIVILIAN_NAMES: &[&str] = &[
     "Smiley", "Pops", "Gopher", "Yank", "Pepper",
 ];
 
+/// Bounty hunter names — notorious trackers and hired guns.
+const BOUNTY_HUNTER_NAMES: &[&str] = &[
+    "Graves", "Slade", "Reno", "Blackwood", "Harker",
+    "Calloway", "Vance", "Cross", "Steele", "Kaine",
+    "Thorne", "Wolf", "Draven", "Bane", "Stone",
+    "Reaper", "Shade", "Cain", "Dusk", "Fury",
+];
+
 /// Generates a single-word faction-appropriate name from position hash.
 /// Each faction has its own distinct pool:
 ///   - Indians: Compound nature names (Eaglefoot, SittingBear)
@@ -90,6 +98,7 @@ fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
         Faction::Vaqueros => MEXICAN_NAMES,
         Faction::Sheriff => SHERIFF_NAMES,
         Faction::Civilians => CIVILIAN_NAMES,
+        Faction::BountyHunter => BOUNTY_HUNTER_NAMES,
         _ => COWBOY_NAMES,
     };
 
@@ -139,6 +148,8 @@ pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Tier 8: Sheriff and deputies — faction color: gold
     MonsterTemplate { name: "Sheriff", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Sheriff, has_gun: true },
     MonsterTemplate { name: "Deputy", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Sheriff, has_gun: true },
+    // Tier 9: Bounty Hunters — spawn dynamically based on player bounty; faction color: dark crimson
+    MonsterTemplate { name: "Bounty Hunter", symbol: "@", fg: RatColor::Rgb(180, 40, 40), health: 180, attack: 10, speed: 36, sight_range: 16, faction: Faction::BountyHunter, has_gun: true },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,

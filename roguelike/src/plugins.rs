@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Faction,
-    GroupLeader,
+    GroupFollower, GroupLeader, Hostile,
     Health, Inventory, Item, ItemKind, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
@@ -349,7 +349,7 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
         ItemKind::Matches { uses: 5, blunt_damage: 1 },
     )).id();
 
-    commands.spawn((
+    let player_entity = commands.spawn((
         Position {
             x: spawn_pos.x,
             y: spawn_pos.y,
@@ -363,7 +363,7 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
         },
         CameraFollow,
         BlocksMovement,
-        Faction::Civilians,
+        Faction::Outlaws,
         Health {
             current: 100,
             max: 100,
@@ -385,7 +385,23 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
             revealed_tiles: HashSet::new(),
             dirty: true,
         },
-    ));
+    )).id();
+
+    // ── Spawn outlaw gang companions ───────────────────────────────
+    // 3-4 gang members spawn adjacent to the player as GroupFollowers.
+    // They share the Outlaws faction and fight alongside the player.
+    let gang_offsets: &[(i32, i32)] = &[(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let gang_templates: &[usize] = &[2, 5, 2]; // Outlaw, Gunslinger, Outlaw
+    for (i, &(dx, dy)) in gang_offsets.iter().take(gang_templates.len()).enumerate() {
+        let gx = spawn_pos.x + dx;
+        let gy = spawn_pos.y + dy;
+        if !map.0.is_spawnable(&GridVec::new(gx, gy)) { continue; }
+        let template = &spawn::MONSTER_TEMPLATES[gang_templates[i]];
+        let gang_ent = spawn::spawn_monster(commands, template, gx, gy, 20, 2);
+        commands.entity(gang_ent).insert(GroupFollower { leader: player_entity });
+        commands.entity(gang_ent).insert(Hostile);
+    }
+    commands.entity(player_entity).insert(GroupLeader);
 }
 
 /// Helper: spawns NPCs in faction groups near the first bridge.

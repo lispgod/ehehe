@@ -642,55 +642,6 @@ impl CursorPosition {
     }
 }
 
-/// Queued bullet-travel animations for intra-tick rendering.
-///
-/// When bullets advance multiple tiles in a single game tick, their
-/// intermediate positions are stored here so the render system can show
-/// each tile of movement individually with a short delay between steps.
-/// This keeps game logic instant while providing smooth visual feedback.
-#[derive(Resource, Debug, Default)]
-pub struct BulletAnimations {
-    pub trails: Vec<BulletTrail>,
-}
-
-/// A single bullet-travel animation trail.
-#[derive(Debug, Clone)]
-pub struct BulletTrail {
-    /// Intermediate world positions the bullet passed through this tick.
-    pub positions: Vec<MyPoint>,
-    /// Current render index into `positions` (advances each animation frame).
-    pub render_index: usize,
-    /// Foreground color for rendering.
-    pub fg: crate::typedefs::RatColor,
-    /// Symbol for the bullet head.
-    pub symbol: String,
-    /// Whether this trail has a trailing tail dot.
-    pub has_tail: bool,
-}
-
-/// Number of render frames between each animation step.
-/// At 60 FPS, 3 frames ≈ 50 ms per tile of bullet travel.
-pub const BULLET_ANIM_FRAMES_PER_STEP: u32 = 3;
-
-impl BulletAnimations {
-    /// Advance all bullet trail animations by one step.
-    /// Returns `true` if any trails are still in progress.
-    pub fn advance(&mut self) -> bool {
-        // Remove trails that finished rendering on the previous advance.
-        self.trails.retain(|t| t.render_index < t.positions.len().saturating_sub(1));
-        // Advance remaining trails.
-        for trail in &mut self.trails {
-            trail.render_index += 1;
-        }
-        !self.trails.is_empty()
-    }
-
-    /// Returns `true` if any animations are still in progress.
-    pub fn is_animating(&self) -> bool {
-        self.trails.iter().any(|t| t.render_index < t.positions.len().saturating_sub(1))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -33,30 +33,6 @@ pub enum Floor {
     Alley,
 }
 
-/// Construction material for building walls.
-/// Affects breachability, flammability, and tactical value.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum WallMaterial {
-    /// Sun-dried clay brick — moderate breach cost, low flammability.
-    Adobe,
-    /// Wooden plank/log construction — cheap to breach, highly flammable.
-    Timber,
-    /// Cut stone or masonry — very expensive to breach, negligible flammability.
-    Stone,
-}
-
-/// Building height tier — determines verticality and rooftop advantage.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum HeightTier {
-    /// Ground level only — no rooftop access.
-    SingleStory,
-    /// Two floors — rooftop tiles overlook adjacent streets.
-    DoubleStory,
-    /// Tall structure (bell tower, watchtower, grain loft) —
-    /// extended sight lines covering entire street segments.
-    Tower,
-}
-
 /// Props (obstacles/structures) placed on tiles.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Props {

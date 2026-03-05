@@ -257,18 +257,6 @@ pub struct AiMemory {
     pub last_seen_turn: u32,
 }
 
-/// Marks an NPC as a group leader. When the leader dies, followers become
-/// more erratic and cowardly.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct GroupLeader;
-
-/// Marks an NPC as following a group leader entity.
-/// When the leader entity dies, the follower's courage drops significantly.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct GroupFollower {
-    pub leader: Entity,
-}
-
 /// Personality traits that modulate NPC AI behavior.
 /// Different NPCs exhibit different combat styles based on these parameters.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -525,11 +513,6 @@ impl ItemKind {
         }
     }
 }
-
-/// Marker component for a thrown item (knife/tomahawk) that has landed
-/// and can be recovered by walking over it.
-#[derive(Component, Debug)]
-pub struct Thrown;
 
 /// Attached to a projectile that carries a thrown item (knife/tomahawk).
 /// When the projectile lands or hits, the item entity is placed at the

@@ -4,7 +4,6 @@ use bevy::prelude::*;
 
 use crate::components::{
     BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Faction,
-    GroupLeader,
     Health, Inventory, Item, ItemKind, Stamina, Name, Player, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
@@ -192,7 +191,6 @@ impl Plugin for RoguelikePlugin {
                 (
                     ai::energy_accumulate_system,
                     ai::ai_system,
-                    ai::leader_death_system,
                     combat::ai_ranged_attack_system,
                     turn::fire_system,
                     turn::star_level_system,
@@ -389,9 +387,6 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
             // Indians look right (toward Mexicans)
             commands.entity(ent).insert(crate::components::AiLookDir(GridVec::new(1, 0)));
-            if indian_count == 0 {
-                commands.entity(ent).insert(GroupLeader);
-            }
             indian_count += 1;
         }
         if indian_count >= target_indians { break; }
@@ -424,9 +419,6 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
             // Vaqueros look left (toward Indians)
             commands.entity(ent).insert(crate::components::AiLookDir(GridVec::new(-1, 0)));
-            if vaquero_count == 0 {
-                commands.entity(ent).insert(GroupLeader);
-            }
             vaquero_count += 1;
         }
         if vaquero_count >= target_vaqueros { break; }

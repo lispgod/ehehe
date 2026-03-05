@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{Health, Hostile, Name, Player, Position, Projectile, ProjectileVisual, Renderable, Thrown, ThrownItemProjectile, display_name};
+use crate::components::{Health, Hostile, Name, Player, Position, Projectile, ProjectileVisual, Renderable, ThrownItemProjectile, display_name};
 use crate::events::DamageEvent;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
@@ -467,10 +467,9 @@ pub fn projectile_system(
             // landing position so the player can recover it.
             if let Some(thrown) = thrown_item {
                 let tile = proj.path[proj.path_index.min(proj.path.len() - 1)];
-                commands.entity(thrown.item_entity).insert((
+                commands.entity(thrown.item_entity).insert(
                     Position { x: tile.x, y: tile.y },
-                    Thrown,
-                ));
+                );
             }
             commands.entity(proj_entity).despawn();
         }

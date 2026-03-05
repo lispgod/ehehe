@@ -828,6 +828,22 @@ pub const SALOON_MENU: &[SaloonMenuItem] = &[
     },
 ];
 
+/// Tracks the morale of the player's outlaw gang.
+/// Morale decreases when gang members die. When morale hits zero,
+/// surviving gang members scatter (become Fleeing, lose GroupFollower).
+/// Starts at 100; each gang death costs 25 morale.
+#[derive(Resource, Debug)]
+pub struct GangMorale {
+    /// Current morale level (0-100).
+    pub level: i32,
+}
+
+impl Default for GangMorale {
+    fn default() -> Self {
+        Self { level: 100 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -115,6 +115,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<crate::resources::PropHealth>()
             .init_resource::<crate::resources::PlayerReputation>()
             .init_resource::<Gold>()
+            .init_resource::<crate::resources::GangMorale>()
             // ── States ──
             .init_state::<GameState>()
             .add_sub_state::<TurnState>()
@@ -218,6 +219,8 @@ impl Plugin for RoguelikePlugin {
                     ai::energy_accumulate_system,
                     ai::ai_system,
                     ai::leader_death_system,
+                    ai::gang_morale_system,
+                    bounty_hunter_spawn_system,
                     combat::ai_ranged_attack_system,
                     turn::fire_system,
                     turn::star_level_system,
@@ -650,4 +653,62 @@ fn restart_system(
 
     do_spawn_player(&mut commands, &game_map);
     do_spawn_monsters(&mut commands, &game_map, seed.0);
+}
+
+/// Spawns bounty hunters when the player's wanted level is high enough.
+/// At 2+ stars, bounty hunters begin appearing. Higher bounty = tougher hunters.
+/// They spawn at map edges and hunt the player specifically.
+fn bounty_hunter_spawn_system(
+    mut commands: Commands,
+    star_level: Res<crate::resources::StarLevel>,
+    turn_counter: Res<crate::resources::TurnCounter>,
+    map: Res<crate::resources::GameMapResource>,
+    seed: Res<crate::resources::MapSeed>,
+    player_query: Query<&Position, With<Player>>,
+    bounty_hunter_query: Query<(), (With<crate::components::Faction>, Without<Player>)>,
+) {
+    let _ = &bounty_hunter_query; // reserved for future spawn-cap checks
+    // Only spawn when wanted level is 2+
+    if star_level.level < 2 { return; }
+    // Spawn every 50 turns
+    if turn_counter.0 % 50 != 0 || turn_counter.0 == 0 { return; }
+
+    let Ok(player_pos) = player_query.single() else { return; };
+    let pv = player_pos.as_grid_vec();
+
+    // Number of hunters scales with wanted level: 1 at level 2, up to 3 at level 5
+    let num_hunters = ((star_level.level as i32) - 1).min(3);
+    let health_bonus = (star_level.level as i32) * 20; // tougher at higher bounty
+    let attack_bonus = (star_level.level as i32) * 2;
+
+    // Bounty Hunter template is at index 11 in MONSTER_TEMPLATES
+    let template = &crate::systems::spawn::MONSTER_TEMPLATES[11];
+
+    for i in 0..num_hunters {
+        // Spawn at map edge, trying to find a position that's spawnable
+        let edge_seed = seed.0.wrapping_add(turn_counter.0 as u64).wrapping_add(i as u64);
+        let side = (edge_seed % 4) as i32;
+        let offset = ((edge_seed / 4) % (map.0.width as u64).max(1)) as i32;
+
+        let (sx, sy) = match side {
+            0 => (offset.clamp(1, map.0.width - 2), 1),                      // top edge
+            1 => (offset.clamp(1, map.0.width - 2), map.0.height - 2),       // bottom edge
+            2 => (1, offset.clamp(1, map.0.height - 2)),                      // left edge
+            _ => (map.0.width - 2, offset.clamp(1, map.0.height - 2)),       // right edge
+        };
+
+        let spawn_pos = crate::grid_vec::GridVec::new(sx, sy);
+        if !map.0.is_spawnable(&spawn_pos) { continue; }
+
+        let ent = crate::systems::spawn::spawn_monster(&mut commands, template, sx, sy, health_bonus, attack_bonus);
+        commands.entity(ent).insert(crate::components::Hostile);
+        // Point bounty hunters toward the player
+        let toward_player = (pv - spawn_pos).king_step();
+        commands.entity(ent).insert(crate::components::AiLookDir(toward_player));
+        commands.entity(ent).insert(crate::components::AiMemory {
+            last_known_pos: Some(pv),
+            last_seen_turn: turn_counter.0,
+        });
+        commands.entity(ent).insert(crate::components::AiState::Chasing);
+    }
 }

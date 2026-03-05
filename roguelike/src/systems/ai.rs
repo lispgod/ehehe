@@ -1659,6 +1659,43 @@ pub fn leader_death_system(
     }
 }
 
+/// Tracks gang morale when outlaw gang members die.
+/// When morale drops to zero, surviving gang members scatter.
+pub fn gang_morale_system(
+    mut commands: Commands,
+    mut morale: ResMut<crate::resources::GangMorale>,
+    mut combat_log: ResMut<CombatLog>,
+    player_query: Query<Entity, With<Player>>,
+    dead_followers: Query<(Entity, &Health, &crate::components::GroupFollower), Without<Player>>,
+    mut alive_followers: Query<(Entity, &mut AiPersonality, &mut AiState), (With<crate::components::GroupFollower>, Without<Player>)>,
+) {
+    let Ok(player_entity) = player_query.single() else { return; };
+
+    // Check for dead gang members (followers of the player)
+    for (entity, health, follower) in &dead_followers {
+        if follower.leader != player_entity { continue; }
+        if !health.is_dead() { continue; }
+        morale.level = (morale.level - 25).max(0);
+        combat_log.push("A gang member has fallen! Morale drops.".into());
+        commands.entity(entity).remove::<crate::components::GroupFollower>();
+    }
+
+    // When morale hits zero, surviving followers scatter
+    if morale.level <= 0 {
+        let mut scattered = false;
+        for (entity, mut personality, mut ai_state) in &mut alive_followers {
+            personality.courage = 0.1;
+            personality.aggression *= 0.3;
+            *ai_state = AiState::Fleeing;
+            commands.entity(entity).remove::<crate::components::GroupFollower>();
+            scattered = true;
+        }
+        if scattered {
+            combat_log.push("Your gang's morale has broken! They scatter!".into());
+        }
+    }
+}
+
 // ─────────── Influence Map / A* / Dijkstra Tests ──────────────────
 
 #[cfg(test)]

@@ -174,7 +174,7 @@ fn spawn_molotov_smoke(game_map: &mut GameMapResource, origin: crate::grid_vec::
             }
             let pos = origin + crate::grid_vec::GridVec::new(dx, dy);
             if let Some(voxel) = game_map.0.get_voxel_at(&pos)
-                && !matches!(voxel.props, Some(Props::Wall))
+                && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
                     && !matches!(voxel.floor, Some(Floor::Fire)) {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
@@ -291,7 +291,7 @@ pub fn explosive_projectile_system(
             // Detonate at this position
             match explosive {
                 ThrownExplosive::Dynamite { damage, radius, .. } => {
-                    detonate_dynamite(&mut commands, &mut game_map, &mut combat_log, &seed, det_pos, *damage, *radius, proj.source);
+                    detonate_dynamite(&mut commands, &mut game_map, &mut combat_log, &seed, &turn_counter, det_pos, *damage, *radius, proj.source);
                 }
                 ThrownExplosive::Molotov { damage, radius, .. } => {
                     detonate_molotov(&mut commands, &mut game_map, &mut combat_log, &mut spell_particles, &turn_counter, det_pos, *damage, *radius, proj.source);
@@ -308,6 +308,7 @@ fn detonate_dynamite(
     game_map: &mut ResMut<GameMapResource>,
     combat_log: &mut ResMut<CombatLog>,
     seed: &Res<MapSeed>,
+    turn_counter: &Res<TurnCounter>,
     origin: GridVec,
     damage: i32,
     radius: i32,
@@ -320,6 +321,7 @@ fn detonate_dynamite(
     let mut destroyed_count = 0;
     let mut fire_count = 0;
     let mut water_count = 0;
+    let mut gunpowder_positions: Vec<GridVec> = Vec::new();
     for dx in -radius..=radius {
         for dy in -radius..=radius {
             let dist = dx.abs().max(dy.abs());
@@ -330,12 +332,16 @@ fn detonate_dynamite(
                         let is_flammable = prop.is_flammable();
                         let is_water_trough = matches!(prop, Props::WaterTrough);
                         let is_lootable = matches!(prop, Props::Crate | Props::Barrel);
-                        let is_indestructible = matches!(prop, Props::Wall | Props::HitchingPost);
+                        let is_indestructible = matches!(prop, Props::Wall | Props::StoneWall | Props::HitchingPost);
+                        let is_gunpowder = matches!(prop, Props::GunpowderBarrel);
                         if is_water_trough {
                             voxel.props = None;
                             voxel.floor = Some(Floor::Water);
                             water_count += 1;
                         } else if !is_indestructible {
+                            if is_gunpowder {
+                                gunpowder_positions.push(target_pos);
+                            }
                             if is_lootable {
                                 let loot_roll = crate::noise::value_noise(target_pos.x, target_pos.y, seed.0.wrapping_add(88888));
                                 spawn_container_loot(commands, target_pos.x, target_pos.y, loot_roll);
@@ -352,6 +358,12 @@ fn detonate_dynamite(
                     }
             }
         }
+    }
+    // Chain-react gunpowder barrels: each one explodes in a fire radius
+    for gp_pos in &gunpowder_positions {
+        combat_log.push("Gunpowder barrel explodes!".to_string());
+        let destroyed = game_map.detonate_gunpowder_barrel(*gp_pos, turn_counter.0);
+        fire_count += destroyed;
     }
     if destroyed_count > 0 {
         combat_log.push(format!("The explosion destroys {destroyed_count} obstacle(s)!"));
@@ -437,7 +449,7 @@ pub fn water_bucket_system(
             // Remove fire tracking
             game_map.0.fire_turns.remove(&pos);
             if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos)
-                && !matches!(voxel.props, Some(Props::Wall)) {
+                && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) {
                     voxel.floor = Some(Floor::ShallowWater);
                 }
         }

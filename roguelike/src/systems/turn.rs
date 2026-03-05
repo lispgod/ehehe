@@ -122,7 +122,7 @@ pub fn fire_system(
         if let Some(voxel) = game_map.0.get_voxel_at(&smoke_pos)
             && !matches!(voxel.floor, Some(Floor::SandCloud))
                 && !matches!(voxel.floor, Some(Floor::Fire))
-                && !matches!(voxel.props, Some(crate::typeenums::Props::Wall))
+                && !matches!(voxel.props, Some(crate::typeenums::Props::Wall) | Some(crate::typeenums::Props::StoneWall))
             {
                 let prev_floor = voxel.floor.clone();
                 game_map.0.sand_cloud_previous_floor.entry(smoke_pos).or_insert(prev_floor);
@@ -231,7 +231,7 @@ pub fn fire_system(
             let new_pos = *tile + dirs[dir_idx];
             if let Some(new_voxel) = game_map.0.get_voxel_at(&new_pos)
                 && !matches!(new_voxel.floor, Some(Floor::SandCloud))
-                    && !matches!(new_voxel.props, Some(crate::typeenums::Props::Wall))
+                    && !matches!(new_voxel.props, Some(crate::typeenums::Props::Wall) | Some(crate::typeenums::Props::StoneWall))
                     && !game_map.0.sand_cloud_turns.contains_key(&new_pos)
                 {
                     drift_ops.push((*tile, new_pos, *placed_turn));

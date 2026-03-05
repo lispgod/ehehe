@@ -6,7 +6,11 @@ use crate::components::{Caliber, CollectibleKind};
 use crate::gamemap::GameMap;
 use crate::grid_vec::GridVec;
 use crate::noise::NoiseSeed;
+use crate::typeenums::{Floor, Props};
 use crate::typedefs::{MyPoint, SPAWN_X, SPAWN_Y};
+
+/// Explosion radius for gunpowder barrels (Chebyshev distance).
+pub const GUNPOWDER_BARREL_EXPLOSION_RADIUS: i32 = 3;
 
 /// Bevy resource wrapping the game map for ECS access.
 #[derive(Resource)]
@@ -49,7 +53,7 @@ impl GameMapResource {
                 }
                 let pos = origin + GridVec::new(dx, dy);
                 if let Some(voxel) = self.0.get_voxel_at(&pos)
-                    && !matches!(voxel.props, Some(Props::Wall))
+                    && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
                 {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }
@@ -62,6 +66,35 @@ impl GameMapResource {
             }
             self.0.sand_cloud_turns.insert(pos, turn);
         }
+    }
+
+    /// Detonates a gunpowder barrel at the given position: sets fire in a radius,
+    /// destroys flammable props, and tracks fire turns for burnout.
+    /// Returns the number of props destroyed by the explosion.
+    pub fn detonate_gunpowder_barrel(&mut self, origin: GridVec, turn: u32) -> i32 {
+        let radius = GUNPOWDER_BARREL_EXPLOSION_RADIUS;
+        let mut fire_count = 0;
+        for gdx in -radius..=radius {
+            for gdy in -radius..=radius {
+                let gp_dist = gdx.abs().max(gdy.abs());
+                if gp_dist > radius { continue; }
+                let fire_pos = origin + GridVec::new(gdx, gdy);
+                if let Some(voxel) = self.0.get_voxel_at_mut(&fire_pos) {
+                    if matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
+                    if let Some(ref prop) = voxel.props {
+                        if prop.is_flammable() {
+                            voxel.props = None;
+                            fire_count += 1;
+                        }
+                    }
+                    if !matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                        voxel.floor = Some(Floor::Fire);
+                        self.0.fire_turns.entry(fire_pos).or_insert(turn);
+                    }
+                }
+            }
+        }
+        fire_count
     }
 }
 

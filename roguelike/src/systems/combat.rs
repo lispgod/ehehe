@@ -6,6 +6,7 @@ use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
 use crate::typedefs::{CoordinateUnit, RatColor};
+use crate::typeenums::Props;
 
 /// Computes the bullet endpoint by scaling a direction vector so the
 /// Bresenham line extends approximately `range` tiles along the
@@ -524,6 +525,7 @@ pub fn melee_wide_system(
     mut game_map: ResMut<GameMapResource>,
     spatial: Res<crate::resources::SpatialIndex>,
     mut prop_health: ResMut<crate::resources::PropHealth>,
+    turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
@@ -598,6 +600,7 @@ pub fn melee_wide_system(
                         if max_hp == i32::MAX {
                             continue; // indestructible
                         }
+                        let is_gunpowder = matches!(prop, Props::GunpowderBarrel);
                         // Initialize prop health if not yet tracked
                         let current_hp = prop_health.hp.entry(tile).or_insert(max_hp);
                         *current_hp -= damage.max(MIN_PROP_DAMAGE);
@@ -608,7 +611,13 @@ pub fn melee_wide_system(
                                 voxel.props = None;
                             }
                             prop_health.hp.remove(&tile);
-                            combat_log.push(format!("{a_name} destroys a prop!"));
+                            if is_gunpowder {
+                                // Gunpowder barrel explodes — set fire in radius
+                                combat_log.push("Gunpowder barrel explodes!".to_string());
+                                game_map.detonate_gunpowder_barrel(tile, turn_counter.0);
+                            } else {
+                                combat_log.push(format!("{a_name} destroys a prop!"));
+                            }
                         }
                     }
             }

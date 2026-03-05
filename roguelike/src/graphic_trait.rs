@@ -34,6 +34,7 @@ impl GraphicElement for Floor {
             Floor::Rooftop => "^".into(),
             Floor::Plaza => ".".into(),
             Floor::Alley => " ".into(),
+            Floor::StoneFloor => ".".into(),
         }
     }
 
@@ -57,6 +58,7 @@ impl GraphicElement for Floor {
             Floor::Rooftop => RatColor::Rgb(160, 110, 60),
             Floor::Plaza => RatColor::Rgb(170, 150, 110),
             Floor::Alley => RatColor::Rgb(70, 55, 35),
+            Floor::StoneFloor => RatColor::Rgb(150, 145, 135),
         }
     }
 
@@ -80,6 +82,7 @@ impl GraphicElement for Floor {
             Floor::Rooftop => RatColor::Rgb(120, 80, 40),
             Floor::Plaza => RatColor::Rgb(140, 125, 90),
             Floor::Alley => RatColor::Rgb(45, 35, 22),
+            Floor::StoneFloor => RatColor::Rgb(120, 115, 105),
         }
     }
 }
@@ -110,6 +113,8 @@ impl GraphicElement for Props {
             Props::RailTrack => "=".into(),
             Props::Windmill => "X".into(),
             Props::LampPost => "i".into(),
+            Props::StoneWall => "#".into(),
+            Props::GunpowderBarrel => "0".into(),
         }
     }
 
@@ -138,6 +143,8 @@ impl GraphicElement for Props {
             Props::RailTrack => RatColor::Rgb(90, 85, 80),
             Props::Windmill => RatColor::Rgb(140, 110, 60),
             Props::LampPost => RatColor::Rgb(80, 80, 90),
+            Props::StoneWall => RatColor::Rgb(140, 135, 125),
+            Props::GunpowderBarrel => RatColor::Rgb(80, 60, 40),
         }
     }
 

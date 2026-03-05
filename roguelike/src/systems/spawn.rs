@@ -129,6 +129,12 @@ pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Index 4–5: Sheriff and deputies — faction color: gold
     MonsterTemplate { name: "Sheriff", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Sheriff, has_gun: true },
     MonsterTemplate { name: "Deputy", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Sheriff, has_gun: true },
+    // Index 6–7: Outlaws — faction color: dark red
+    MonsterTemplate { name: "Outlaw", symbol: "@", fg: RatColor::Rgb(200, 50, 50), health: 110, attack: 6, speed: 34, sight_range: 11, faction: Faction::Outlaws, has_gun: true },
+    MonsterTemplate { name: "Bandit", symbol: "@", fg: RatColor::Rgb(180, 40, 40), health: 90, attack: 5, speed: 36, sight_range: 10, faction: Faction::Outlaws, has_gun: true },
+    // Index 8–9: Lawmen — faction color: steel blue
+    MonsterTemplate { name: "Marshal", symbol: "@", fg: RatColor::Rgb(100, 140, 200), health: 130, attack: 7, speed: 30, sight_range: 13, faction: Faction::Lawmen, has_gun: true },
+    MonsterTemplate { name: "Ranger", symbol: "@", fg: RatColor::Rgb(100, 140, 200), health: 100, attack: 6, speed: 32, sight_range: 12, faction: Faction::Lawmen, has_gun: true },
 ];
 
 /// Spawns a hostile entity from a `MonsterTemplate` at the given position,

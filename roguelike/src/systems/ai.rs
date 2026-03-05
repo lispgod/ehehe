@@ -397,9 +397,10 @@ fn has_friendly_in_path(
 }
 
 /// Returns `true` if two factions are hostile to each other.
-/// Nobody is hostile by default — hostility is added dynamically when attacked.
-pub fn factions_are_hostile(_a: Faction, _b: Faction) -> bool {
-    false
+/// All factions are hostile to each other — every faction fights everyone else.
+/// Same-faction members cooperate; different factions are enemies.
+pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
+    a != b
 }
 
 /// Dodge probability: chance per turn that an NPC sidesteps nearby explosions.
@@ -671,7 +672,9 @@ pub fn ai_system(
         );
 
         // Target the closest hostile entity — not always the player.
-        // Only chase if this NPC has the Hostile marker (aggroed).
+        // Chase if:
+        //   1. NPC has the Hostile marker (aggroed by combat), OR
+        //   2. NPC sees a visible faction enemy (factions_are_hostile returns true).
         let chase_target: Option<(Entity, GridVec)> = if npc_is_hostile {
             let player_option = if player_visible {
                 player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
@@ -688,6 +691,9 @@ pub fn ai_system(
                 (None, Some(ft)) => Some(ft),
                 (None, None) => None,
             }
+        } else if faction_target.is_some() {
+            // Not yet aggroed, but sees a faction enemy — engage
+            faction_target
         } else {
             None
         };

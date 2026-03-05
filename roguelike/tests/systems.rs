@@ -2226,19 +2226,19 @@ fn a_star_at_goal_returns_none() {
 
 #[test]
 fn factions_are_hostile_outlaws_vs_lawmen() {
-    // Nobody is hostile by default anymore
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
+    // All different factions are now hostile to each other
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
 }
 
 #[test]
 fn factions_are_hostile_wildlife_vs_all() {
-    // Nobody is hostile by default anymore
-    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Outlaws));
-    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Lawmen));
-    assert!(!ai::factions_are_hostile(Faction::Wildlife, Faction::Vaqueros));
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Wildlife));
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Wildlife));
+    // All different factions are hostile to each other
+    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Outlaws));
+    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Lawmen));
+    assert!(ai::factions_are_hostile(Faction::Wildlife, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Wildlife));
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Wildlife));
 }
 
 #[test]
@@ -2251,20 +2251,20 @@ fn factions_same_faction_not_hostile() {
 
 #[test]
 fn factions_vaqueros_vs_outlaws() {
-    // Nobody is hostile by default anymore
-    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    // All different factions are hostile to each other
+    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
 }
 
 #[test]
 fn factions_all_different_factions_are_hostile() {
-    // Nobody is hostile by default anymore — hostility is dynamic
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
-    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Civilians));
-    assert!(!ai::factions_are_hostile(Faction::Civilians, Faction::Sheriff));
-    assert!(!ai::factions_are_hostile(Faction::Indians, Faction::Wildlife));
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    // All different factions are now hostile to each other
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Civilians));
+    assert!(ai::factions_are_hostile(Faction::Civilians, Faction::Sheriff));
+    assert!(ai::factions_are_hostile(Faction::Indians, Faction::Wildlife));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
 }
 
 // ─── Energy / Speed Integration Tests ────────────────────────────
@@ -3729,17 +3729,17 @@ fn ai_faction_hostility_symmetric() {
 
 #[test]
 fn ai_wildlife_hostile_to_all() {
-    // Nobody is hostile by default anymore — hostility is dynamic
+    // All different factions are hostile to each other
     let factions = [Faction::Outlaws, Faction::Lawmen, Faction::Vaqueros];
     for f in factions {
         assert!(
-            !ai::factions_are_hostile(Faction::Wildlife, f),
-            "Wildlife should NOT be hostile to {:?} by default",
+            ai::factions_are_hostile(Faction::Wildlife, f),
+            "Wildlife should be hostile to {:?}",
             f,
         );
         assert!(
-            !ai::factions_are_hostile(f, Faction::Wildlife),
-            "{:?} should NOT be hostile to Wildlife by default",
+            ai::factions_are_hostile(f, Faction::Wildlife),
+            "{:?} should be hostile to Wildlife",
             f,
         );
     }

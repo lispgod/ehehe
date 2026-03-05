@@ -342,6 +342,7 @@ impl GameMap {
         place_mission(&mut map, width, height, seed);
         place_town_hall(&mut map, width, height, seed);
         place_grand_saloon(&mut map, width, height, seed);
+        place_stone_church(&mut map, width, height, seed);
 
         // ── Step 5b: Town plaza (open killzone) ─────────────────────
         place_town_plaza(&mut map, width, height, seed);
@@ -354,6 +355,8 @@ impl GameMap {
         place_water_tower(&mut map, width, height, seed);
         place_railroad(&mut map, width, height, seed);
         place_windmill(&mut map, width, height, seed);
+        place_outposts(&mut map, width, height, seed);
+        place_rock_formations(&mut map, width, height, seed);
 
         // ── Step 6: Street props along every avenue ──────────────
         for &ay in &avenue_ys {
@@ -370,8 +373,13 @@ impl GameMap {
         // ── Step 8: Scatter gunpowder barrels around the map ────────
         place_gunpowder_barrels(&mut map, width, height, seed);
 
-        // ── Step 9: Spawn clearing (bottom-left) ───────────────────
+        // ── Step 9: Spawn clearing ──────────────────────────────────
+        // Clear around default spawn point and also around the bridge center
+        // so the player always has room to spawn.
         clear_around(&mut map, SPAWN_POINT, 6);
+        if let Some(bridge_pos) = map.find_bridge_center() {
+            clear_around(&mut map, bridge_pos, 6);
+        }
 
         // ── Final pass: clear props from water/beach tiles ──────────
         // Later generation steps may have placed props on river tiles.
@@ -1816,6 +1824,157 @@ fn place_lamp_posts(map: &mut GameMap, height: CoordinateUnit, street_x: Coordin
                 {
                     set_prop(map, x, y, Props::LampPost);
                 }
+        }
+    }
+}
+
+/// Places a large stone church building — a prominent landmark with stone walls,
+/// stained glass (signs), and pews. Uses the same stone material as the mission.
+fn place_stone_church(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    let cw: CoordinateUnit = 16;
+    let ch: CoordinateUnit = 20;
+    if width < cw + 20 || height < ch + 20 {
+        return;
+    }
+    let c_seed = seed.wrapping_add(424242);
+    // Place in the upper-left quadrant, away from the mission
+    let cx = width / 4 + (value_noise(11, 11, c_seed) * 20.0) as CoordinateUnit;
+    let cy = height / 3 + (value_noise(12, 12, c_seed) * 10.0) as CoordinateUnit;
+    let bx = (cx - cw / 2).clamp(2, width - cw - 2);
+    let by = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    // Stone walls and floor
+    for y in by..by + ch {
+        for x in bx..bx + cw {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                let is_border = x == bx || x == bx + cw - 1 || y == by || y == by + ch - 1;
+                let is_main_door = y == by + ch - 1 && (x == bx + cw / 2 || x == bx + cw / 2 - 1);
+                let is_back_door = y == by && x == bx + cw / 2;
+                if is_border && !is_main_door && !is_back_door {
+                    voxel.props = Some(Props::StoneWall);
+                    voxel.floor = Some(Floor::StoneFloor);
+                } else {
+                    voxel.props = None;
+                    voxel.floor = Some(Floor::StoneFloor);
+                }
+            }
+        }
+    }
+
+    let ix = bx + 1;
+    let iy = by + 1;
+    let iw = cw - 2;
+    let ih = ch - 2;
+
+    // Altar at the north end
+    set_prop(map, ix + iw / 2, iy, Props::Table);
+    set_prop(map, ix + iw / 2 - 1, iy, Props::Sign);
+    set_prop(map, ix + iw / 2 + 1, iy, Props::Sign);
+
+    // Pew rows (benches in two columns)
+    for row in 3..ih.min(14) {
+        set_prop(map, ix + 2, iy + row, Props::Bench);
+        if iw >= 8 {
+            set_prop(map, ix + iw - 3, iy + row, Props::Bench);
+        }
+    }
+
+    // Stained glass (signs along walls)
+    for row in (2..ih - 2).step_by(3) {
+        set_prop(map, ix, iy + row, Props::Sign);
+        set_prop(map, ix + iw - 1, iy + row, Props::Sign);
+    }
+
+    // Bell tower: 3×3 rooftop area in corner
+    for dy in 0..3i32 {
+        for dx in 0..3i32 {
+            let pos = GridVec::new(ix + dx, iy + dy);
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::Rooftop);
+            }
+        }
+    }
+}
+
+/// Places small outpost structures along the map edges — defensive positions
+/// that serve as spawn anchors for factions on the outskirts.
+fn place_outposts(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    if width < 30 || height < 30 { return; } // map too small for outposts
+    let out_seed = seed.wrapping_add(191919);
+    let num_outposts = 4;
+    for i in 0..num_outposts {
+        let angle = (i as f64 / num_outposts as f64) * std::f64::consts::TAU
+            + value_noise(i, 0, out_seed) * 0.8;
+        let dist = (width.min(height) as f64 * 0.35) + value_noise(0, i, out_seed) * 20.0;
+        let ox = (width as f64 / 2.0 + angle.cos() * dist) as CoordinateUnit;
+        let oy = (height as f64 / 2.0 + angle.sin() * dist) as CoordinateUnit;
+        let ox = ox.clamp(8, width - 14);
+        let oy = oy.clamp(8, height - 14);
+
+        // 6×6 stone outpost
+        let ow: CoordinateUnit = 6;
+        let oh: CoordinateUnit = 6;
+        for dy in 0..oh {
+            for dx in 0..ow {
+                let pos = GridVec::new(ox + dx, oy + dy);
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                        continue;
+                    }
+                    let is_border = dx == 0 || dx == ow - 1 || dy == 0 || dy == oh - 1;
+                    let is_door = dy == oh - 1 && dx == ow / 2;
+                    if is_border && !is_door {
+                        voxel.props = Some(Props::StoneWall);
+                        voxel.floor = Some(Floor::StoneFloor);
+                    } else {
+                        voxel.props = None;
+                        voxel.floor = Some(Floor::StoneFloor);
+                    }
+                }
+            }
+        }
+        // Interior crate + barrel
+        set_prop(map, ox + 1, oy + 1, Props::Barrel);
+        set_prop(map, ox + ow - 2, oy + 1, Props::Crate);
+        set_prop(map, ox + ow / 2, oy + oh / 2, Props::GunpowderBarrel);
+    }
+}
+
+/// Places natural rock formations using noise-driven cluster placement.
+/// Creates visually interesting terrain features on the outskirts.
+fn place_rock_formations(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+    if width < 80 || height < 80 { return; } // map too small for rock formations
+    let rock_seed = seed.wrapping_add(282828);
+    let num_formations = 6;
+    for i in 0..num_formations {
+        // Place formations away from center
+        let fx = (value_noise(i, 0, rock_seed) * (width - 60) as f64) as CoordinateUnit + 30;
+        let fy = (value_noise(0, i, rock_seed) * (height - 60) as f64) as CoordinateUnit + 30;
+        let dist_to_center = ((fx - width / 2).pow(2) + (fy - height / 2).pow(2)) as f64;
+        if dist_to_center < (width as f64 / 4.0).powi(2) {
+            continue; // skip formations too close to center
+        }
+        // Noise-driven cluster of 5-12 rocks
+        let cluster_size = 5 + (value_noise(i, i, rock_seed.wrapping_add(111)) * 8.0) as i32;
+        let mut placed = 0;
+        for dy in -3i32..=3 {
+            for dx in -3i32..=3 {
+                if placed >= cluster_size { break; }
+                let pos = GridVec::new(fx + dx, fy + dy);
+                let noise = value_noise(pos.x, pos.y, rock_seed.wrapping_add(222));
+                if noise > 0.4 { continue; }
+                if let Some(voxel) = map.get_voxel_at(&pos) {
+                    if voxel.props.is_some() { continue; }
+                    if matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)
+                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)) {
+                        continue;
+                    }
+                }
+                set_prop(map, pos.x, pos.y, Props::Rock);
+                placed += 1;
+            }
+            if placed >= cluster_size { break; }
         }
     }
 }

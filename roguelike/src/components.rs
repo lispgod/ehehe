@@ -494,8 +494,6 @@ pub enum ItemKind {
     Bow { attack: i32, blunt_damage: i32 },
     /// A water bucket. Splashes water around the player, extinguishing fires.
     WaterBucket { uses: i32, radius: i32, blunt_damage: i32 },
-    /// A box of matches. Used to set fire to flammable objects at the cursor.
-    Matches { uses: i32, blunt_damage: i32 },
 }
 
 impl ItemKind {
@@ -510,7 +508,6 @@ impl ItemKind {
             ItemKind::Molotov { blunt_damage, .. } => *blunt_damage,
             ItemKind::Bow { blunt_damage, .. } => *blunt_damage,
             ItemKind::WaterBucket { blunt_damage, .. } => *blunt_damage,
-            ItemKind::Matches { blunt_damage, .. } => *blunt_damage,
         }
     }
 
@@ -525,7 +522,6 @@ impl ItemKind {
             ItemKind::Molotov { .. } => "Molotov".into(),
             ItemKind::Bow { .. } => "Bow".into(),
             ItemKind::WaterBucket { .. } => "Water Bucket".into(),
-            ItemKind::Matches { .. } => "Matches".into(),
         }
     }
 }
@@ -585,184 +581,6 @@ pub enum CollectibleKind {
 /// Used to attribute the killing blow for kill counting.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastDamageSource(pub Entity);
-
-// ─── NPC Interaction & Mood System ──────────────────────────────
-
-/// NPC mood affects dialogue responses and hostility threshold.
-/// Drunk NPCs stagger, have lower thresholds, and say funnier things.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub enum NpcMood {
-    /// Default state — normal responses, standard hostility threshold.
-    Calm,
-    /// Slightly on edge — lower threshold, twitchy responses.
-    Nervous,
-    /// Intoxicated — stagger movement, very low hostility threshold, funny dialogue.
-    Drunk,
-    /// Already hostile — will attack on sight or slight provocation.
-    Angry,
-}
-
-impl Default for NpcMood {
-    fn default() -> Self {
-        NpcMood::Calm
-    }
-}
-
-impl NpcMood {
-    /// Returns the hostility threshold at which this NPC becomes aggressive.
-    /// Lower threshold = easier to provoke.
-    pub fn hostility_threshold(&self) -> i32 {
-        match self {
-            NpcMood::Calm => 100,
-            NpcMood::Nervous => 70,
-            NpcMood::Drunk => 40,
-            NpcMood::Angry => 20,
-        }
-    }
-}
-
-/// Per-NPC hostility meter. Rises from taunts, threats, and witnessed violence.
-/// When it crosses the mood-dependent threshold, the NPC becomes aggressive.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct Hostility {
-    /// Current hostility level (0 = peaceful).
-    pub level: i32,
-}
-
-impl Default for Hostility {
-    fn default() -> Self {
-        Self { level: 0 }
-    }
-}
-
-impl Hostility {
-    /// Increase hostility by `amount`, clamped to a reasonable max.
-    pub fn increase(&mut self, amount: i32) {
-        self.level = (self.level + amount).min(200);
-    }
-
-    /// Returns `true` if hostility exceeds the given threshold.
-    pub fn exceeds_threshold(&self, threshold: i32) -> bool {
-        self.level >= threshold
-    }
-
-    /// Decay hostility by `amount` toward zero.
-    pub fn decay(&mut self, amount: i32) {
-        self.level = (self.level - amount).max(0);
-    }
-}
-
-/// Types of interactions the player can perform with an adjacent NPC.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum NpcInteraction {
-    /// Friendly greeting — may calm nervous NPCs.
-    Greet,
-    /// Taunt — raises hostility significantly.
-    Taunt,
-    /// Threaten — raises hostility, may cause NPC to flee if cowardly.
-    Threaten,
-    /// Ask about town — NPC shares information if not hostile.
-    AskAbout,
-    /// Buy a drink — only works in saloon, requires gold.
-    BuyDrink,
-}
-
-impl NpcInteraction {
-    /// Returns the hostility change caused by this interaction type.
-    /// Positive = increases hostility, negative = decreases.
-    pub fn hostility_delta(&self) -> i32 {
-        match self {
-            NpcInteraction::Greet => -10,
-            NpcInteraction::Taunt => 30,
-            NpcInteraction::Threaten => 50,
-            NpcInteraction::AskAbout => 0,
-            NpcInteraction::BuyDrink => -15,
-        }
-    }
-}
-
-// ─── Hiding Mechanic ────────────────────────────────────────────
-
-/// Marker component: the player is currently hidden inside a prop.
-/// While hidden, the player's tile shows the prop glyph and NPCs
-/// cannot detect the player unless suspicious or adjacent.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct Hidden {
-    /// World position of the hiding spot the player is occupying.
-    pub hiding_pos: GridVec,
-}
-
-/// Marker component for props that can be used as hiding spots.
-/// Attached to barrel, haystack, outhouse, and wardrobe entities/tiles.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct HidingSpot;
-
-/// Marker component: tags an NPC as a bartender who can sell saloon items.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct Bartender;
-
-// ─── Saloon Economy ─────────────────────────────────────────────
-
-/// Drunk status as a timed debuff. Reduces accuracy and causes stagger.
-/// Decrements each world turn; removed when duration reaches zero.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct DrunkStatus {
-    /// Remaining turns of drunkenness.
-    pub turns_remaining: u32,
-    /// Accuracy penalty while drunk (0.0 to 1.0, subtracted from hit chance).
-    pub accuracy_penalty: f64,
-}
-
-impl DrunkStatus {
-    /// Creates a new drunk debuff with standard duration and penalty.
-    pub fn new() -> Self {
-        Self {
-            turns_remaining: 30,
-            accuracy_penalty: 0.25,
-        }
-    }
-
-    /// Tick down the drunk duration by one turn. Returns true if still active.
-    pub fn tick(&mut self) -> bool {
-        self.turns_remaining = self.turns_remaining.saturating_sub(1);
-        self.turns_remaining > 0
-    }
-}
-
-// ─── Brawl System ───────────────────────────────────────────────
-
-/// Marker component: entity is in a fistfight (non-lethal brawl mode).
-/// Damage is reduced and knockout replaces death.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct InBrawl;
-
-/// Crime types that raise the wanted level.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CrimeType {
-    /// Punching or shoving an NPC.
-    Assault,
-    /// Killing an NPC.
-    Murder,
-    /// Setting fire to a building or object.
-    Arson,
-    /// Stealing items or pick-pocketing.
-    Theft,
-    /// Discharging a firearm within town limits.
-    ShootingInTown,
-}
-
-impl CrimeType {
-    /// Returns the wanted-level increase for this crime type.
-    pub fn wanted_increase(&self) -> u32 {
-        match self {
-            CrimeType::Assault => 1,
-            CrimeType::Murder => 2,
-            CrimeType::Arson => 1,
-            CrimeType::Theft => 1,
-            CrimeType::ShootingInTown => 1,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1167,97 +985,6 @@ mod tests {
         assert!(s.current >= 0 && s.current <= s.max);
         s.recover(100);
         assert!(s.current >= 0 && s.current <= s.max);
-    }
-
-    // ─── NPC Mood & Hostility tests ─────────────────────────────
-
-    #[test]
-    fn npc_mood_default_is_calm() {
-        let mood = NpcMood::default();
-        assert_eq!(mood, NpcMood::Calm);
-    }
-
-    #[test]
-    fn npc_mood_thresholds_decrease_with_volatility() {
-        assert!(NpcMood::Calm.hostility_threshold() > NpcMood::Nervous.hostility_threshold());
-        assert!(NpcMood::Nervous.hostility_threshold() > NpcMood::Drunk.hostility_threshold());
-        assert!(NpcMood::Drunk.hostility_threshold() > NpcMood::Angry.hostility_threshold());
-    }
-
-    #[test]
-    fn hostility_increase_and_threshold() {
-        let mut h = Hostility::default();
-        assert_eq!(h.level, 0);
-        h.increase(50);
-        assert_eq!(h.level, 50);
-        assert!(h.exceeds_threshold(NpcMood::Drunk.hostility_threshold()));
-        assert!(!h.exceeds_threshold(NpcMood::Calm.hostility_threshold()));
-    }
-
-    #[test]
-    fn hostility_clamps_at_max() {
-        let mut h = Hostility::default();
-        h.increase(300);
-        assert_eq!(h.level, 200);
-    }
-
-    #[test]
-    fn hostility_decay_toward_zero() {
-        let mut h = Hostility { level: 50 };
-        h.decay(30);
-        assert_eq!(h.level, 20);
-        h.decay(100);
-        assert_eq!(h.level, 0);
-    }
-
-    #[test]
-    fn interaction_hostility_deltas() {
-        assert!(NpcInteraction::Greet.hostility_delta() < 0);
-        assert!(NpcInteraction::Taunt.hostility_delta() > 0);
-        assert!(NpcInteraction::Threaten.hostility_delta() > 0);
-        assert_eq!(NpcInteraction::AskAbout.hostility_delta(), 0);
-        assert!(NpcInteraction::BuyDrink.hostility_delta() < 0);
-    }
-
-    #[test]
-    fn taunt_more_provocative_than_greet_is_calming() {
-        assert!(NpcInteraction::Taunt.hostility_delta() > NpcInteraction::Greet.hostility_delta().abs());
-    }
-
-    #[test]
-    fn drunk_status_ticks_down() {
-        let mut drunk = DrunkStatus::new();
-        assert_eq!(drunk.turns_remaining, 30);
-        assert!(drunk.tick());
-        assert_eq!(drunk.turns_remaining, 29);
-        // Tick to zero
-        for _ in 0..29 {
-            drunk.tick();
-        }
-        assert_eq!(drunk.turns_remaining, 0);
-        assert!(!drunk.tick()); // Returns false at 0
-    }
-
-    #[test]
-    fn crime_type_wanted_increase() {
-        assert_eq!(CrimeType::Assault.wanted_increase(), 1);
-        assert_eq!(CrimeType::Murder.wanted_increase(), 2);
-        assert_eq!(CrimeType::Arson.wanted_increase(), 1);
-        assert_eq!(CrimeType::Theft.wanted_increase(), 1);
-        assert_eq!(CrimeType::ShootingInTown.wanted_increase(), 1);
-    }
-
-    #[test]
-    fn murder_is_most_severe_crime() {
-        let crimes = [
-            CrimeType::Assault,
-            CrimeType::Arson,
-            CrimeType::Theft,
-            CrimeType::ShootingInTown,
-        ];
-        for crime in crimes {
-            assert!(CrimeType::Murder.wanted_increase() > crime.wanted_increase());
-        }
     }
 
 }

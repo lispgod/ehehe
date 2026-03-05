@@ -1109,7 +1109,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
 
     match b.kind {
         0 => {
-            // House: dining area, bedroom corner, storage, wardrobe
+            // House: dining area, bedroom corner, storage
             if iw >= 4 && ih >= 4 {
                 // Dining table with chairs
                 set_prop(map, interior_x + 2, interior_y + 2, Props::Table);
@@ -1117,10 +1117,9 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                 set_prop(map, interior_x + 3, interior_y + 2, Props::Chair);
                 set_prop(map, interior_x + 2, interior_y + 1, Props::Chair);
                 set_prop(map, interior_x + 2, interior_y + 3, Props::Chair);
-                // Bedroom area (far corner) with wardrobe
+                // Bedroom area (far corner)
                 set_prop(map, interior_x + iw - 1, interior_y + ih - 1, Props::Bench);
                 set_prop(map, interior_x + iw - 2, interior_y + ih - 1, Props::Bench);
-                set_prop(map, interior_x + iw - 1, interior_y + ih - 2, Props::Wardrobe);
                 // Storage
                 set_prop(map, interior_x, interior_y, Props::Barrel);
                 set_prop(map, interior_x + iw - 1, interior_y, Props::Crate);
@@ -1279,22 +1278,18 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             }
         }
         8 => {
-            // Hotel: lobby, guest rooms suggested by bed rows, wardrobes
+            // Hotel: lobby, guest rooms suggested by bed rows
             if iw >= 5 && ih >= 4 {
                 // Lobby area
                 set_prop(map, interior_x + 1, interior_y, Props::Table);
                 set_prop(map, interior_x, interior_y, Props::Chair);
                 set_prop(map, interior_x + 2, interior_y, Props::Chair);
-                // Guest rooms (beds/benches in rows) with wardrobes
+                // Guest rooms (beds/benches in rows)
                 for row in (2..ih).step_by(2) {
                     set_prop(map, interior_x, interior_y + row, Props::Bench);
                     if iw >= 6 {
                         set_prop(map, interior_x + iw - 1, interior_y + row, Props::Bench);
                     }
-                }
-                // Wardrobes in guest rooms
-                if ih >= 5 {
-                    set_prop(map, interior_x + 1, interior_y + 2, Props::Wardrobe);
                 }
                 // Storage
                 set_prop(map, interior_x + iw - 1, interior_y, Props::Barrel);
@@ -1358,19 +1353,6 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                 set_prop(map, interior_x + 1, interior_y + ih - 1, Props::Barrel);
             }
         }
-    }
-
-    // ── Place outhouse behind the building (if space allows) ────
-    // Deterministically decide whether this building gets an outhouse.
-    // ~55% of buildings get one (noise threshold 0.55).
-    const OUTHOUSE_SEED_SALT: NoiseSeed = 88888;
-    const OUTHOUSE_SPAWN_THRESHOLD: f64 = 0.55;
-    let outhouse_noise = value_noise(b.x + 3, b.y + 7, seed.wrapping_add(OUTHOUSE_SEED_SALT));
-    if outhouse_noise < OUTHOUSE_SPAWN_THRESHOLD {
-        // Try placing 1 tile behind the building (above the top wall)
-        let ox = b.x + b.w / 2;
-        let oy = b.y + b.h; // below the building
-        set_prop(map, ox, oy, Props::Outhouse);
     }
 }
 

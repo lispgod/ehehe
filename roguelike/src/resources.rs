@@ -109,12 +109,6 @@ pub struct InputState {
     pub ability_stamina_pending: i32,
     /// Pending water bucket splash: (inventory_index, radius).
     pub water_bucket_pending: Option<(usize, i32)>,
-    /// Entity the player is currently interacting with (NPC talk menu).
-    pub interact_target: Option<Entity>,
-    /// Pending saloon heal from food purchase.
-    pub saloon_heal_pending: i32,
-    /// Whether the player just bought whiskey (apply DrunkStatus next frame).
-    pub saloon_drunk_pending: bool,
 }
 
 impl Default for InputState {
@@ -128,9 +122,6 @@ impl Default for InputState {
             dive_stamina_pending: 0,
             ability_stamina_pending: 0,
             water_bucket_pending: None,
-            interact_target: None,
-            saloon_heal_pending: 0,
-            saloon_drunk_pending: false,
         }
     }
 }
@@ -141,10 +132,6 @@ pub enum InputMode {
     Game,
     Inventory,
     EscMenu,
-    /// Saloon buy menu: player is browsing the bartender's wares.
-    SaloonMenu,
-    /// NPC interaction menu: player picks how to talk to an adjacent NPC.
-    InteractMenu,
 }
 
 /// Turn-phase sub-state that controls the flow within `GameState::Playing`.
@@ -417,82 +404,12 @@ pub struct GodMode(pub bool);
 
 /// GTA-style star (wanted) level. Higher stars = more sheriffs spawn.
 /// Decays when the player is not in hostile or sheriff vision for a while.
-///
-/// Wanted levels:
-/// - 0: Peaceful — no law enforcement attention.
-/// - 1: Sheriff is alerted and investigates your last known position.
-/// - 2: Sheriff and a deputy pursue actively.
-/// - 3: A posse spawns at the town edge and joins the chase.
-/// - 4-5: Maximum heat — multiple posse members.
-///
-/// Crimes that raise wanted level: assault, murder, arson, theft,
-/// shooting within town limits.
-///
-/// Decay: level drops by 1 after `STAR_DECAY_TURNS` (30) unseen turns,
-/// where "unseen" means no law NPC has the player in their FOV.
 #[derive(Resource, Debug, Default)]
 pub struct StarLevel {
-    /// Current wanted level (0 = peaceful, 1-5 = wanted).
+    /// Current wanted level (0 = peaceful, 1+ = wanted).
     pub level: u32,
     /// Turns since last seen by a hostile or sheriff NPC.
     pub unseen_turns: u32,
-    /// Whether the player is currently hidden (affects decay rate).
-    pub player_hidden: bool,
-}
-
-/// Persistent player reputation that lingers even after wanted stars decay.
-/// NPCs who witnessed crimes remember the player's notoriety.  This allows
-/// the town to "feel" the player's history — civilians back away, strangers
-/// whisper, and the sheriff stays on edge even at 0 stars.
-///
-/// Reputation decays much more slowly than wanted level (1 point per 60 turns)
-/// and is increased by every witnessed crime.
-#[derive(Resource, Debug)]
-pub struct PlayerReputation {
-    /// Accumulated notoriety (0 = unknown, higher = more infamous).
-    pub infamy: u32,
-    /// Turn when reputation last increased.
-    pub last_crime_turn: u32,
-}
-
-impl Default for PlayerReputation {
-    fn default() -> Self {
-        Self { infamy: 0, last_crime_turn: 0 }
-    }
-}
-
-impl PlayerReputation {
-    /// Number of turns without a crime before reputation starts decaying.
-    const DECAY_COOLDOWN: u32 = 120;
-    /// One point of infamy decays every this many turns.
-    const DECAY_INTERVAL: u32 = 60;
-
-    /// Add infamy from a witnessed crime.
-    pub fn witness_crime(&mut self, severity: u32, turn: u32) {
-        self.infamy = (self.infamy + severity).min(100);
-        self.last_crime_turn = turn;
-    }
-
-    /// Tick reputation decay each world turn.
-    pub fn decay(&mut self, current_turn: u32) {
-        if self.infamy == 0 { return; }
-        let since_crime = current_turn.saturating_sub(self.last_crime_turn);
-        if since_crime > Self::DECAY_COOLDOWN
-            && current_turn.is_multiple_of(Self::DECAY_INTERVAL)
-        {
-            self.infamy = self.infamy.saturating_sub(1);
-        }
-    }
-
-    /// Returns true if NPCs should visibly react to the player's reputation.
-    pub fn is_notorious(&self) -> bool {
-        self.infamy >= 5
-    }
-
-    /// Returns true if NPCs should be frightened of the player.
-    pub fn is_feared(&self) -> bool {
-        self.infamy >= 15
-    }
 }
 
 /// Prop health map: tracks damage dealt to props.
@@ -774,60 +691,6 @@ impl BulletAnimations {
     }
 }
 
-// ─── Economy & Saloon ───────────────────────────────────────────
-
-/// Player's gold currency. Used for saloon purchases and trading.
-#[derive(Resource, Debug)]
-pub struct Gold(pub i32);
-
-impl Default for Gold {
-    fn default() -> Self {
-        Self(20) // Starting gold
-    }
-}
-
-/// Saloon menu item for the bartender's shop.
-#[derive(Clone, Debug)]
-pub struct SaloonMenuItem {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub price: i32,
-    pub effect: SaloonEffect,
-}
-
-/// Effects of saloon purchases.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SaloonEffect {
-    /// Whiskey: makes the player drunk, reduces accuracy.
-    Whiskey,
-    /// Food: restores health.
-    Food { heal: i32 },
-    /// Information: reveals a map location or NPC rumor.
-    Information,
-}
-
-/// The bartender's menu — fixed prices for the 1850s.
-pub const SALOON_MENU: &[SaloonMenuItem] = &[
-    SaloonMenuItem {
-        name: "Whiskey",
-        description: "Burns going down. Reduces accuracy for 30 turns.",
-        price: 2,
-        effect: SaloonEffect::Whiskey,
-    },
-    SaloonMenuItem {
-        name: "Stew & Bread",
-        description: "Hot meal. Restores 20 HP.",
-        price: 3,
-        effect: SaloonEffect::Food { heal: 20 },
-    },
-    SaloonMenuItem {
-        name: "Information",
-        description: "The barkeep shares a rumor or map location.",
-        price: 5,
-        effect: SaloonEffect::Information,
-    },
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1038,35 +901,5 @@ mod tests {
         }
         // Should be visible again (full cycle)
         assert!(cursor.blink_visible());
-    }
-
-    // ─── Gold & Economy tests ────────────────────────────────────
-
-    #[test]
-    fn gold_default_starting_amount() {
-        let gold = Gold::default();
-        assert_eq!(gold.0, 20);
-    }
-
-    #[test]
-    fn saloon_menu_has_items() {
-        assert!(!SALOON_MENU.is_empty());
-        // All items have positive prices
-        for item in SALOON_MENU {
-            assert!(item.price > 0, "Menu item '{}' should have positive price", item.name);
-        }
-    }
-
-    #[test]
-    fn saloon_menu_contains_whiskey() {
-        assert!(SALOON_MENU.iter().any(|item| item.effect == SaloonEffect::Whiskey));
-    }
-
-    #[test]
-    fn star_level_default_is_peaceful() {
-        let sl = StarLevel::default();
-        assert_eq!(sl.level, 0);
-        assert_eq!(sl.unseen_turns, 0);
-        assert!(!sl.player_hidden);
     }
 }

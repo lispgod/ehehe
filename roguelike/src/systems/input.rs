@@ -2,10 +2,10 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Bartender, Health, Hidden, Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
-use crate::events::{AttackIntent, HideIntent, InteractionIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::components::{Health, Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
+use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameMapResource, GameState, Gold, InputMode, InputState, MapSeed, RestartRequested, SALOON_MENU, SaloonEffect, SpectatingAfterDeath, TurnState};
+use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
 
 /// Bundles all intent MessageWriters to stay under Bevy's 16-param system limit.
 #[derive(SystemParam)]
@@ -19,8 +19,6 @@ pub struct IntentWriters<'w> {
     ranged_intents: MessageWriter<'w, RangedAttackIntent>,
     melee_wide_intents: MessageWriter<'w, MeleeWideIntent>,
     throw_item_intents: MessageWriter<'w, ThrowItemIntent>,
-    interact_intents: MessageWriter<'w, InteractionIntent>,
-    hide_intents: MessageWriter<'w, HideIntent>,
 }
 
 /// Default radius for the player's grenade blast.
@@ -73,8 +71,6 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
     CommandBinding { key: "G", name: "Punch (2 ticks)", docs: "Punch in cursor direction. Costs 2 ticks." },
     CommandBinding { key: "E", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
-    CommandBinding { key: "X", name: "Interact", docs: "Talk to adjacent NPC or buy at saloon. Context-sensitive." },
-    CommandBinding { key: "H", name: "Hide / unhide", docs: "Enter or exit a hiding spot (barrel, hay, outhouse, wardrobe)." },
     CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
     CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
     CommandBinding { key: "7", name: "Dual wield (15 sta)", docs: "Fire two random revolvers at once." },
@@ -82,7 +78,6 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
     CommandBinding { key: "9", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
     CommandBinding { key: "0", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
     CommandBinding { key: "Q", name: "Menu", docs: "Toggle pause menu" },
-    CommandBinding { key: "?", name: "Help", docs: "Open the detailed help screen with all controls and game info." },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.
@@ -94,10 +89,10 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
 pub fn input_system(
     mut messages: MessageReader<KeyMessage>,
     mut intents: IntentWriters,
-    player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>, Option<&Hidden>), With<Player>>,
+    player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>), With<Player>>,
     mut player_viewshed: Query<&mut Viewshed, With<Player>>,
     item_kind_query: Query<&ItemKind>,
-    (hostiles_query, health_query, npc_name_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>, Query<(Entity, Option<&crate::components::Name>, Option<&Bartender>), Without<Player>>),
+    (hostiles_query, health_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,
@@ -107,7 +102,7 @@ pub fn input_system(
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
     (mut extra_world_ticks, mut spectating, dynamic_rng, seed, spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
-    (mut god_mode, game_map, mut gold): (ResMut<crate::resources::GodMode>, Res<GameMapResource>, ResMut<Gold>),
+    mut god_mode: ResMut<crate::resources::GodMode>,
 ) {
     // Handle Dead and Victory states: R to restart, T to spectate.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
@@ -127,7 +122,7 @@ pub fn input_system(
         return;
     }
 
-    let Ok((player_entity, player_pos, player_stamina, player_inv, player_hidden)) = player_query.single() else {
+    let Ok((player_entity, player_pos, player_stamina, player_inv)) = player_query.single() else {
         // Player entity is gone (should only happen transiently).
         messages.read().for_each(|_| {});
         return;
@@ -176,102 +171,6 @@ pub fn input_system(
         return;
     }
 
-    // ── Saloon buy menu input mode ──────────────────────────────
-    if input_state.mode == InputMode::SaloonMenu {
-        for message in messages.read() {
-            match message.code {
-                KeyCode::Char('1') => {
-                    // Buy whiskey
-                    if let Some(item) = SALOON_MENU.get(0) {
-                        if gold.0 >= item.price {
-                            gold.0 -= item.price;
-                            combat_log.push(format!("You buy {} for ${} gold.", item.name, item.price));
-                            combat_log.push("The whiskey burns going down. Your aim wavers.".into());
-                            input_state.saloon_drunk_pending = true;
-                        } else {
-                            combat_log.push("Not enough gold!".into());
-                        }
-                    }
-                    input_state.mode = InputMode::Game;
-                    advance_turn(&mut next_turn_state);
-                }
-                KeyCode::Char('2') => {
-                    // Buy food
-                    if let Some(item) = SALOON_MENU.get(1) {
-                        if gold.0 >= item.price {
-                            gold.0 -= item.price;
-                            combat_log.push(format!("You buy {} for ${} gold.", item.name, item.price));
-                            if let SaloonEffect::Food { heal } = item.effect {
-                                input_state.saloon_heal_pending = heal;
-                                combat_log.push(format!("A hot meal restores {} HP.", heal));
-                            }
-                        } else {
-                            combat_log.push("Not enough gold!".into());
-                        }
-                    }
-                    input_state.mode = InputMode::Game;
-                    advance_turn(&mut next_turn_state);
-                }
-                KeyCode::Char('3') => {
-                    // Buy information
-                    if let Some(item) = SALOON_MENU.get(2) {
-                        if gold.0 >= item.price {
-                            gold.0 -= item.price;
-                            combat_log.push(format!("You buy {} for ${} gold.", item.name, item.price));
-                            combat_log.push("The barkeep leans in and shares a rumor...".into());
-                        } else {
-                            combat_log.push("Not enough gold!".into());
-                        }
-                    }
-                    input_state.mode = InputMode::Game;
-                    advance_turn(&mut next_turn_state);
-                }
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    combat_log.push("You step away from the bar.".into());
-                    input_state.mode = InputMode::Game;
-                }
-                _ => {}
-            }
-        }
-        return;
-    }
-
-    // ── NPC interact menu input mode ────────────────────────────
-    if input_state.mode == InputMode::InteractMenu {
-        let target = input_state.interact_target;
-        for message in messages.read() {
-            if let Some(target_entity) = target {
-                let interaction = match message.code {
-                    KeyCode::Char('1') => Some(crate::components::NpcInteraction::Greet),
-                    KeyCode::Char('2') => Some(crate::components::NpcInteraction::Taunt),
-                    KeyCode::Char('3') => Some(crate::components::NpcInteraction::Threaten),
-                    KeyCode::Char('4') => Some(crate::components::NpcInteraction::AskAbout),
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        input_state.mode = InputMode::Game;
-                        input_state.interact_target = None;
-                        None
-                    }
-                    _ => None,
-                };
-                if let Some(interaction) = interaction {
-                    intents.interact_intents.write(InteractionIntent {
-                        player: player_entity,
-                        target: target_entity,
-                        interaction,
-                    });
-                    input_state.mode = InputMode::Game;
-                    input_state.interact_target = None;
-                    advance_turn(&mut next_turn_state);
-                }
-            } else {
-                // No target — close the menu
-                input_state.mode = InputMode::Game;
-                input_state.interact_target = None;
-            }
-        }
-        return;
-    }
-
     // ── Normal game input mode ──────────────────────────────────
     for message in messages.read() {
         // Dismiss the welcome screen on any key press.
@@ -289,10 +188,6 @@ pub fn input_system(
                 if *game_state.get() == GameState::Playing {
                     next_game_state.set(GameState::Paused);
                 }
-            }
-            // ── Help screen toggle (?) ──────────────────────────
-            KeyCode::Char('?') => {
-                input_state.help_visible = !input_state.help_visible;
             }
             // ── Cursor movement (IJKL) — advances one tick ─────
             KeyCode::Char('i') if awaiting_input => {
@@ -402,73 +297,6 @@ pub fn input_system(
                     picker: player_entity,
                 });
                 advance_turn(&mut next_turn_state);
-            }
-            // ── Interact with adjacent NPC (X key) ──────────────
-            KeyCode::Char('x') if awaiting_input => {
-                let player_gv = player_pos.as_grid_vec();
-                // Find an adjacent NPC (any entity with Health that is not the player)
-                let mut found_npc = None;
-                for dx in -1i32..=1 {
-                    for dy in -1i32..=1 {
-                        if dx == 0 && dy == 0 { continue; }
-                        let adj = player_gv + GridVec::new(dx, dy);
-                        for &ent in spatial.entities_at(&adj) {
-                            if ent != player_entity && health_query.contains(ent) {
-                                found_npc = Some(ent);
-                                break;
-                            }
-                        }
-                        if found_npc.is_some() { break; }
-                    }
-                    if found_npc.is_some() { break; }
-                }
-                if let Some(npc_entity) = found_npc {
-                    // Check if this NPC is a bartender
-                    let is_bartender = npc_name_query.get(npc_entity).ok()
-                        .map_or(false, |(_, _, bart)| bart.is_some());
-                    let npc_name = npc_name_query.get(npc_entity).ok()
-                        .and_then(|(_, n, _)| n.map(|n| n.0.clone()))
-                        .unwrap_or_else(|| "stranger".into());
-
-                    if is_bartender {
-                        // Open saloon buy menu
-                        input_state.mode = InputMode::SaloonMenu;
-                        combat_log.push(format!("The barkeep eyes you. \"What'll it be?\""));
-                    } else {
-                        // Open NPC interaction menu
-                        input_state.mode = InputMode::InteractMenu;
-                        input_state.interact_target = Some(npc_entity);
-                        combat_log.push(format!("You approach {npc_name}. How do you address them?"));
-                    }
-                } else {
-                    combat_log.push("No one nearby to talk to.".into());
-                }
-            }
-            // ── Hide / unhide in a prop (H key) ─────────────────
-            KeyCode::Char('h') if awaiting_input => {
-                if player_hidden.is_some() {
-                    // Exit hiding
-                    intents.hide_intents.write(HideIntent {
-                        entity: player_entity,
-                        entering: false,
-                    });
-                    advance_turn(&mut next_turn_state);
-                } else {
-                    // Try to enter hiding
-                    let player_gv = player_pos.as_grid_vec();
-                    let is_hiding_spot = game_map.0.get_voxel_at(&player_gv)
-                        .and_then(|v| v.props.as_ref())
-                        .is_some_and(|p| p.is_hiding_spot());
-                    if is_hiding_spot {
-                        intents.hide_intents.write(HideIntent {
-                            entity: player_entity,
-                            entering: true,
-                        });
-                        advance_turn(&mut next_turn_state);
-                    } else {
-                        combat_log.push("Nothing to hide in here.".into());
-                    }
-                }
             }
             // ── Toggle God Mode (Shift+G) ───────────────────────
             KeyCode::Char('G') if awaiting_input => {
@@ -602,28 +430,6 @@ pub fn input_system(
                                     combat_log.push("You splash water around you!".into());
                                 } else {
                                     combat_log.push("The bucket is empty!".into());
-                                }
-                                handled = true;
-                            } else if let ItemKind::Matches { uses, .. } = kind {
-                                if *uses > 0 {
-                                    let target_gv = cursor.pos;
-                                    let player_gv = player_pos.as_grid_vec();
-                                    let dist = player_gv.chebyshev_distance(target_gv);
-                                    if dist <= 1 {
-                                        // Set fire at cursor position (adjacent or self tile)
-                                        extra_world_ticks.0 = 1;
-                                        // Fire-setting handled by UseItemIntent (which the
-                                        // use_item_system will process as matches usage)
-                                        intents.use_item_intents.write(UseItemIntent {
-                                            user: player_entity,
-                                            item_index: idx,
-                                        });
-                                        advance_turn(&mut next_turn_state);
-                                    } else {
-                                        combat_log.push("Too far! Move adjacent to set fire.".into());
-                                    }
-                                } else {
-                                    combat_log.push("Out of matches!".into());
                                 }
                                 handled = true;
                             }

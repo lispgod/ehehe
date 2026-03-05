@@ -10,8 +10,8 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 use crate::components::{AiLookDir, Faction, Health, Hostile, Inventory, ItemKind, Projectile, ProjectileVisual, Stamina, Name, Player, Position, Renderable, Viewshed, display_name, item_display_name};
 use crate::grid_vec::GridVec;
 use crate::resources::{
-    BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, Gold, InputMode,
-    InputState, KillCount, SALOON_MENU, SoundEvents, SpellParticles, TurnCounter, SOUND_RANGE,
+    BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
+    InputState, KillCount, SoundEvents, SpellParticles, TurnCounter, SOUND_RANGE,
 };
 use crate::systems::input::KEYBINDINGS;
 use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
@@ -88,7 +88,7 @@ pub fn draw_system(
     (turn_counter, kill_count, blood_map): (Res<TurnCounter>, Res<KillCount>, Res<BloodMap>),
     spell_particles: Res<SpellParticles>,
     input_state: Res<InputState>,
-    (cursor, collectibles, star_level, gold, reputation): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>, Res<Gold>, Res<crate::resources::PlayerReputation>),
+    (cursor, collectibles, star_level): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>),
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -531,7 +531,6 @@ pub fn draw_system(
                                 ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
                                 ItemKind::Bow { .. } => "Bow".to_string(),
                                 ItemKind::WaterBucket { uses, radius, .. } => format!("{uses} uses r{radius} 💧"),
-                                ItemKind::Matches { uses, .. } => format!("{uses} uses 🔥"),
                             });
                         (name_str, desc)
                     })
@@ -615,8 +614,6 @@ pub fn draw_system(
             &kill_count,
             &collectibles,
             &star_level,
-            &gold,
-            &reputation,
             // cursor info
             &cursor_ground,
             &cursor_prop,
@@ -640,16 +637,6 @@ pub fn draw_system(
         // Show ESC menu overlay when in EscMenu mode (replaces old PAUSED overlay)
         if input_state.mode == InputMode::EscMenu {
             render_esc_menu_overlay(frame, game_area);
-        }
-
-        // Show saloon buy menu overlay
-        if input_state.mode == InputMode::SaloonMenu {
-            render_saloon_menu_overlay(frame, game_area, &gold);
-        }
-
-        // Show NPC interaction menu overlay
-        if input_state.mode == InputMode::InteractMenu {
-            render_interact_menu_overlay(frame, game_area);
         }
 
         // Show "VICTORY" overlay centered on game area when the gate is destroyed
@@ -699,11 +686,6 @@ pub fn draw_system(
         if input_state.welcome_visible {
             render_welcome_overlay(frame, game_area);
         }
-
-        // Show detailed help screen
-        if input_state.help_visible {
-            render_help_overlay(frame, game_area);
-        }
     })?;
 
     Ok(())
@@ -721,8 +703,6 @@ fn render_bottom_panel(
     kill_count: &KillCount,
     collectibles: &Collectibles,
     star_level: &crate::resources::StarLevel,
-    gold: &Gold,
-    reputation: &crate::resources::PlayerReputation,
     // Cursor info
     cursor_ground: &str,
     cursor_prop: &str,
@@ -749,7 +729,7 @@ fn render_bottom_panel(
     let cursor_info_area = horiz_chunks[2];
 
     // ── Stats Column (left) ─────────────────────────────────────
-    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles, star_level, gold, reputation);
+    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles, star_level);
 
     // ── Central Log (middle) ────────────────────────────────────
     let log_height = log_area.height.saturating_sub(2) as usize;
@@ -784,8 +764,6 @@ fn render_stats_column(
     player_stamina: Option<&Stamina>,
     collectibles: &Collectibles,
     star_level: &crate::resources::StarLevel,
-    gold: &Gold,
-    reputation: &crate::resources::PlayerReputation,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -793,8 +771,6 @@ fn render_stats_column(
             Constraint::Length(1), // HP gauge (compact, no border)
             Constraint::Length(1), // Stamina gauge
             Constraint::Length(1), // Star level
-            Constraint::Length(1), // Gold
-            Constraint::Length(1), // Reputation
             Constraint::Length(1), // Collectibles row 1
             Constraint::Length(1), // Collectibles row 2
             Constraint::Length(1), // Collectibles row 3
@@ -842,33 +818,6 @@ fn render_stats_column(
         chunks[2],
     );
 
-    // Gold
-    let gold_text = format!("Gold: ${}", gold.0);
-    let gold_color = if gold.0 > 0 { ratatui::style::Color::Yellow } else { ratatui::style::Color::DarkGray };
-    frame.render_widget(
-        Paragraph::new(Line::from(gold_text).fg(gold_color)),
-        chunks[3],
-    );
-
-    // Reputation
-    let rep_text = if reputation.is_feared() {
-        "Rep: FEARED"
-    } else if reputation.is_notorious() {
-        "Rep: Notorious"
-    } else if reputation.infamy > 0 {
-        "Rep: Whispered"
-    } else {
-        "Rep: Unknown"
-    };
-    let rep_color = if reputation.is_feared() { ratatui::style::Color::Red }
-        else if reputation.is_notorious() { ratatui::style::Color::Rgb(255, 165, 0) }
-        else if reputation.infamy > 0 { ratatui::style::Color::Yellow }
-        else { ratatui::style::Color::DarkGray };
-    frame.render_widget(
-        Paragraph::new(Line::from(rep_text).fg(rep_color)),
-        chunks[4],
-    );
-
     // Collectibles — 3 entries per row
     let row1 = format!(
         "Cap:{} Pdr:{} .31:{}",
@@ -882,9 +831,9 @@ fn render_stats_column(
         ".58:{} .577:{} .69:{}",
         collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69,
     );
-    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[5]);
-    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[6]);
-    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[7]);
+    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[3]);
+    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[4]);
+    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[5]);
 }
 
 /// Renders the cursor info panel as a two-column display.
@@ -1004,44 +953,25 @@ fn render_inventory_bar(
 
 /// Renders the command bar at the very bottom of the screen showing all key commands.
 fn render_command_bar(frame: &mut ratatui::Frame, area: Rect, input_state: &InputState) {
-    let spans = match input_state.mode {
-        InputMode::EscMenu => {
-            vec![
-                Span::from(" Q").bold().yellow(), Span::from(":Resume ").dark_gray(),
-                Span::from("R").bold().yellow(), Span::from(":Restart ").dark_gray(),
-            ]
-        }
-        InputMode::SaloonMenu => {
-            vec![
-                Span::from(" 1-3").bold().yellow(), Span::from(":Buy ").dark_gray(),
-                Span::from("Q").bold().yellow(), Span::from(":Leave ").dark_gray(),
-            ]
-        }
-        InputMode::InteractMenu => {
-            vec![
-                Span::from(" 1").bold().yellow(), Span::from(":Greet ").dark_gray(),
-                Span::from("2").bold().yellow(), Span::from(":Taunt ").dark_gray(),
-                Span::from("3").bold().yellow(), Span::from(":Threaten ").dark_gray(),
-                Span::from("4").bold().yellow(), Span::from(":Ask ").dark_gray(),
-                Span::from("Q").bold().yellow(), Span::from(":Leave ").dark_gray(),
-            ]
-        }
-        _ => {
-            vec![
-                Span::from(" WASD").bold().yellow(), Span::from(":Move ").dark_gray(),
-                Span::from("IJKL").bold().yellow(), Span::from(":Cursor ").dark_gray(),
-                Span::from("G").bold().yellow(), Span::from(":Punch ").dark_gray(),
-                Span::from("F").bold().yellow(), Span::from(":Kick ").dark_gray(),
-                Span::from("X").bold().yellow(), Span::from(":Talk ").dark_gray(),
-                Span::from("H").bold().yellow(), Span::from(":Hide ").dark_gray(),
-                Span::from("R").bold().yellow(), Span::from(":Reload ").dark_gray(),
-                Span::from("E").bold().yellow(), Span::from(":Pickup ").dark_gray(),
-                Span::from("Z").bold().yellow(), Span::from(":Dive ").dark_gray(),
-                Span::from("T").bold().yellow(), Span::from(":Wait ").dark_gray(),
-                Span::from("Q").bold().yellow(), Span::from(":Menu ").dark_gray(),
-                Span::from("?").bold().yellow(), Span::from(":Help ").dark_gray(),
-            ]
-        }
+    let spans = if input_state.mode == InputMode::EscMenu {
+        vec![
+            Span::from(" Q").bold().yellow(), Span::from(":Resume ").dark_gray(),
+            Span::from("R").bold().yellow(), Span::from(":Restart ").dark_gray(),
+        ]
+    } else {
+        vec![
+            Span::from(" WASD").bold().yellow(), Span::from(":Move ").dark_gray(),
+            Span::from("IJKL").bold().yellow(), Span::from(":Cursor ").dark_gray(),
+            Span::from("G").bold().yellow(), Span::from(":Punch ").dark_gray(),
+            Span::from("F").bold().yellow(), Span::from(":Kick ").dark_gray(),
+            Span::from("C").bold().yellow(), Span::from(":Center ").dark_gray(),
+            Span::from("V").bold().yellow(), Span::from(":Autoaim ").dark_gray(),
+            Span::from("R").bold().yellow(), Span::from(":Reload ").dark_gray(),
+            Span::from("E").bold().yellow(), Span::from(":Pickup ").dark_gray(),
+            Span::from("Z").bold().yellow(), Span::from(":Dive ").dark_gray(),
+            Span::from("T").bold().yellow(), Span::from(":Wait ").dark_gray(),
+            Span::from("Q").bold().yellow(), Span::from(":Menu").dark_gray(),
+        ]
     };
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).on_black(), area);
@@ -1074,14 +1004,15 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
         Line::from("  -*-  DEAD MAN'S HAND  -*-").bold().yellow(),
         Line::from(""),
         Line::from("  Welcome to a peaceful frontier town.").white(),
-        Line::from("  Walk around, talk to folks (X), visit").white(),
-        Line::from("  the saloon for a drink. Hide in barrels").white(),
-        Line::from("  (H) or start fires with matches.").white(),
+        Line::from("  Walk around, talk to folks, visit the").white(),
+        Line::from("  saloon for a drink. Everyone minds").white(),
+        Line::from("  their own business... unless you start").white(),
+        Line::from("  trouble.").white(),
         Line::from(""),
         Line::from("  Punch (G) or Kick (F) someone to start").yellow(),
-        Line::from("  a brawl! Taunt (X→2) to provoke. Cause").yellow(),
-        Line::from("  too much chaos and sheriffs come for").yellow(),
-        Line::from("  you. Hide (H) to break pursuit.").yellow(),
+        Line::from("  a brawl! Their faction will aggro.").yellow(),
+        Line::from("  Cause too much chaos and sheriffs will").yellow(),
+        Line::from("  come after you (star level).").yellow(),
         Line::from(""),
     ];
     for binding in KEYBINDINGS {
@@ -1104,191 +1035,6 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
             .wrap(Wrap { trim: false })
             .on_black(),
         welcome_area,
-    );
-}
-
-/// Renders a detailed, scrollable help screen covering all controls, game
-/// mechanics, factions, and context.  Toggled by pressing `?`.
-fn render_help_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
-    // Use almost the full game area so the player can read everything.
-    let w = game_area.width.saturating_sub(4).min(78);
-    let h = game_area.height.saturating_sub(2);
-
-    if w < 30 || h < 15 {
-        return;
-    }
-
-    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
-    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
-    let help_area = Rect { x: cx, y: cy, width: w, height: h };
-
-    frame.render_widget(Clear, help_area);
-
-    let mut lines: Vec<Line> = Vec::with_capacity(120);
-
-    // ── Title ──
-    lines.push(Line::from(""));
-    lines.push(Line::from("  ═══════════  DEAD MAN'S HAND — HELP  ═══════════").bold().yellow());
-    lines.push(Line::from(""));
-
-    // ── Overview ──
-    lines.push(Line::from("  OVERVIEW").bold().white());
-    lines.push(Line::from("  A sandbox roguelike set in an 1850s frontier town.").dark_gray());
-    lines.push(Line::from("  Walk the dusty streets, talk to townsfolk, drink at").dark_gray());
-    lines.push(Line::from("  the saloon, and try not to get killed. Every action").dark_gray());
-    lines.push(Line::from("  has consequences — provoke too many people and the").dark_gray());
-    lines.push(Line::from("  sheriff comes for you. Escape through the town gate").dark_gray());
-    lines.push(Line::from("  to win, or die trying.").dark_gray());
-    lines.push(Line::from(""));
-
-    // ── Movement ──
-    lines.push(Line::from("  MOVEMENT & NAVIGATION").bold().white());
-    lines.push(Line::from(vec![
-        Span::from("  WASD / Arrows").bold().yellow(),
-        Span::from("  Move one tile (costs 3 ticks)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  IJKL         ").bold().yellow(),
-        Span::from("  Move cursor / aim (costs 1 tick)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  C            ").bold().yellow(),
-        Span::from("  Center cursor on player").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  V            ").bold().yellow(),
-        Span::from("  Auto-aim at nearest enemy").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  T            ").bold().yellow(),
-        Span::from("  Wait / skip turn (1 tick)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  Z            ").bold().yellow(),
-        Span::from("  Dive 3 tiles toward cursor (20 stamina)").dark_gray(),
-    ]));
-    lines.push(Line::from(""));
-
-    // ── Combat ──
-    lines.push(Line::from("  COMBAT").bold().white());
-    lines.push(Line::from(vec![
-        Span::from("  G            ").bold().yellow(),
-        Span::from("  Punch in cursor direction (2 ticks)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  F            ").bold().yellow(),
-        Span::from("  Roundhouse kick all adjacent foes (2 ticks)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  R            ").bold().yellow(),
-        Span::from("  Reload gun (needs 1 bullet + 1 cap + 1 powder, 6 ticks)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  1-6          ").bold().yellow(),
-        Span::from("  Fire / use inventory slot (2 ticks)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  7            ").bold().yellow(),
-        Span::from("  Dual wield — fire two revolvers at once (15 stamina)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  8            ").bold().yellow(),
-        Span::from("  Fan shot — empty all rounds fast (20 stamina)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  9            ").bold().yellow(),
-        Span::from("  Throw sand — create blinding cloud (5 stamina)").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  0            ").bold().yellow(),
-        Span::from("  Throw random inventory item (10 stamina)").dark_gray(),
-    ]));
-    lines.push(Line::from(""));
-
-    // ── Interaction ──
-    lines.push(Line::from("  INTERACTION & STEALTH").bold().white());
-    lines.push(Line::from(vec![
-        Span::from("  X            ").bold().yellow(),
-        Span::from("  Talk to adjacent NPC / buy at saloon bar").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  E            ").bold().yellow(),
-        Span::from("  Pick up item at your feet").dark_gray(),
-    ]));
-    lines.push(Line::from(vec![
-        Span::from("  H            ").bold().yellow(),
-        Span::from("  Hide in barrel / hay / outhouse / wardrobe").dark_gray(),
-    ]));
-    lines.push(Line::from("  When talking (X), choose: 1=Greet 2=Taunt 3=Threaten 4=Ask".dark_gray()));
-    lines.push(Line::from("  Greet calms NPCs, taunts/threats raise hostility.".dark_gray()));
-    lines.push(Line::from("  If hostility crosses their mood threshold, they fight!".dark_gray()));
-    lines.push(Line::from(""));
-
-    // ── Sandbox systems ──
-    lines.push(Line::from("  SANDBOX SYSTEMS").bold().white());
-    lines.push(Line::from("  Wanted Level (★)".bold().yellow()));
-    lines.push(Line::from("    Crimes are witnessed within 10 tiles. Each crime adds".dark_gray()));
-    lines.push(Line::from("    stars: Assault +1, Murder +2, Arson +1, Shooting +1.".dark_gray()));
-    lines.push(Line::from("    At 1★ the sheriff investigates. At 2★+ deputies join.".dark_gray()));
-    lines.push(Line::from("    At 3★+ a posse spawns at the town edge.".dark_gray()));
-    lines.push(Line::from("    Stars decay after 30 unseen turns. Hiding speeds decay.".dark_gray()));
-    lines.push(Line::from("    NPCs who witnessed your crimes remember you even after".dark_gray()));
-    lines.push(Line::from("    stars decay — they'll be nervous and back away.".dark_gray()));
-    lines.push(Line::from(""));
-    lines.push(Line::from("  Brawls".bold().yellow()));
-    lines.push(Line::from("    Punch or kick someone to start a non-lethal fistfight.".dark_gray()));
-    lines.push(Line::from("    Nearby same-faction NPCs may join in. Drawing a weapon".dark_gray()));
-    lines.push(Line::from("    during a brawl escalates to lethal combat.".dark_gray()));
-    lines.push(Line::from(""));
-    lines.push(Line::from("  NPC Moods".bold().yellow()));
-    lines.push(Line::from("    Calm → Nervous → Angry. Drunk NPCs stagger and have".dark_gray()));
-    lines.push(Line::from("    low provocation thresholds. Civilians flee from fire,".dark_gray()));
-    lines.push(Line::from("    brawls, and high-wanted players. The sheriff warns".dark_gray()));
-    lines.push(Line::from("    before shooting and tries to cut off escape routes.".dark_gray()));
-    lines.push(Line::from(""));
-    lines.push(Line::from("  Saloon".bold().yellow()));
-    lines.push(Line::from("    Walk to the bar and press X to open the buy menu.".dark_gray()));
-    lines.push(Line::from("    Whiskey makes you drunk (stagger + low accuracy).".dark_gray()));
-    lines.push(Line::from("    Food heals HP. Information reveals rumors.".dark_gray()));
-    lines.push(Line::from("    Your gold total is shown in the stats panel.".dark_gray()));
-    lines.push(Line::from(""));
-
-    // ── Factions ──
-    lines.push(Line::from("  FACTIONS").bold().white());
-    lines.push(Line::from("    Civilians  — Townsfolk. Flee from danger.".dark_gray()));
-    lines.push(Line::from("    Outlaws    — Red-orange @. Bandits outside town.".dark_gray()));
-    lines.push(Line::from("    Lawmen     — Blue @. Patrol and defend the town.".dark_gray()));
-    lines.push(Line::from("    Vaqueros   — Green @. Mexican cowboys.".dark_gray()));
-    lines.push(Line::from("    Indians    — Brown @. Territorial with bows.".dark_gray()));
-    lines.push(Line::from("    Sheriff    — Gold @. Responds to crime, warns first.".dark_gray()));
-    lines.push(Line::from("    Wildlife   — Lowercase letters. Coyotes and snakes.".dark_gray()));
-    lines.push(Line::from(""));
-
-    // ── UI guide ──
-    lines.push(Line::from("  UI GUIDE").bold().white());
-    lines.push(Line::from("    Bottom-left: HP (red) and Stamina (blue) bars.".dark_gray()));
-    lines.push(Line::from("    Bottom-left: Wanted stars (★) and Gold ($).".dark_gray()));
-    lines.push(Line::from("    Bottom-center: Combat log — recent events.".dark_gray()));
-    lines.push(Line::from("    Bottom-right: Cursor tile info.".dark_gray()));
-    lines.push(Line::from("    Very bottom: Inventory slots (1-6).".dark_gray()));
-    lines.push(Line::from("    Blood on ground decays over 20 turns.".dark_gray()));
-    lines.push(Line::from("    '!' marks = gunshot sounds outside your view.".dark_gray()));
-    lines.push(Line::from(""));
-
-    // ── Footer ──
-    lines.push(Line::from("  Press ? to close this screen.").bold().dark_gray());
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Help — Press ? to close ")
-                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
-            )
-            .wrap(Wrap { trim: false })
-            .on_black(),
-        help_area,
     );
 }
 
@@ -1327,92 +1073,6 @@ fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Menu ")
-                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
-            )
-            .wrap(Wrap { trim: false })
-            .on_black(),
-        menu_area,
-    );
-}
-
-/// Renders the saloon buy menu overlay.
-fn render_saloon_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect, gold: &Gold) {
-    let w = 44u16.min(game_area.width.saturating_sub(4));
-    let h = (SALOON_MENU.len() as u16 + 7).min(game_area.height.saturating_sub(4));
-
-    if w < 20 || h < 5 {
-        return;
-    }
-
-    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
-    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
-    let menu_area = Rect { x: cx, y: cy, width: w, height: h };
-
-    frame.render_widget(Clear, menu_area);
-
-    let mut lines = vec![
-        Line::from(""),
-        Line::from("  SALOON — What'll it be?").bold().yellow(),
-        Line::from(format!("  Your gold: ${}", gold.0)).white(),
-        Line::from(""),
-    ];
-    for (i, item) in SALOON_MENU.iter().enumerate() {
-        lines.push(Line::from(vec![
-            Span::from(format!("  {}  ", i + 1)).bold().yellow(),
-            Span::from(format!("{:<20} ${}", item.name, item.price)).white(),
-            Span::from(format!("  {}", item.description)).dark_gray(),
-        ]));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from("  Q — Leave").dark_gray());
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Saloon ")
-                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
-            )
-            .wrap(Wrap { trim: false })
-            .on_black(),
-        menu_area,
-    );
-}
-
-/// Renders the NPC interaction menu overlay.
-fn render_interact_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
-    let w = 40u16.min(game_area.width.saturating_sub(4));
-    let h = 10u16.min(game_area.height.saturating_sub(4));
-
-    if w < 20 || h < 5 {
-        return;
-    }
-
-    let cx = game_area.x + (game_area.width.saturating_sub(w)) / 2;
-    let cy = game_area.y + (game_area.height.saturating_sub(h)) / 2;
-    let menu_area = Rect { x: cx, y: cy, width: w, height: h };
-
-    frame.render_widget(Clear, menu_area);
-
-    let lines = vec![
-        Line::from(""),
-        Line::from("  How do you address them?").bold().yellow(),
-        Line::from(""),
-        Line::from(vec![Span::from("  1").bold().yellow(), Span::from("  Greet (friendly)").white()]),
-        Line::from(vec![Span::from("  2").bold().yellow(), Span::from("  Taunt (hostile)").white()]),
-        Line::from(vec![Span::from("  3").bold().yellow(), Span::from("  Threaten (very hostile)").white()]),
-        Line::from(vec![Span::from("  4").bold().yellow(), Span::from("  Ask about town").white()]),
-        Line::from(""),
-        Line::from("  Q — Walk away").dark_gray(),
-    ];
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Talk ")
                     .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
             )
             .wrap(Wrap { trim: false })

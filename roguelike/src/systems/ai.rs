@@ -3,10 +3,10 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, InBrawl, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{CombatLog, GameMapResource, PlayerReputation, SpatialIndex, StarLevel, TurnCounter};
+use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
 use crate::typeenums::Props;
 
 // ───────────────────── Influence Map / Tile Cost ───────────────────
@@ -420,29 +420,6 @@ const LOOK_AROUND_DICE_RANGE: u32 = 20;
 /// Number of turns memory persists after losing sight of a target.
 const MEMORY_DURATION: u32 = 40;
 
-// ─────────── Civilian & Sheriff Reaction Constants ─────────────
-
-/// Range within which civilians detect nearby fire and flee.
-const CIVILIAN_FIRE_FLEE_RANGE: i32 = 8;
-
-/// Range within which civilians back away from a notorious/feared player.
-const CIVILIAN_REPUTATION_RANGE: i32 = 6;
-
-/// Range within which civilians scatter from a nearby brawl.
-const CIVILIAN_BRAWL_SCATTER_RANGE: i32 = 8;
-
-/// Sheriff warning distance: sheriff shouts a warning when this close
-/// before opening fire (only on first approach).
-const SHERIFF_WARNING_RANGE: i32 = 8;
-
-/// Sheriff cornering: every Nth chase step, the sheriff attempts to flank
-/// by adding a perpendicular offset to the goal, cutting off escape routes.
-const SHERIFF_FLANK_INTERVAL: u32 = 2;
-
-/// Daily routine: turns per "hour" of in-game time.  With 24 hours in a day,
-/// each day lasts 2400 turns (~40 real minutes at brisk play).
-const TURNS_PER_HOUR: u32 = 100;
-
 // ─────────────────────── AI Decision Helpers ───────────────────────
 
 /// Returns `true` if the NPC has a loaded gun in inventory.
@@ -568,36 +545,6 @@ fn kite_direction(
     }
 }
 
-/// Returns the position of the nearest fire tile within `range` of `pos`,
-/// or `None` if no fire is nearby.
-fn nearest_fire(pos: GridVec, range: i32, game_map: &GameMapResource) -> Option<GridVec> {
-    let mut best = None;
-    let mut best_dist = i32::MAX;
-    for dy in -range..=range {
-        for dx in -range..=range {
-            let candidate = GridVec::new(pos.x + dx, pos.y + dy);
-            if let Some(voxel) = game_map.0.get_voxel_at(&candidate) {
-                if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire)) {
-                    let d = pos.chebyshev_distance(candidate);
-                    if d < best_dist {
-                        best_dist = d;
-                        best = Some(candidate);
-                    }
-                }
-            }
-        }
-    }
-    best
-}
-
-/// Returns the current "hour" (0–23) derived from the turn counter.
-/// Used for simple NPC daily routines — e.g., civilians go to the saloon
-/// in the evening, patrol the streets by day.
-fn current_hour(turn: u32) -> u32 {
-    // Day starts at hour 6 (turn 0 = 6 AM).
-    ((turn / TURNS_PER_HOUR) + 6) % 24
-}
-
 /// AI system: runs during `WorldTurn` for every entity with an `AiState`.
 ///
 /// **Architecture**: NPC AI is a decision layer on top of player capabilities.
@@ -628,9 +575,10 @@ pub fn ai_system(
     player_query: Query<(Entity, &Position, &Health), With<Player>>,
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     floor_items: Query<(Entity, &Position), With<Item>>,
-    (hostile_positions, brawl_query): (Query<(Entity, &Position), With<Hostile>>, Query<&Position, With<InBrawl>>),
-    (game_map, spatial, turn_counter): (Res<GameMapResource>, Res<SpatialIndex>, Res<TurnCounter>),
-    (star_level, reputation, mut combat_log): (Res<StarLevel>, Res<PlayerReputation>, ResMut<CombatLog>),
+    hostile_positions: Query<(Entity, &Position), With<Hostile>>,
+    game_map: Res<GameMapResource>,
+    spatial: Res<SpatialIndex>,
+    turn_counter: Res<TurnCounter>,
     blockers: Query<(), With<BlocksMovement>>,
     mut item_kinds: Query<&mut ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
@@ -871,72 +819,6 @@ pub fn ai_system(
             }
         }
 
-        // ── Civilian & non-hostile NPC environmental reactions ─────
-        // Non-hostile civilians (and Lawmen who aren't in combat) react to
-        // their environment: flee from fire, scatter from brawls, back away
-        // from notorious/feared players.
-        if !npc_is_hostile && matches!(my_faction, Some(Faction::Civilians) | Some(Faction::Lawmen) | None) {
-            let mut reacted = false;
-
-            // 1. Flee from nearby fire
-            if let Some(fire_pos) = nearest_fire(my_pos, CIVILIAN_FIRE_FLEE_RANGE, &game_map) {
-                if let Some(dir) = flee_direction(my_pos, fire_pos, entity, &game_map, &spatial, &blockers) {
-                    move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
-                    update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
-                    reacted = true;
-                }
-            }
-
-            // 2. Scatter from nearby brawl (only Civilians — Lawmen observe)
-            if !reacted && matches!(my_faction, Some(Faction::Civilians)) {
-                let brawl_pos: Option<GridVec> = brawl_query.iter()
-                    .map(|bp| bp.as_grid_vec())
-                    .filter(|bp| my_pos.chebyshev_distance(*bp) <= CIVILIAN_BRAWL_SCATTER_RANGE)
-                    .min_by_key(|bp| my_pos.chebyshev_distance(*bp));
-                if let Some(bp) = brawl_pos {
-                    if let Some(dir) = flee_direction(my_pos, bp, entity, &game_map, &spatial, &blockers) {
-                        move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
-                        update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
-                        reacted = true;
-                    }
-                }
-            }
-
-            // 3. Back away from a notorious/feared player (Civilians only)
-            if !reacted && matches!(my_faction, Some(Faction::Civilians)) {
-                if let Some(pv) = player_vec {
-                    let dist_to_player = my_pos.chebyshev_distance(pv);
-                    let can_see_player = viewshed.as_ref()
-                        .is_some_and(|vs| vs.visible_tiles.contains(&pv));
-                    if can_see_player && dist_to_player <= CIVILIAN_REPUTATION_RANGE {
-                        // Feared: back away quickly
-                        if reputation.is_feared() || star_level.level >= 3 {
-                            if let Some(dir) = flee_direction(my_pos, pv, entity, &game_map, &spatial, &blockers) {
-                                move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
-                                update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
-                                reacted = true;
-                            }
-                        }
-                        // Notorious: keep distance (back away 1 step if too close)
-                        else if reputation.is_notorious() || star_level.level >= 1 {
-                            if dist_to_player <= 3 {
-                                if let Some(dir) = flee_direction(my_pos, pv, entity, &game_map, &spatial, &blockers) {
-                                    move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
-                                    update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
-                                    reacted = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if reacted {
-                energy.spend_action();
-                continue;
-            }
-        }
-
         // Check if NPC should flee
         if should_flee(&health) {
             if !matches!(*ai, AiState::Fleeing) {
@@ -1109,9 +991,6 @@ pub fn ai_system(
                 }
 
                 // Faction-specific patrol direction (preferred heading).
-                // Civilians follow simple daily routines based on time-of-day.
-                // Sheriff circles the town center methodically.
-                let hour = current_hour(turn_counter.0);
                 let patrol_heading: Option<GridVec> = match my_faction {
                     Some(Faction::Lawmen) => {
                         if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
@@ -1121,59 +1000,6 @@ pub fn ai_system(
                             let rotated = offset.rotate_45_cw();
                             let target = origin + rotated;
                             Some((target - my_pos).king_step())
-                        }
-                    }
-                    Some(Faction::Sheriff) => {
-                        // Sheriff patrols in a wide circle around origin,
-                        // covering more ground than regular lawmen.
-                        if my_pos.chebyshev_distance(origin) > PATROL_RADIUS + 4 {
-                            Some((origin - my_pos).king_step())
-                        } else {
-                            let offset = my_pos - origin;
-                            let rotated = offset.rotate_45_cw();
-                            let target = origin + rotated;
-                            Some((target - my_pos).king_step())
-                        }
-                    }
-                    Some(Faction::Civilians) => {
-                        // Simple daily routine:
-                        //   Morning (6-10): wander near home
-                        //   Midday (10-16): walk around town (expand patrol radius)
-                        //   Evening (16-22): drift toward origin (home / saloon area)
-                        //   Night (22-6): stay close to home, pause often
-                        let civ_dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9));
-                        let random_wander = || {
-                            let dir_idx = civ_dir_seed.unsigned_abs() as usize % 8;
-                            Some(GridVec::DIRECTIONS_8[dir_idx])
-                        };
-                        if hour >= 22 || hour < 6 {
-                            // Night: stay close to home
-                            if my_pos.chebyshev_distance(origin) > 4 {
-                                Some((origin - my_pos).king_step())
-                            } else {
-                                None // pause — civilian is "sleeping"
-                            }
-                        } else if hour >= 16 {
-                            // Evening: drift toward home
-                            if my_pos.chebyshev_distance(origin) > 6 {
-                                Some((origin - my_pos).king_step())
-                            } else {
-                                random_wander()
-                            }
-                        } else if hour >= 10 {
-                            // Midday: explore further from home
-                            if my_pos.chebyshev_distance(origin) > PATROL_RADIUS + 6 {
-                                Some((origin - my_pos).king_step())
-                            } else {
-                                random_wander()
-                            }
-                        } else {
-                            // Morning: wander near home
-                            if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
-                                Some((origin - my_pos).king_step())
-                            } else {
-                                random_wander()
-                            }
                         }
                     }
                     Some(Faction::Wildlife) => {
@@ -1322,38 +1148,6 @@ pub fn ai_system(
                 }
 
                 let dist = my_pos.chebyshev_distance(target_vec);
-
-                // ── Sheriff-specific: warn before shooting ─────────
-                // On the sheriff's first approach (when within warning range
-                // and before firing), shout a warning. This gives the player
-                // a turn to surrender or flee. Subsequent turns fire normally.
-                if matches!(my_faction, Some(Faction::Sheriff))
-                    && dist <= SHERIFF_WARNING_RANGE
-                    && dist > 2
-                {
-                    // Only warn once per chase (use memory turn as flag)
-                    let warned_recently = ai_memory.as_ref()
-                        .is_some_and(|m| turn_counter.0.saturating_sub(m.last_seen_turn) < 2);
-                    if !warned_recently {
-                        let shout_hash = (my_pos.x.wrapping_mul(31) ^ turn_counter.0 as i32) as u32;
-                        let shouts = [
-                            "Stop right there, criminal scum!",
-                            "Hands where I can see 'em!",
-                            "This is your only warning!",
-                            "Drop your weapons, outlaw!",
-                        ];
-                        let shout = shouts[(shout_hash as usize) % shouts.len()];
-                        combat_log.push_at(
-                            shout.to_string(),
-                            my_pos,
-                        );
-                    }
-                }
-
-                // ── Sheriff-specific: flanking movement ────────────
-                // Every SHERIFF_FLANK_INTERVAL steps, the sheriff adds a
-                // perpendicular offset to cut off the player's escape route.
-                let is_sheriff = matches!(my_faction, Some(Faction::Sheriff));
 
                 // ── PRIORITY 1: Ranged attack — fire guns when enemy is in sights ──
                 // NPCs prioritize shooting at enemies when they have a loaded gun
@@ -1572,14 +1366,9 @@ pub fn ai_system(
                 // The influence map naturally routes the NPC through cover
                 // and around hazards.  Occasionally attempt to flank by
                 // adding a perpendicular offset to the goal.
-                //
-                // Sheriff-specific: flank more aggressively to cut off
-                // escape routes (every SHERIFF_FLANK_INTERVAL steps instead
-                // of every 3rd).
                 let flank_hash = (my_pos.x.wrapping_mul(31) ^ my_pos.y.wrapping_mul(17))
                     .wrapping_add(turn_counter.0 as i32) as u32;
-                let flank_interval = if is_sheriff { SHERIFF_FLANK_INTERVAL } else { 3 };
-                let flank_goal = if dist > 3 && flank_hash.is_multiple_of(flank_interval) {
+                let flank_goal = if dist > 3 && flank_hash.is_multiple_of(3) {
                     let perp = (target_vec - my_pos).rotate_90_cw().king_step();
                     let candidate = target_vec + perp;
                     if game_map.0.is_passable(&candidate) { candidate } else { target_vec }

@@ -88,7 +88,7 @@ pub fn draw_system(
     (turn_counter, kill_count, blood_map): (Res<TurnCounter>, Res<KillCount>, Res<BloodMap>),
     spell_particles: Res<SpellParticles>,
     input_state: Res<InputState>,
-    (cursor, collectibles, star_level, gold): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>, Res<Gold>),
+    (cursor, collectibles, star_level, gold, reputation): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>, Res<Gold>, Res<crate::resources::PlayerReputation>),
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -616,6 +616,7 @@ pub fn draw_system(
             &collectibles,
             &star_level,
             &gold,
+            &reputation,
             // cursor info
             &cursor_ground,
             &cursor_prop,
@@ -721,6 +722,7 @@ fn render_bottom_panel(
     collectibles: &Collectibles,
     star_level: &crate::resources::StarLevel,
     gold: &Gold,
+    reputation: &crate::resources::PlayerReputation,
     // Cursor info
     cursor_ground: &str,
     cursor_prop: &str,
@@ -747,7 +749,7 @@ fn render_bottom_panel(
     let cursor_info_area = horiz_chunks[2];
 
     // ── Stats Column (left) ─────────────────────────────────────
-    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles, star_level, gold);
+    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles, star_level, gold, reputation);
 
     // ── Central Log (middle) ────────────────────────────────────
     let log_height = log_area.height.saturating_sub(2) as usize;
@@ -783,6 +785,7 @@ fn render_stats_column(
     collectibles: &Collectibles,
     star_level: &crate::resources::StarLevel,
     gold: &Gold,
+    reputation: &crate::resources::PlayerReputation,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -791,6 +794,7 @@ fn render_stats_column(
             Constraint::Length(1), // Stamina gauge
             Constraint::Length(1), // Star level
             Constraint::Length(1), // Gold
+            Constraint::Length(1), // Reputation
             Constraint::Length(1), // Collectibles row 1
             Constraint::Length(1), // Collectibles row 2
             Constraint::Length(1), // Collectibles row 3
@@ -846,6 +850,25 @@ fn render_stats_column(
         chunks[3],
     );
 
+    // Reputation
+    let rep_text = if reputation.is_feared() {
+        "Rep: FEARED"
+    } else if reputation.is_notorious() {
+        "Rep: Notorious"
+    } else if reputation.infamy > 0 {
+        "Rep: Whispered"
+    } else {
+        "Rep: Unknown"
+    };
+    let rep_color = if reputation.is_feared() { ratatui::style::Color::Red }
+        else if reputation.is_notorious() { ratatui::style::Color::Rgb(255, 165, 0) }
+        else if reputation.infamy > 0 { ratatui::style::Color::Yellow }
+        else { ratatui::style::Color::DarkGray };
+    frame.render_widget(
+        Paragraph::new(Line::from(rep_text).fg(rep_color)),
+        chunks[4],
+    );
+
     // Collectibles — 3 entries per row
     let row1 = format!(
         "Cap:{} Pdr:{} .31:{}",
@@ -859,9 +882,9 @@ fn render_stats_column(
         ".58:{} .577:{} .69:{}",
         collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69,
     );
-    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[4]);
-    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[5]);
-    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[6]);
+    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[5]);
+    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[6]);
+    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[7]);
 }
 
 /// Renders the cursor info panel as a two-column display.

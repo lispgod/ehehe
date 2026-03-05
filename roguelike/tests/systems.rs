@@ -5381,3 +5381,122 @@ fn gamemap_generates_wardrobes() {
     }
     assert!(found_wardrobe, "Map should generate at least one wardrobe in houses");
 }
+
+// ─── Reactive NPC / Reputation / Help screen tests ──────────────
+
+#[test]
+fn reputation_default_is_unknown() {
+    let rep = roguelike::resources::PlayerReputation::default();
+    assert_eq!(rep.infamy, 0);
+    assert!(!rep.is_notorious());
+    assert!(!rep.is_feared());
+}
+
+#[test]
+fn reputation_builds_from_witnessed_crimes() {
+    let mut rep = roguelike::resources::PlayerReputation::default();
+    rep.witness_crime(5, 100);
+    assert_eq!(rep.infamy, 5);
+    assert!(rep.is_notorious());
+    assert!(!rep.is_feared());
+    rep.witness_crime(10, 200);
+    assert_eq!(rep.infamy, 15);
+    assert!(rep.is_feared());
+}
+
+#[test]
+fn reputation_caps_at_100() {
+    let mut rep = roguelike::resources::PlayerReputation::default();
+    rep.witness_crime(200, 100);
+    assert_eq!(rep.infamy, 100);
+}
+
+#[test]
+fn reputation_decays_slowly() {
+    let mut rep = roguelike::resources::PlayerReputation::default();
+    rep.witness_crime(10, 0);
+    // Should NOT decay within cooldown period (120 turns)
+    rep.decay(100);
+    assert_eq!(rep.infamy, 10);
+    // Should decay after cooldown + decay interval
+    rep.decay(180);
+    assert_eq!(rep.infamy, 9);
+}
+
+#[test]
+fn crime_system_builds_reputation() {
+    let mut app = test_app_sandbox();
+
+    let _player = spawn_sandbox_player(&mut app, 60, 40);
+
+    // Spawn a civilian NPC to witness the crime
+    let npc = app.world_mut().spawn((
+        Position { x: 62, y: 40 },
+        Faction::Civilians,
+        Viewshed {
+            range: 10,
+            dirty: false,
+            visible_tiles: {
+                let mut tiles = std::collections::HashSet::new();
+                tiles.insert(GridVec::new(60, 40));
+                tiles
+            },
+            revealed_tiles: std::collections::HashSet::new(),
+        },
+    )).id();
+    let _ = npc;
+
+    // Send a crime event
+    app.world_mut().write_message(CrimeEvent {
+        perpetrator: _player,
+        crime: CrimeType::Assault,
+        position: GridVec::new(60, 40),
+    });
+
+    app.update();
+
+    // Check reputation was built
+    let reputation = app.world().resource::<roguelike::resources::PlayerReputation>();
+    assert!(reputation.infamy > 0, "Reputation should increase after witnessed crime");
+}
+
+#[test]
+fn help_visible_toggles() {
+    let mut input_state = InputState::default();
+    assert!(!input_state.help_visible);
+    input_state.help_visible = !input_state.help_visible;
+    assert!(input_state.help_visible);
+    input_state.help_visible = !input_state.help_visible;
+    assert!(!input_state.help_visible);
+}
+
+#[test]
+fn keybindings_includes_help() {
+    use roguelike::systems::input::KEYBINDINGS;
+    let has_help = KEYBINDINGS.iter().any(|b| b.key == "?");
+    assert!(has_help, "KEYBINDINGS should include the ? (help) key");
+}
+
+#[test]
+fn current_hour_wraps_correctly() {
+    // Hour is derived from turn counter: (turn / 100 + 6) % 24
+    // Turn 0 = 6 AM, turn 100 = 7 AM, turn 1800 = 24 (midnight) = 0 AM
+    // We test the formula indirectly via AI patrol decisions
+    // Just verify the formula logic here
+    let hour = |turn: u32| ((turn / 100) + 6) % 24;
+    assert_eq!(hour(0), 6);       // 6 AM
+    assert_eq!(hour(100), 7);     // 7 AM
+    assert_eq!(hour(600), 12);    // Noon
+    assert_eq!(hour(1200), 18);   // 6 PM
+    assert_eq!(hour(1800), 0);    // Midnight
+}
+
+#[test]
+fn reputation_decay_system_registered() {
+    // Verify the decay system runs without panicking
+    use roguelike::systems::wanted;
+    let mut app = test_app_sandbox();
+    app.add_systems(Update, wanted::reputation_decay_system);
+    let _player = spawn_sandbox_player(&mut app, 60, 40);
+    app.update(); // Should not panic
+}

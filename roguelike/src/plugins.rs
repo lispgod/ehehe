@@ -33,7 +33,7 @@ use crate::typedefs::{RatColor, SPAWN_POINT, SPAWN_X, SPAWN_Y};
 /// - **Action**: process player and NPC actions (movement, combat).
 /// - **Consequence**: recalculate derived state (FOV, camera).
 /// - **Render**: draw the frame (runs unconditionally).
-#[derive(SystemSet, Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum RoguelikeSet {
     /// Rebuild spatial index so later systems have O(1) position lookups.
     Index,
@@ -205,7 +205,7 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
                 Update,
-                turn::end_player_turn
+                turn::end_player_turn_system
                     .after(RoguelikeSet::Consequence)
                     .run_if(in_state(TurnState::PlayerTurn)),
             )
@@ -224,7 +224,7 @@ impl Plugin for WorldPlugin {
             )
             .add_systems(
                 Update,
-                turn::end_world_turn
+                turn::end_world_turn_system
                     .after(turn::star_level_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             );

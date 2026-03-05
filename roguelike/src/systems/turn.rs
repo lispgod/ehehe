@@ -22,14 +22,14 @@ const SAND_CLOUD_LIFETIME: u32 = 8;
 
 /// Advances the turn state from `PlayerTurn` → `WorldTurn`.
 /// Runs only during `TurnState::PlayerTurn` after all player-phase systems.
-pub fn end_player_turn(mut next_state: ResMut<NextState<TurnState>>) {
+pub fn end_player_turn_system(mut next_state: ResMut<NextState<TurnState>>) {
     next_state.set(TurnState::WorldTurn);
 }
 
 /// Advances the turn state from `WorldTurn` → `AwaitingInput`, or stays in
 /// `WorldTurn` if `ExtraWorldTicks` has remaining ticks (physical movement
 /// costs 2 ticks). Increments the turn counter and regenerates player stats.
-pub fn end_world_turn(
+pub fn end_world_turn_system(
     mut next_state: ResMut<NextState<TurnState>>,
     mut turn_counter: ResMut<TurnCounter>,
     mut player_query: Query<(&mut Stamina, &mut Health), (With<Player>, Without<Dead>)>,

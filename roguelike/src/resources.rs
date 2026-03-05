@@ -80,7 +80,7 @@ pub struct MapSeed(pub NoiseSeed);
 /// Top-level game state managed by Bevy's state machine.
 /// Systems that should only run during gameplay use
 /// `.run_if(in_state(GameState::Playing))`.
-#[derive(States, Clone, Copy, Default, Eq, PartialEq, Hash, Debug)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
 pub enum GameState {
     #[default]
     Playing,
@@ -142,7 +142,7 @@ pub enum InputMode {
 /// - **AwaitingInput** – input system is active; game waits for player action.
 /// - **PlayerTurn** – player's action is resolved (movement, combat).
 /// - **WorldTurn** – NPC AI and world-tick systems run; energy is accumulated.
-#[derive(SubStates, Clone, Copy, Default, Eq, PartialEq, Hash, Debug)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, SubStates)]
 #[source(GameState = GameState::Playing)]
 pub enum TurnState {
     #[default]
@@ -393,7 +393,7 @@ impl BloodMap {
 pub struct RestartRequested(pub bool);
 
 /// When true, the player is dead but watching the game continue.
-/// Set by pressing "." on the death screen. The end_world_turn system
+/// Set by pressing "." on the death screen. The `end_world_turn_system` system
 /// transitions back to Dead state after each spectated world turn.
 #[derive(Resource, Debug, Default)]
 pub struct SpectatingAfterDeath(pub bool);
@@ -422,7 +422,7 @@ pub struct PropHealth {
 
 /// Extra world ticks remaining after a player action. Physical movement sets
 /// this to 1 so that the world turn cycles twice (2 total ticks), making
-/// physical movement slower than cursor movement (1 tick). The `end_world_turn`
+/// physical movement slower than cursor movement (1 tick). The `end_world_turn_system`
 /// system decrements this and stays in `WorldTurn` while it is positive.
 #[derive(Resource, Debug, Default)]
 pub struct ExtraWorldTicks(pub i32);

@@ -325,7 +325,7 @@ new component combinations.
 | `SpatialIndex` | `HashMap<GridVec, Vec<Entity>>` rebuilt every tick by `spatial_index_system`. Provides O(1) entity-at-position queries. Exposes `add_entity`, `remove_entity`, and `move_entity` for atomic inline updates during movement. |
 | `MapSeed` | `u64` seed for deterministic procedural generation. Same seed always produces the same world; different seed gives a different world. |
 | `CombatLog` | Accumulator for combat messages displayed in the status bar. Cleared after each render frame. |
-| `TurnCounter` | `TurnCounter(u32)` — Counts elapsed world turns. Incremented by `end_world_turn`. Used by `wave_spawn_system` to determine when to spawn new waves. |
+| `TurnCounter` | `TurnCounter(u32)` — Counts elapsed world turns. Incremented by `end_world_turn_system`. Used by `wave_spawn_system` to determine when to spawn new waves. |
 | `KillCount` | `KillCount(u32)` — Tracks total hostile entities killed. Incremented by `death_system`. Displayed in the status bar as the player's score. |
 
 > **Design note:** Tiles are *not* individual entities. A 120×80 map would
@@ -419,7 +419,7 @@ produce bit-identical maps and monster placements.
 | `WorldTurn` | energy accumulation, AI, wave spawning, movement, combat | After AI + wave systems → `AwaitingInput` |
 
 ```text
-┌──────────────┐  key press  ┌────────────┐  end_player_turn  ┌───────────┐  end_world_turn
+┌──────────────┐  key press  ┌────────────┐  end_player_turn_system  ┌───────────┐  end_world_turn_system
 │AwaitingInput │────────────▶│ PlayerTurn │──────────────────▶│ WorldTurn │──────────────────▶ ↻
 └──────────────┘             └────────────┘                   └───────────┘
 ```
@@ -510,13 +510,13 @@ Update
   │   ├─ visibility_system       symmetric shadowcasting → updates visible_tiles + revealed_tiles
   │   └─ camera_follow_system    copies Position+CameraFollow → CameraPosition
   │
-  ├─ end_player_turn             (gated on TurnState::PlayerTurn) → transitions to WorldTurn
+  ├─ end_player_turn_system      (gated on TurnState::PlayerTurn) → transitions to WorldTurn
   │
   ├─ [WorldTurn phase]  (gated on TurnState::WorldTurn)
   │   ├─ energy_accumulate_system  energy += speed for all actors
   │   ├─ ai_system                 AI decisions → emits MoveIntent
   │   ├─ wave_spawn_system         spawns enemy waves every 5 turns based on TurnCounter
-  │   └─ end_world_turn           increments TurnCounter → transitions to AwaitingInput
+  │   └─ end_world_turn_system    increments TurnCounter → transitions to AwaitingInput
   │
   └─ [Render]
       └─ draw_system             renders map + entities + fog-of-war + health + combat log + status bar (turn count, kill count, spell keybind)
@@ -633,9 +633,9 @@ Update
 - Shows PAUSED overlay, health display, combat log, and status bar.
 - Status bar now shows: Turn count (`TurnCounter`), Kill count (`KillCount`), and spell keybind (F/Space: spell).
 
-#### `end_player_turn` / `end_world_turn`
+#### `end_player_turn_system` / `end_world_turn_system`
 - Advance the `TurnState` state machine after each phase completes.
-- `end_world_turn` also increments `TurnCounter` each world turn.
+- `end_world_turn_system` also increments `TurnCounter` each world turn.
 
 ---
 
@@ -698,7 +698,7 @@ roguelike/src/
 │   ├── projectile.rs    projectile_system + spawn_bullet + spawn_shrapnel
 │   ├── inventory.rs     pickup_system + use_item_system + drop_item_system + reload_system + auto_pickup_system + throw_system
 │   ├── wave_spawn.rs    wave_spawn_system (escalating enemy wave spawning from gate)
-│   ├── turn.rs          end_player_turn + end_world_turn (state transitions + TurnCounter + regen)
+│   ├── turn.rs          end_player_turn_system + end_world_turn_system (state transitions + TurnCounter + regen)
 │   └── render.rs        draw_system (three-state fog of war + health + combat log + turn/kill counters + inventory UI)
 ├── gamemap.rs           GameMap struct & noise-based procedural generation
 ├── voxel.rs             Voxel struct & rendering helpers
@@ -723,7 +723,7 @@ features slot in naturally:
 | ~~AoE spell system~~ | ✅ Implemented: `SpellCastIntent` → `spell_system` finds `Hostile` in Chebyshev radius → `DamageEvent` per target |
 | ~~Enemy wave spawning~~ | ✅ Implemented: `wave_spawn_system` spawns escalating waves every 5 turns near the player |
 | ~~Kill tracking / scoring~~ | ✅ Implemented: `KillCount` resource incremented by `death_system`, displayed in status bar |
-| ~~Turn counter~~ | ✅ Implemented: `TurnCounter` resource incremented by `end_world_turn`, displayed in status bar |
+| ~~Turn counter~~ | ✅ Implemented: `TurnCounter` resource incremented by `end_world_turn_system`, displayed in status bar |
 | ~~Ranged combat~~ | ✅ Implemented: `RangedAttackIntent` with Bresenham line trajectory, wall obstruction, and bullet penetration mechanics |
 | ~~Items & inventory~~ | ✅ Implemented: `Item` marker + `Inventory { items: Vec<Entity> }` + auto-pickup + drop + use + reload |
 | ~~Procedural generation~~ | ✅ Implemented via `noise.rs` (Squirrel3 hash + fBm). Insert a custom `MapSeed` resource before `RoguelikePlugin` for different worlds. |
@@ -767,7 +767,7 @@ AwaitingInput
 ### Scoring
 
 - `KillCount` tracks every hostile entity killed (incremented by `death_system`).
-- `TurnCounter` tracks elapsed world turns (incremented by `end_world_turn`).
+- `TurnCounter` tracks elapsed world turns (incremented by `end_world_turn_system`).
 - Both are displayed in the status bar, providing survival-style scoring feedback.
 
 ### Arena Design

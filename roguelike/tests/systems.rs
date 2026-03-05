@@ -2232,9 +2232,9 @@ fn a_star_at_goal_returns_none() {
 
 #[test]
 fn factions_are_hostile_outlaws_vs_lawmen() {
-    // Nobody is hostile by default anymore
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
+    // Gang warfare: Outlaws and Lawmen are hostile
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Lawmen));
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Outlaws));
 }
 
 #[test]
@@ -2257,20 +2257,64 @@ fn factions_same_faction_not_hostile() {
 
 #[test]
 fn factions_vaqueros_vs_outlaws() {
-    // Nobody is hostile by default anymore
-    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    // Gang warfare: Vaqueros and Outlaws are hostile
+    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Outlaws));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
 }
 
 #[test]
 fn factions_all_different_factions_are_hostile() {
-    // Nobody is hostile by default anymore — hostility is dynamic
-    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
-    assert!(!ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
+    // Gang warfare hostility matrix:
+    // - Combat factions fight each other (Lawmen vs Vaqueros = hostile)
+    // - Civilians are non-combatants (not hostile to anyone)
+    // - Wildlife is non-combatant (not hostile to anyone)
+    // - Law alliance: Lawmen + Sheriff + BountyHunter don't fight each other
+    assert!(ai::factions_are_hostile(Faction::Lawmen, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Lawmen));
     assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Civilians));
     assert!(!ai::factions_are_hostile(Faction::Civilians, Faction::Sheriff));
     assert!(!ai::factions_are_hostile(Faction::Indians, Faction::Wildlife));
-    assert!(!ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::Vaqueros));
+}
+
+#[test]
+fn factions_bounty_hunter_hostile_to_outlaws() {
+    assert!(ai::factions_are_hostile(Faction::BountyHunter, Faction::Outlaws));
+    assert!(ai::factions_are_hostile(Faction::Outlaws, Faction::BountyHunter));
+}
+
+#[test]
+fn factions_law_alliance_not_hostile() {
+    // Lawmen, Sheriff, and BountyHunter cooperate
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::Sheriff));
+    assert!(!ai::factions_are_hostile(Faction::Sheriff, Faction::Lawmen));
+    assert!(!ai::factions_are_hostile(Faction::Lawmen, Faction::BountyHunter));
+    assert!(!ai::factions_are_hostile(Faction::BountyHunter, Faction::Lawmen));
+    assert!(!ai::factions_are_hostile(Faction::Sheriff, Faction::BountyHunter));
+    assert!(!ai::factions_are_hostile(Faction::BountyHunter, Faction::Sheriff));
+}
+
+#[test]
+fn factions_bounty_hunter_hostile_to_non_law() {
+    assert!(ai::factions_are_hostile(Faction::BountyHunter, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::BountyHunter, Faction::Indians));
+    assert!(!ai::factions_are_hostile(Faction::BountyHunter, Faction::Wildlife));
+    assert!(!ai::factions_are_hostile(Faction::BountyHunter, Faction::Civilians));
+}
+
+#[test]
+fn factions_indians_vs_vaqueros_hostile() {
+    assert!(ai::factions_are_hostile(Faction::Indians, Faction::Vaqueros));
+    assert!(ai::factions_are_hostile(Faction::Vaqueros, Faction::Indians));
+}
+
+#[test]
+fn factions_is_allied_law_alliance() {
+    assert!(Faction::Lawmen.is_allied(&Faction::Sheriff));
+    assert!(Faction::Sheriff.is_allied(&Faction::BountyHunter));
+    assert!(Faction::Lawmen.is_allied(&Faction::BountyHunter));
+    assert!(!Faction::Outlaws.is_allied(&Faction::Lawmen));
+    assert!(!Faction::Outlaws.is_allied(&Faction::BountyHunter));
 }
 
 // ─── Energy / Speed Integration Tests ────────────────────────────

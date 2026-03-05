@@ -397,9 +397,24 @@ fn has_friendly_in_path(
 }
 
 /// Returns `true` if two factions are hostile to each other.
-/// Nobody is hostile by default — hostility is added dynamically when attacked.
-pub fn factions_are_hostile(_a: Faction, _b: Faction) -> bool {
-    false
+/// Gang warfare hostility matrix — most factions fight on sight.
+/// Same-faction entities are always allied. Wildlife and Civilians are
+/// non-combatants. Lawmen, Sheriff, and BountyHunter cooperate as a
+/// loose law-enforcement alliance.
+pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
+    if a == b { return false; }
+    use Faction::*;
+    match (a, b) {
+        // Wildlife and Civilians are non-combatants
+        (Wildlife, _) | (_, Wildlife) => false,
+        (Civilians, _) | (_, Civilians) => false,
+        // Law alliance: Lawmen + Sheriff + BountyHunter don't fight each other
+        (Lawmen, Sheriff) | (Sheriff, Lawmen) => false,
+        (Lawmen, BountyHunter) | (BountyHunter, Lawmen) => false,
+        (Sheriff, BountyHunter) | (BountyHunter, Sheriff) => false,
+        // Everyone else fights everyone else
+        _ => true,
+    }
 }
 
 /// Dodge probability: chance per turn that an NPC sidesteps nearby explosions.

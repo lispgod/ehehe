@@ -316,10 +316,17 @@ pub enum Faction {
 
 impl Faction {
     /// Returns `true` if this faction considers `other` an ally.
-    /// All factions are mutually hostile — no alliances of any kind.
-    /// Only members of the same faction are allied.
+    /// Same faction is always allied. The law alliance (Lawmen, Sheriff,
+    /// BountyHunter) also considers each other allies.
     pub fn is_allied(&self, other: &Faction) -> bool {
-        self == other
+        if self == other { return true; }
+        use Faction::*;
+        matches!(
+            (self, other),
+            (Lawmen, Sheriff) | (Sheriff, Lawmen)
+            | (Lawmen, BountyHunter) | (BountyHunter, Lawmen)
+            | (Sheriff, BountyHunter) | (BountyHunter, Sheriff)
+        )
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::components::{
@@ -44,11 +45,15 @@ pub enum RoguelikeSet {
     Render,
 }
 
-// ─────────────────────────── Plugin ────────────────────────────────
+// ─────────────────────────── Plugins ───────────────────────────────
+//
+// Following the Bevy plugin best practice (see `examples/app/plugin.rs`),
+// the game is split into domain-specific plugins. Each plugin owns the
+// systems for a single responsibility. `RoguelikePlugin` composes them
+// all together so `main.rs` stays minimal.
 
-/// Bevy plugin that registers all roguelike ECS systems, resources, and
-/// startup logic. Adding this plugin is the only step needed to wire up the
-/// game — `main.rs` stays minimal.
+/// Top-level Bevy plugin. Registers resources, messages, states, startup
+/// systems, and adds all domain sub-plugins.
 pub struct RoguelikePlugin;
 
 impl Plugin for RoguelikePlugin {
@@ -121,15 +126,37 @@ impl Plugin for RoguelikePlugin {
                 )
                     .chain(),
             )
-            // ── Input (PreUpdate — emits intents before Update processes them) ──
-            .add_systems(PreUpdate, input::input_system)
-            .add_systems(PreUpdate, restart_system)
-            // ── Index (always runs) ──
-            .add_systems(
+            // ── Domain sub-plugins ──
+            .add_plugins((
+                InputPlugin,
+                ActionPlugin,
+                WorldPlugin,
+                ViewPlugin,
+            ));
+    }
+}
+
+/// Handles player input and game restart logic.
+/// Runs in `PreUpdate` so intents are emitted before `Update` processes them.
+struct InputPlugin;
+
+impl Plugin for InputPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PreUpdate, input::input_system)
+            .add_systems(PreUpdate, restart_system);
+    }
+}
+
+/// Processes gameplay actions: movement, combat, inventory, spells, and
+/// projectiles. All systems are gated on `GameState::Playing`.
+struct ActionPlugin;
+
+impl Plugin for ActionPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
                 Update,
                 spatial_index::spatial_index_system.in_set(RoguelikeSet::Index),
             )
-            // ── Action (gated on Playing state) ──
             .add_systems(
                 Update,
                 (
@@ -166,26 +193,22 @@ impl Plugin for RoguelikePlugin {
                     .after(projectile::projectile_system)
                     .in_set(RoguelikeSet::Action)
                     .run_if(in_state(GameState::Playing)),
-            )
-            // ── Consequence (gated on Playing state) ──
-            .add_systems(
-                Update,
-                (
-                    visibility::visibility_system,
-                    camera::camera_follow_system,
-                )
-                    .chain()
-                    .in_set(RoguelikeSet::Consequence)
-                    .run_if(in_state(GameState::Playing)),
-            )
-            // ── Turn transitions (gated on specific turn phases) ──
-            .add_systems(
+            );
+    }
+}
+
+/// Manages turn state transitions, fire spreading, star level decay, and
+/// AI behaviour. Turn-phase systems are gated on their respective sub-states.
+struct WorldPlugin;
+
+impl Plugin for WorldPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
                 Update,
                 turn::end_player_turn
                     .after(RoguelikeSet::Consequence)
                     .run_if(in_state(TurnState::PlayerTurn)),
             )
-            // ── World turn: energy accumulation + AI + action resolution ──
             .add_systems(
                 Update,
                 (
@@ -204,8 +227,27 @@ impl Plugin for RoguelikePlugin {
                 turn::end_world_turn
                     .after(turn::star_level_system)
                     .run_if(in_state(TurnState::WorldTurn)),
+            );
+    }
+}
+
+/// Visibility, camera tracking, and terminal rendering.
+/// Consequence systems are gated on `GameState::Playing`; render systems
+/// run unconditionally to show overlays (pause, death, victory screens).
+struct ViewPlugin;
+
+impl Plugin for ViewPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+                Update,
+                (
+                    visibility::visibility_system,
+                    camera::camera_follow_system,
+                )
+                    .chain()
+                    .in_set(RoguelikeSet::Consequence)
+                    .run_if(in_state(GameState::Playing)),
             )
-            // ── Render (always runs — shows PAUSED overlay when paused) ──
             .add_systems(
                 Update,
                 (render::cursor_blink_system, render::particle_tick_system)
@@ -500,24 +542,37 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     }
 }
 
+/// Bundles all mutable resources needed by `restart_system` into a single
+/// `SystemParam`, following the Bevy best practice of using `#[derive(SystemParam)]`
+/// to stay under the 16-parameter system limit (see `examples/ecs/ecs_guide.rs`).
+#[derive(SystemParam)]
+struct RestartResources<'w> {
+    combat_log: ResMut<'w, CombatLog>,
+    kill_count: ResMut<'w, KillCount>,
+    turn_counter: ResMut<'w, TurnCounter>,
+    spell_particles: ResMut<'w, SpellParticles>,
+    input_state: ResMut<'w, InputState>,
+    next_game_state: ResMut<'w, NextState<GameState>>,
+    seed: ResMut<'w, MapSeed>,
+    game_map: ResMut<'w, GameMapResource>,
+    camera: ResMut<'w, CameraPosition>,
+    cursor: ResMut<'w, CursorPosition>,
+    collectibles: ResMut<'w, Collectibles>,
+    extra_ticks: ResMut<'w, ExtraWorldTicks>,
+    blood_map: ResMut<'w, BloodMap>,
+    spectating: ResMut<'w, SpectatingAfterDeath>,
+    dynamic_rng: ResMut<'w, DynamicRng>,
+    god_mode: ResMut<'w, crate::resources::GodMode>,
+    star_level: ResMut<'w, crate::resources::StarLevel>,
+    prop_health: ResMut<'w, crate::resources::PropHealth>,
+}
+
 /// System that handles game restart by despawning all entities and re-spawning.
 fn restart_system(
     mut commands: Commands,
     mut restart: ResMut<RestartRequested>,
     all_entities: Query<Entity>,
-    mut combat_log: ResMut<CombatLog>,
-    mut kill_count: ResMut<KillCount>,
-    mut turn_counter: ResMut<TurnCounter>,
-    mut spell_particles: ResMut<SpellParticles>,
-    mut input_state: ResMut<InputState>,
-    mut next_game_state: ResMut<NextState<GameState>>,
-    mut seed: ResMut<MapSeed>,
-    mut game_map: ResMut<GameMapResource>,
-    mut camera: ResMut<CameraPosition>,
-    mut cursor: ResMut<CursorPosition>,
-    mut collectibles: ResMut<Collectibles>,
-    (mut extra_ticks, mut blood_map, mut spectating, mut dynamic_rng, mut god_mode): (ResMut<ExtraWorldTicks>, ResMut<BloodMap>, ResMut<SpectatingAfterDeath>, ResMut<DynamicRng>, ResMut<crate::resources::GodMode>),
-    (mut star_level, mut prop_health): (ResMut<crate::resources::StarLevel>, ResMut<crate::resources::PropHealth>),
+    mut res: RestartResources,
 ) {
     if !restart.0 {
         return;
@@ -532,30 +587,30 @@ fn restart_system(
     let new_seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
-        .unwrap_or(seed.0.wrapping_add(1));
-    seed.0 = new_seed;
+        .unwrap_or(res.seed.0.wrapping_add(1));
+    res.seed.0 = new_seed;
 
-    combat_log.clear();
-    kill_count.0 = 0;
-    turn_counter.0 = 0;
-    spell_particles.particles.clear();
-    *input_state = InputState::default();
-    *game_map = GameMapResource(GameMap::new(400, 280, seed.0));
-    let player_spawn = game_map.0.find_bridge_center()
+    res.combat_log.clear();
+    res.kill_count.0 = 0;
+    res.turn_counter.0 = 0;
+    res.spell_particles.particles.clear();
+    *res.input_state = InputState::default();
+    *res.game_map = GameMapResource(GameMap::new(400, 280, res.seed.0));
+    let player_spawn = res.game_map.0.find_bridge_center()
         .unwrap_or(GridVec::new(SPAWN_X, SPAWN_Y));
-    camera.0 = player_spawn;
-    *cursor = CursorPosition::at(player_spawn);
-    *collectibles = Collectibles::default();
-    extra_ticks.0 = 0;
-    blood_map.stains.clear();
-    spectating.0 = false;
-    god_mode.0 = false;
-    dynamic_rng.reset();
-    *star_level = crate::resources::StarLevel::default();
-    prop_health.hp.clear();
+    res.camera.0 = player_spawn;
+    *res.cursor = CursorPosition::at(player_spawn);
+    *res.collectibles = Collectibles::default();
+    res.extra_ticks.0 = 0;
+    res.blood_map.stains.clear();
+    res.spectating.0 = false;
+    res.god_mode.0 = false;
+    res.dynamic_rng.reset();
+    *res.star_level = crate::resources::StarLevel::default();
+    res.prop_health.hp.clear();
 
-    next_game_state.set(GameState::Playing);
+    res.next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands, &game_map);
-    do_spawn_monsters(&mut commands, &game_map, seed.0);
+    do_spawn_player(&mut commands, &res.game_map);
+    do_spawn_monsters(&mut commands, &res.game_map, res.seed.0);
 }

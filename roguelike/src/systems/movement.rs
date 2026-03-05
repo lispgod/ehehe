@@ -107,8 +107,11 @@ pub fn movement_system(
 
 /// Checks if the player has reached any edge of the map.
 /// Transitions to Victory state when the player escapes the town.
+///
+/// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
+/// automatically skipped when the player entity doesn't exist.
 pub fn victory_check_system(
-    player_query: Query<&Position, With<Player>>,
+    player_pos: Single<&Position, With<Player>>,
     game_map: Res<GameMapResource>,
     mut next_state: ResMut<NextState<GameState>>,
     mut combat_log: ResMut<CombatLog>,
@@ -117,20 +120,21 @@ pub fn victory_check_system(
     if *state.get() != GameState::Playing {
         return;
     }
-    if let Ok(pos) = player_query.single() {
-        let gv = pos.as_grid_vec();
-        // Win by reaching any edge of the map (escape the town)
-        if gv.x <= 1 || gv.y <= 1 || gv.x >= game_map.0.width - 2 || gv.y >= game_map.0.height - 2 {
-            combat_log.push("You escaped the town! YOU WIN!".into());
-            next_state.set(GameState::Victory);
-        }
+    let gv = player_pos.as_grid_vec();
+    // Win by reaching any edge of the map (escape the town)
+    if gv.x <= 1 || gv.y <= 1 || gv.x >= game_map.0.width - 2 || gv.y >= game_map.0.height - 2 {
+        combat_log.push("You escaped the town! YOU WIN!".into());
+        next_state.set(GameState::Victory);
     }
 }
 
 /// Logs a swimming message and applies extra world ticks when the player
 /// moves through water tiles, making water movement extra slow.
+///
+/// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
+/// automatically skipped when the player entity doesn't exist.
 pub fn water_slowdown_system(
-    player_query: Query<&Position, With<Player>>,
+    player_pos: Single<&Position, With<Player>>,
     game_map: Res<GameMapResource>,
     mut extra_ticks: ResMut<crate::resources::ExtraWorldTicks>,
     mut combat_log: ResMut<CombatLog>,
@@ -140,20 +144,18 @@ pub fn water_slowdown_system(
     if !is_player_turn {
         return;
     }
-    if let Ok(pos) = player_query.single() {
-        let gv = pos.as_grid_vec();
-        if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
-            match &voxel.floor {
-                Some(Floor::ShallowWater) => {
-                    combat_log.push("You are swimming through shallow water...".into());
-                    extra_ticks.0 = extra_ticks.0.max(3);
-                }
-                Some(Floor::DeepWater) => {
-                    combat_log.push("You are swimming through deep water! Very slow!".into());
-                    extra_ticks.0 = extra_ticks.0.max(6);
-                }
-                _ => {}
+    let gv = player_pos.as_grid_vec();
+    if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
+        match &voxel.floor {
+            Some(Floor::ShallowWater) => {
+                combat_log.push("You are swimming through shallow water...".into());
+                extra_ticks.0 = extra_ticks.0.max(3);
             }
+            Some(Floor::DeepWater) => {
+                combat_log.push("You are swimming through deep water! Very slow!".into());
+                extra_ticks.0 = extra_ticks.0.max(6);
+            }
+            _ => {}
         }
     }
 }

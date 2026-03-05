@@ -639,9 +639,14 @@ Update
 
 ---
 
-## Plugin
+## Plugin Architecture
 
-`RoguelikePlugin` is the single entry point. It:
+Following the Bevy plugin best practice (see `examples/app/plugin.rs`), the game
+is split into domain-specific sub-plugins. Each plugin owns the systems for a
+single responsibility. `RoguelikePlugin` composes them all together so `main.rs`
+stays minimal.
+
+`RoguelikePlugin` is the top-level entry point. It:
 
 1. Adds `StatesPlugin` (required for `MinimalPlugins` setups)
 2. Registers all message types (`MoveIntent`, `AttackIntent`, `DamageEvent`, `SpellCastIntent`)
@@ -649,7 +654,14 @@ Update
 4. Initializes `GameState` and `TurnState`
 5. Configures `RoguelikeSet` ordering (`Index → Action → Consequence → Render`)
 6. Registers startup systems (`spawn_player`, `spawn_monsters`)
-7. Registers all gameplay systems with correct set membership and state gating
+7. Adds four domain sub-plugins:
+
+| Sub-plugin | Responsibility |
+|---|---|
+| `InputPlugin` | Player input handling and game restart (runs in `PreUpdate`) |
+| `ActionPlugin` | Spatial index, movement, combat, inventory, spells, projectiles (gated on `GameState::Playing`) |
+| `WorldPlugin` | Turn state transitions, fire spreading, star level, AI (gated on `TurnState` sub-states) |
+| `ViewPlugin` | Visibility, camera tracking, terminal rendering |
 
 `main.rs` only needs:
 ```rust
@@ -671,7 +683,7 @@ roguelike/src/
 ├── events.rs            MoveIntent, AttackIntent, DamageEvent, SpellCastIntent, RangedAttackIntent, …
 ├── noise.rs             Deterministic noise (Squirrel3 hash, smooth value noise, fBm) for procedural generation
 ├── resources.rs         GameMapResource, CameraPosition, MapSeed, SpatialIndex, CombatLog, TurnCounter, KillCount, GameState, TurnState
-├── plugins.rs           RoguelikePlugin + RoguelikeSet + spawn_player + spawn_monsters
+├── plugins.rs           RoguelikePlugin (top-level) + InputPlugin + ActionPlugin + WorldPlugin + ViewPlugin + RoguelikeSet + RestartResources + spawn_player + spawn_monsters
 ├── systems/
 │   ├── mod.rs           Re-exports
 │   ├── input.rs         input_system (keyboard handling + intent emission)

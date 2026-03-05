@@ -266,10 +266,13 @@ pub fn fire_system(
 ///
 /// Decay: 30 turns unseen = -1 star level.
 /// Sheriff spawn: every 50 turns while star level > 0, spawn a sheriff nearby.
+///
+/// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
+/// automatically skipped when the player entity doesn't exist.
 pub fn star_level_system(
     mut commands: Commands,
     mut star_level: ResMut<crate::resources::StarLevel>,
-    player_query: Query<&Position, With<Player>>,
+    player_pos: Single<&Position, With<Player>>,
     hostile_viewsheds: Query<&crate::components::Viewshed, With<crate::components::Hostile>>,
     turn_counter: Res<TurnCounter>,
     game_map: Res<GameMapResource>,
@@ -280,7 +283,6 @@ pub fn star_level_system(
         return;
     }
 
-    let Ok(player_pos) = player_query.single() else { return; };
     let player_gv = player_pos.as_grid_vec();
 
     // Check if the player is in any hostile/sheriff vision

@@ -247,7 +247,6 @@ Using these methods instead of raw field mutation guarantees that:
 | `Level` | `Level(i32)` | Player level for stat scaling |
 | `LootTable` | `{ drop_chance: f64 }` | Controls item drops on entity death |
 | `ExpReward` | `ExpReward(i32)` | EXP awarded when this entity is killed |
-| `Thrown` | marker | Tags a thrown item that landed and can be recovered |
 
 ### Why markers?
 

@@ -1,7 +1,10 @@
 pub mod ai;
+pub mod brawl;
 pub mod camera;
 pub mod combat;
+pub mod hiding;
 pub mod input;
+pub mod interaction;
 pub mod inventory;
 pub mod movement;
 pub mod projectile;
@@ -11,3 +14,4 @@ pub mod spatial_index;
 pub mod spell;
 pub mod turn;
 pub mod visibility;
+pub mod wanted;

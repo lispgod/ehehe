@@ -6,7 +6,7 @@ use crate::components::{
 };
 use crate::events::{PickupItemIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
-use crate::resources::{Collectibles, CombatLog, InputState, SpatialIndex};
+use crate::resources::{Collectibles, CombatLog, CursorPosition, GameMapResource, InputState, SpatialIndex};
 
 /// Maximum inventory capacity (unified for players and NPCs).
 pub const MAX_INVENTORY_SLOTS: usize = 9;
@@ -68,6 +68,10 @@ pub fn use_item_system(
     mut item_kind_query: Query<(&mut ItemKind, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
     mut collectibles: ResMut<Collectibles>,
+    mut game_map: ResMut<GameMapResource>,
+    cursor: Res<CursorPosition>,
+    player_query: Query<&Position, With<Player>>,
+    mut crime_events: MessageWriter<crate::events::CrimeEvent>,
 ) {
     for intent in intents.read() {
         let Ok(mut inv) = inventory_query.get_mut(intent.user) else {
@@ -140,6 +144,43 @@ pub fn use_item_system(
             ItemKind::Bow { .. } => {}
             ItemKind::WaterBucket { .. } => {
                 combat_log.push("Readied water bucket — press slot key to splash".into());
+            }
+            ItemKind::Matches { uses, .. } => {
+                if *uses > 0 {
+                    // Set fire at the cursor position (must be adjacent)
+                    let target_gv = cursor.pos;
+                    let voxel = game_map.0.get_voxel_at(&target_gv);
+                    let is_flammable = voxel.and_then(|v| v.props.as_ref())
+                        .is_some_and(|p| p.is_flammable());
+                    let is_wood_floor = voxel.is_some_and(|v|
+                        matches!(v.floor, Some(crate::typeenums::Floor::WoodPlanks)));
+
+                    if is_flammable || is_wood_floor {
+                        // Set fire
+                        if let Some(v) = game_map.0.get_voxel_at_mut(&target_gv) {
+                            v.floor = Some(crate::typeenums::Floor::Fire);
+                        }
+                        game_map.0.fire_turns.insert(target_gv, 0);
+                        combat_log.push(format!("You strike a match and set fire at ({}, {})!", target_gv.x, target_gv.y));
+                        // Decrement uses
+                        if let Ok((mut kind_mut, _)) = item_kind_query.get_mut(item_entity)
+                            && let ItemKind::Matches { ref mut uses, .. } = *kind_mut {
+                                *uses -= 1;
+                            }
+                        // Arson is a crime
+                        if let Ok(player_pos) = player_query.single() {
+                            crime_events.write(crate::events::CrimeEvent {
+                                perpetrator: intent.user,
+                                crime: crate::components::CrimeType::Arson,
+                                position: player_pos.as_grid_vec(),
+                            });
+                        }
+                    } else {
+                        combat_log.push("Nothing flammable at cursor position.".into());
+                    }
+                } else {
+                    combat_log.push("Out of matches!".into());
+                }
             }
         }
     }

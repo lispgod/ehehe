@@ -110,6 +110,8 @@ impl GraphicElement for Props {
             Props::RailTrack => "=".into(),
             Props::Windmill => "X".into(),
             Props::LampPost => "i".into(),
+            Props::Outhouse => "O".into(),
+            Props::Wardrobe => "W".into(),
         }
     }
 
@@ -138,6 +140,8 @@ impl GraphicElement for Props {
             Props::RailTrack => RatColor::Rgb(90, 85, 80),
             Props::Windmill => RatColor::Rgb(140, 110, 60),
             Props::LampPost => RatColor::Rgb(80, 80, 90),
+            Props::Outhouse => RatColor::Rgb(100, 70, 35),
+            Props::Wardrobe => RatColor::Rgb(120, 80, 40),
         }
     }
 

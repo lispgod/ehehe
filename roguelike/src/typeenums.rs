@@ -90,6 +90,10 @@ pub enum Props {
     Windmill,
     /// Iron lamp post — blocks movement but not vision.
     LampPost,
+    /// Outhouse — blocks movement and vision, can be used as a hiding spot.
+    Outhouse,
+    /// Wardrobe — blocks movement and vision, can be used as a hiding spot.
+    Wardrobe,
 }
 
 impl Props {
@@ -129,6 +133,7 @@ impl Props {
             Props::Barrel | Props::Crate | Props::Table | Props::Bench => 15,
             Props::Chair | Props::Sign | Props::Fence | Props::HayBale => 10,
             Props::Bush | Props::Cactus | Props::LampPost | Props::HitchingPost | Props::WaterTrough => 20,
+            Props::Outhouse | Props::Wardrobe => 20,
             Props::RailTrack => i32::MAX,
         }
     }
@@ -142,7 +147,23 @@ impl Props {
             | Props::Chair | Props::Piano | Props::Bench
             | Props::HayBale | Props::Sign | Props::Fence
             | Props::Gallows | Props::WaterTower | Props::Windmill
+            | Props::Outhouse | Props::Wardrobe
         )
+    }
+
+    /// Returns `true` if this prop can be used as a hiding spot by the player.
+    /// Barrels, haystacks, outhouses, and wardrobes are valid hiding spots.
+    pub fn is_hiding_spot(&self) -> bool {
+        matches!(
+            self,
+            Props::Barrel | Props::HayBale | Props::Outhouse | Props::Wardrobe
+        )
+    }
+
+    /// Returns `true` if this prop is explosive (barrels explode when
+    /// shot or exposed to fire long enough).
+    pub fn is_explosive(&self) -> bool {
+        matches!(self, Props::Barrel)
     }
 }
 
@@ -172,6 +193,8 @@ impl std::fmt::Display for Props {
             Props::RailTrack => write!(f, "Rail Track"),
             Props::Windmill => write!(f, "Windmill"),
             Props::LampPost => write!(f, "Lamp Post"),
+            Props::Outhouse => write!(f, "Outhouse"),
+            Props::Wardrobe => write!(f, "Wardrobe"),
         }
     }
 }

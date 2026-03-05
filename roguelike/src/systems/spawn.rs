@@ -352,7 +352,7 @@ pub fn spawn_monster(
         Speed(template.speed),
         Energy(0),
     )).insert((
-        AiState::Idle,
+        AiState::Patrolling,
         AiLookDir(GridVec::new(0, -1)), // default: looking south
         PatrolOrigin(GridVec::new(x, y)),
         AiMemory::default(),

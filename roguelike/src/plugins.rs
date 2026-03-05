@@ -404,9 +404,9 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     // ── Indians on left bank (x < river_center), facing right ──────
     let indian_templates: &[usize] = &[7, 8]; // Indian Brave, Indian Scout
     let mut indian_count = 0;
-    let target_indians = 8 + (value_noise(bridge_center.x, bridge_center.y, group_seed.wrapping_add(1111)) * 4.0) as i32;
-    for dy in -15i32..=15 {
-        for dx in -15i32..=-1 {
+    let target_indians = 25 + (value_noise(bridge_center.x, bridge_center.y, group_seed.wrapping_add(1111)) * 15.0) as i32;
+    for dy in -30i32..=30 {
+        for dx in -30i32..=-1 {
             if indian_count >= target_indians { break; }
             let pos = GridVec::new(river_cx + dx, bridge_y + dy);
             if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
@@ -423,7 +423,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             });
             if !ok_floor { continue; }
             let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(22222));
-            if tile_noise > 0.40 { continue; }
+            if tile_noise > 0.60 { continue; }
             let template_idx = indian_templates[(indian_count as usize) % indian_templates.len()];
             let template = &MONSTER_TEMPLATES[template_idx];
             let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
@@ -440,9 +440,9 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     // ── Mexicans/Vaqueros on right bank (x > river_center), facing left ──
     let vaquero_templates: &[usize] = &[3]; // Vaquero
     let mut vaquero_count = 0;
-    let target_vaqueros = 8 + (value_noise(bridge_center.x + 1, bridge_center.y, group_seed.wrapping_add(2222)) * 4.0) as i32;
-    for dy in -15i32..=15 {
-        for dx in 1i32..=15 {
+    let target_vaqueros = 25 + (value_noise(bridge_center.x + 1, bridge_center.y, group_seed.wrapping_add(2222)) * 15.0) as i32;
+    for dy in -30i32..=30 {
+        for dx in 1i32..=30 {
             if vaquero_count >= target_vaqueros { break; }
             let pos = GridVec::new(river_cx + dx, bridge_y + dy);
             if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
@@ -458,7 +458,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             });
             if !ok_floor { continue; }
             let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(33333));
-            if tile_noise > 0.40 { continue; }
+            if tile_noise > 0.60 { continue; }
             let template_idx = vaquero_templates[(vaquero_count as usize) % vaquero_templates.len()];
             let template = &MONSTER_TEMPLATES[template_idx];
             let ent = spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
@@ -479,7 +479,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             crate::components::Faction::Civilians => &[6],
             _ => continue,
         };
-        let base_size = 3 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(44444)) * 4.0) as i32;
+        let base_size = 5 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(44444)) * 5.0) as i32;
         let mut spawned = 0;
         for dy in -anchor_radius..=anchor_radius {
             for dx in -anchor_radius..=anchor_radius {
@@ -488,7 +488,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
                 if !map.0.is_spawnable(&pos) { continue; }
                 let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(55555));
-                if tile_noise > 0.40 { continue; }
+                if tile_noise > 0.60 { continue; }
                 let template_idx = templates[(spawned as usize) % templates.len()];
                 let template = &MONSTER_TEMPLATES[template_idx];
                 spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
@@ -529,7 +529,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             crate::components::Faction::Sheriff => &[9, 10],
             _ => continue,
         };
-        let base_size = 2 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(66666)) * 3.0) as i32;
+        let base_size = 4 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(66666)) * 4.0) as i32;
         let mut spawned = 0;
         for dy in -anchor_radius..=anchor_radius {
             for dx in -anchor_radius..=anchor_radius {
@@ -538,7 +538,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                 if pos.distance_squared(SPAWN_POINT) < min_spawn_dist_sq { continue; }
                 if !map.0.is_spawnable(&pos) { continue; }
                 let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(77777));
-                if tile_noise > 0.40 { continue; }
+                if tile_noise > 0.60 { continue; }
                 let template_idx = templates[(spawned as usize) % templates.len()];
                 let template = &MONSTER_TEMPLATES[template_idx];
                 spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
@@ -551,6 +551,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     // ── Flavor: scatter a few of each faction around the map ───────
     let scatter_seed = group_seed.wrapping_add(99999);
     let scatter_factions: &[(usize, u64)] = &[
+        (2, 6), (5, 7), // Outlaws, Gunslingers
         (7, 1), (8, 2), // Indians
         (3, 3),         // Vaqueros
         (6, 4),         // Civilians
@@ -559,7 +560,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     for &(template_idx, offset) in scatter_factions {
         let template = &MONSTER_TEMPLATES[template_idx];
         let mut placed = 0;
-        let max_place = 1 + (value_noise(0, offset as i32, scatter_seed) * 2.0) as i32;
+        let max_place = 3 + (value_noise(0, offset as i32, scatter_seed) * 4.0) as i32;
         for attempt in 0..200 {
             if placed >= max_place { break; }
             let ax = (value_noise(attempt, offset as i32, scatter_seed.wrapping_add(1)) * map.0.width as f64) as i32;

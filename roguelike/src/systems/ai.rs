@@ -421,7 +421,7 @@ pub fn factions_are_hostile(a: Faction, b: Faction) -> bool {
 const DODGE_CHANCE: f64 = 0.20;
 
 /// Patrol radius: how far an NPC will wander from its spawn point.
-const PATROL_RADIUS: i32 = 12;
+const PATROL_RADIUS: i32 = 25;
 
 /// Absolute HP threshold below which an NPC will flee.
 const FLEE_HP_ABSOLUTE: i32 = 20;

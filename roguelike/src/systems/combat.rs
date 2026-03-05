@@ -270,7 +270,7 @@ pub fn death_system(
             && let (Some(_lt), Some(p)) = (loot_table, pos) {
                 // Drop collectible supplies (caps + powder + matching ammo).
                 let coll_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 1), p.y, seed.0.wrapping_add(33333));
-                if coll_roll < 0.5 {
+                if coll_roll < 0.65 {
                     let caps_amount = ((coll_roll * 20.0) as i32).max(1);
                     commands.spawn((
                         Position { x: p.x, y: p.y },
@@ -282,7 +282,7 @@ pub fn death_system(
                 }
                 // Drop powder (needed for reloading).
                 let powder_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 2), p.y, seed.0.wrapping_add(55555));
-                if powder_roll < 0.4 {
+                if powder_roll < 0.55 {
                     let amount = ((powder_roll * 10.0) as i32).max(1);
                     commands.spawn((
                         Position { x: p.x, y: p.y },
@@ -294,7 +294,7 @@ pub fn death_system(
                 }
                 // Drop ammo matching the NPC's gun caliber, if they had one.
                 let ammo_roll = value_noise(p.y.wrapping_add(kill_count.0 as i32 + 1), p.x, seed.0.wrapping_add(44444));
-                if ammo_roll < 0.4 {
+                if ammo_roll < 0.55 {
                     let amount = ((ammo_roll * 15.0) as i32).max(1);
                     // Find the caliber of the NPC's gun from their inventory.
                     let npc_caliber = inventory.and_then(|inv| {
@@ -321,6 +321,43 @@ pub fn death_system(
                         Renderable { symbol: "·".into(), fg: RatColor::Rgb(180, 180, 180), bg: RatColor::Black },
                         collectible,
                     ));
+                }
+                // Drop whiskey (healing item) — combat is the only resource loop.
+                let whiskey_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 3), p.y.wrapping_add(1), seed.0.wrapping_add(66666));
+                if whiskey_roll < 0.25 {
+                    let heal = 8 + ((whiskey_roll * 20.0) as i32).max(0);
+                    let whiskey_ent = commands.spawn((
+                        Position { x: p.x, y: p.y },
+                        Item,
+                        Name("Whiskey Bottle".into()),
+                        Renderable { symbol: "w".into(), fg: RatColor::Rgb(180, 120, 60), bg: RatColor::Black },
+                        ItemKind::Whiskey { heal, blunt_damage: 4 },
+                    )).id();
+                    let _ = whiskey_ent; // suppress unused warning
+                }
+                // Drop dynamite — rare but powerful area denial.
+                let dynamite_roll = value_noise(p.y.wrapping_add(kill_count.0 as i32 + 3), p.x.wrapping_add(1), seed.0.wrapping_add(77777));
+                if dynamite_roll < 0.10 {
+                    let grenade_ent = commands.spawn((
+                        Position { x: p.x, y: p.y },
+                        Item,
+                        Name("Dynamite".into()),
+                        Renderable { symbol: "*".into(), fg: RatColor::Rgb(255, 80, 80), bg: RatColor::Black },
+                        ItemKind::Grenade { damage: 15, radius: 3, blunt_damage: 5 },
+                    )).id();
+                    let _ = grenade_ent;
+                }
+                // Drop molotov — sets areas on fire.
+                let molotov_roll = value_noise(p.x.wrapping_add(kill_count.0 as i32 + 4), p.y.wrapping_add(2), seed.0.wrapping_add(88888));
+                if molotov_roll < 0.10 {
+                    let molotov_ent = commands.spawn((
+                        Position { x: p.x, y: p.y },
+                        Item,
+                        Name("Molotov Cocktail".into()),
+                        Renderable { symbol: "m".into(), fg: RatColor::Rgb(255, 100, 0), bg: RatColor::Black },
+                        ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
+                    )).id();
+                    let _ = molotov_ent;
                 }
             }
 

@@ -665,9 +665,7 @@ fn bounty_hunter_spawn_system(
     map: Res<crate::resources::GameMapResource>,
     seed: Res<crate::resources::MapSeed>,
     player_query: Query<&Position, With<Player>>,
-    bounty_hunter_query: Query<(), (With<crate::components::Faction>, Without<Player>)>,
 ) {
-    let _ = &bounty_hunter_query; // reserved for future spawn-cap checks
     // Only spawn when wanted level is 2+
     if star_level.level < 2 { return; }
     // Spawn every 50 turns

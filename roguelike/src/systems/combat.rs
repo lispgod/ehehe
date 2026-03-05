@@ -6,6 +6,7 @@ use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
 use crate::grid_vec::GridVec;
 use crate::typedefs::{CoordinateUnit, RatColor};
+use crate::typeenums::{Floor, Props};
 
 /// Computes the bullet endpoint by scaling a direction vector so the
 /// Bresenham line extends approximately `range` tiles along the
@@ -524,6 +525,7 @@ pub fn melee_wide_system(
     mut game_map: ResMut<GameMapResource>,
     spatial: Res<crate::resources::SpatialIndex>,
     mut prop_health: ResMut<crate::resources::PropHealth>,
+    turn_counter: Res<TurnCounter>,
 ) {
     for intent in intents.read() {
         let Ok((attacker_pos, attacker_stats, attacker_name)) = attacker_query.get(intent.attacker) else {
@@ -598,6 +600,7 @@ pub fn melee_wide_system(
                         if max_hp == i32::MAX {
                             continue; // indestructible
                         }
+                        let is_gunpowder = matches!(prop, Props::GunpowderBarrel);
                         // Initialize prop health if not yet tracked
                         let current_hp = prop_health.hp.entry(tile).or_insert(max_hp);
                         *current_hp -= damage.max(MIN_PROP_DAMAGE);
@@ -608,7 +611,30 @@ pub fn melee_wide_system(
                                 voxel.props = None;
                             }
                             prop_health.hp.remove(&tile);
-                            combat_log.push(format!("{a_name} destroys a prop!"));
+                            if is_gunpowder {
+                                // Gunpowder barrel explodes — set fire in radius
+                                combat_log.push("Gunpowder barrel explodes!".to_string());
+                                let gp_radius: i32 = 3;
+                                for gdx in -gp_radius..=gp_radius {
+                                    for gdy in -gp_radius..=gp_radius {
+                                        let gp_dist = gdx.abs().max(gdy.abs());
+                                        if gp_dist > gp_radius { continue; }
+                                        let fire_pos = tile + GridVec::new(gdx, gdy);
+                                        if let Some(fv) = game_map.0.get_voxel_at_mut(&fire_pos) {
+                                            if matches!(fv.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
+                                            if let Some(ref fp) = fv.props {
+                                                if fp.is_flammable() { fv.props = None; }
+                                            }
+                                            if !matches!(fv.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                                                fv.floor = Some(Floor::Fire);
+                                                game_map.0.fire_turns.entry(fire_pos).or_insert(turn_counter.0);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                combat_log.push(format!("{a_name} destroys a prop!"));
+                            }
                         }
                     }
             }

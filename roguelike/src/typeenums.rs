@@ -31,6 +31,8 @@ pub enum Floor {
     Plaza,
     /// Narrow alley between buildings — ambush terrain.
     Alley,
+    /// Stone floor — used in churches, missions, and other stone buildings.
+    StoneFloor,
 }
 
 /// Props (obstacles/structures) placed on tiles.
@@ -66,13 +68,17 @@ pub enum Props {
     Windmill,
     /// Iron lamp post — blocks movement but not vision.
     LampPost,
+    /// Stone wall — blocks movement and vision, indestructible, not flammable.
+    StoneWall,
+    /// Gunpowder barrel — explodes when destroyed, causing fire in a radius.
+    GunpowderBarrel,
 }
 
 impl Props {
     /// Returns `true` if this prop is any kind of wall.
     #[inline]
     pub fn is_wall(&self) -> bool {
-        matches!(self, Props::Wall)
+        matches!(self, Props::Wall | Props::StoneWall)
     }
 
     /// Returns `true` if this prop blocks entity movement.
@@ -91,7 +97,8 @@ impl Props {
             | Props::Bench | Props::Chair | Props::HayBale
             | Props::Sign | Props::RailTrack | Props::LampPost
             | Props::Barrel | Props::Crate | Props::Table
-            | Props::HitchingPost | Props::Rock | Props::Cactus => false,
+            | Props::HitchingPost | Props::Rock | Props::Cactus
+            | Props::GunpowderBarrel => false,
             _ => true,
         }
     }
@@ -99,12 +106,13 @@ impl Props {
     /// Returns the maximum health for this prop. Indestructible props return i32::MAX.
     pub fn max_health(&self) -> i32 {
         match self {
-            Props::Wall | Props::Rock | Props::Well => i32::MAX, // indestructible
+            Props::Wall | Props::Rock | Props::Well | Props::StoneWall => i32::MAX, // indestructible
             Props::Tree | Props::DeadTree | Props::Gallows | Props::WaterTower | Props::Windmill => 30,
             Props::Piano => 25,
             Props::Barrel | Props::Crate | Props::Table | Props::Bench => 15,
             Props::Chair | Props::Sign | Props::Fence | Props::HayBale => 10,
             Props::Bush | Props::Cactus | Props::LampPost | Props::HitchingPost | Props::WaterTrough => 20,
+            Props::GunpowderBarrel => 10,
             Props::RailTrack => i32::MAX,
         }
     }
@@ -118,6 +126,7 @@ impl Props {
             | Props::Chair | Props::Piano | Props::Bench
             | Props::HayBale | Props::Sign | Props::Fence
             | Props::Gallows | Props::WaterTower | Props::Windmill
+            | Props::GunpowderBarrel
         )
     }
 }
@@ -148,6 +157,8 @@ impl std::fmt::Display for Props {
             Props::RailTrack => write!(f, "Rail Track"),
             Props::Windmill => write!(f, "Windmill"),
             Props::LampPost => write!(f, "Lamp Post"),
+            Props::StoneWall => write!(f, "Stone Wall"),
+            Props::GunpowderBarrel => write!(f, "Gunpowder"),
         }
     }
 }

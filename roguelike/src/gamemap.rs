@@ -177,7 +177,7 @@ impl GameMap {
                     }
                 } else if dist < river_width + beach_width
                     && let Some(voxel) = map.get_voxel_at_mut(&pos)
-                        && !matches!(voxel.props, Some(Props::Wall)) {
+                        && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) {
                             voxel.floor = Some(Floor::Beach);
                             voxel.props = None;
                         }
@@ -289,7 +289,7 @@ impl GameMap {
                                 if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
                                     continue;
                                 }
-                                if !matches!(voxel.props, Some(Props::Wall))
+                                if !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
                                     && !matches!(voxel.floor, Some(Floor::Dirt))
                                 {
                                     voxel.floor = Some(Floor::Sidewalk);
@@ -307,7 +307,7 @@ impl GameMap {
                             if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
                                 continue;
                             }
-                            if !matches!(voxel.props, Some(Props::Wall)) {
+                            if !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) {
                                 voxel.floor = Some(Floor::Dirt);
                                 voxel.props = None;
                             }
@@ -366,6 +366,9 @@ impl GameMap {
 
         // ── Step 7: Decorative elements in open areas ───────────────
         place_desert_decorations(&mut map, width, height, seed);
+
+        // ── Step 8: Scatter gunpowder barrels around the map ────────
+        place_gunpowder_barrels(&mut map, width, height, seed);
 
         // ── Step 9: Spawn clearing (bottom-left) ───────────────────
         clear_around(&mut map, SPAWN_POINT, 6);
@@ -447,7 +450,7 @@ impl GameMap {
                 {
                     // Check if there's an adjacent wall (meaning we're just outside a building)
                     let has_adjacent_wall = pos.cardinal_neighbors().iter().any(|n| {
-                        self.get_voxel_at(n).is_some_and(|v| matches!(v.props, Some(Props::Wall)))
+                        self.get_voxel_at(n).is_some_and(|v| v.props.as_ref().is_some_and(|p| p.is_wall()))
                     });
                     if has_adjacent_wall {
                         return Some(pos);
@@ -768,7 +771,7 @@ fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
                         for gx in 0..gap as CoordinateUnit {
                             let pos = GridVec::new(a.x + a.w + gx, y);
                             if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
                                     voxel.floor = Some(Floor::Alley);
                                 }
                         }
@@ -783,7 +786,7 @@ fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
                         for gx in 0..gap_rev as CoordinateUnit {
                             let pos = GridVec::new(b.x + b.w + gx, y);
                             if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
                                     voxel.floor = Some(Floor::Alley);
                                 }
                         }
@@ -927,11 +930,21 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                 };
 
                 if is_border && !is_door && !is_side_door && !is_corner {
-                    voxel.props = Some(Props::Wall);
-                    voxel.floor = Some(Floor::WoodPlanks);
+                    // Stone buildings: churches, banks, jails
+                    if matches!(b.kind, 6 | 7 | 9) {
+                        voxel.props = Some(Props::StoneWall);
+                        voxel.floor = Some(Floor::StoneFloor);
+                    } else {
+                        voxel.props = Some(Props::Wall);
+                        voxel.floor = Some(Floor::WoodPlanks);
+                    }
                 } else {
                     voxel.props = None;
-                    voxel.floor = Some(Floor::WoodPlanks);
+                    if matches!(b.kind, 6 | 7 | 9) {
+                        voxel.floor = Some(Floor::StoneFloor);
+                    } else {
+                        voxel.floor = Some(Floor::WoodPlanks);
+                    }
                 }
             }
         }
@@ -1197,7 +1210,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
 fn set_prop(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, prop: Props) {
     let pos = GridVec::new(x, y);
     if let Some(voxel) = map.get_voxel_at_mut(&pos)
-        && !matches!(voxel.props, Some(Props::Wall))
+        && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
         && !matches!(voxel.floor, Some(Floor::Dirt)) {
             voxel.props = Some(prop);
         }
@@ -1233,11 +1246,11 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
                 let is_back_door = y == my && x == mx + mw / 2;
 
                 if is_border && !is_main_door && !is_side_door && !is_back_door {
-                    voxel.props = Some(Props::Wall);
-                    voxel.floor = Some(Floor::WoodPlanks);
+                    voxel.props = Some(Props::StoneWall);
+                    voxel.floor = Some(Floor::StoneFloor);
                 } else {
                     voxel.props = None;
-                    voxel.floor = Some(Floor::WoodPlanks);
+                    voxel.floor = Some(Floor::StoneFloor);
                 }
             }
         }
@@ -1251,7 +1264,7 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
         // Door in the divider
         if y != my + mh / 2 && y != my + mh / 3
             && let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                voxel.props = Some(Props::Wall);
+                voxel.props = Some(Props::StoneWall);
             }
     }
 
@@ -1516,7 +1529,7 @@ fn place_desert_decorations(
                 if voxel.props.is_some() {
                     continue;
                 }
-                if matches!(voxel.floor, Some(Floor::WoodPlanks)) {
+                if matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
                     continue;
                 }
                 // Skip road tiles — no decorations on dirt roads or sidewalks.
@@ -1734,7 +1747,7 @@ fn place_railroad(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
         if let Some(voxel) = map.get_voxel_at(&pos) {
             // Don't place tracks over water or buildings
             if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) { continue; }
-            if matches!(voxel.props, Some(Props::Wall)) { continue; }
+            if matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
         }
         if let Some(voxel) = map.get_voxel_at_mut(&pos) {
             voxel.floor = Some(Floor::Gravel);
@@ -1744,7 +1757,7 @@ fn place_railroad(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
         for &dy in &[-1i32, 1] {
             let side_pos = GridVec::new(x, y + dy);
             if let Some(voxel) = map.get_voxel_at_mut(&side_pos)
-                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor) | Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
                     voxel.floor = Some(Floor::Gravel);
                 }
         }
@@ -1803,6 +1816,43 @@ fn place_lamp_posts(map: &mut GameMap, height: CoordinateUnit, street_x: Coordin
                 {
                     set_prop(map, x, y, Props::LampPost);
                 }
+        }
+    }
+}
+
+/// Scatters gunpowder barrels across the map in strategic locations.
+/// Placed near buildings and along streets as environmental hazards.
+fn place_gunpowder_barrels(
+    map: &mut GameMap,
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+) {
+    let barrel_seed = seed.wrapping_add(131313);
+    for y in 2..height - 2 {
+        for x in 2..width - 2 {
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                if voxel.props.is_some() { continue; }
+                // Only place on suitable terrain
+                if !matches!(voxel.floor,
+                    Some(Floor::Dirt) | Some(Floor::Sand) | Some(Floor::Gravel)
+                    | Some(Floor::Sidewalk) | Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)
+                ) { continue; }
+            } else {
+                continue;
+            }
+            // Skip near spawn
+            if pos.distance_squared(SPAWN_POINT) < 100 { continue; }
+            let noise = value_noise(x, y, barrel_seed);
+            if noise > 0.015 { continue; } // ~1.5% of valid tiles
+            // Prefer tiles near buildings (at least one adjacent wall)
+            let near_wall = pos.cardinal_neighbors().iter().any(|n| {
+                map.get_voxel_at(n).is_some_and(|v| v.props.as_ref().is_some_and(|p| p.is_wall()))
+            });
+            if near_wall || value_noise(y, x, barrel_seed.wrapping_add(111)) < 0.3 {
+                set_prop(map, x, y, Props::GunpowderBarrel);
+            }
         }
     }
 }

@@ -97,7 +97,7 @@ pub fn input_system(
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>, Option<&Hidden>), With<Player>>,
     mut player_viewshed: Query<&mut Viewshed, With<Player>>,
     item_kind_query: Query<&ItemKind>,
-    (hostiles_query, health_query, npc_name_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>, Query<(Entity, Option<&crate::components::Name>, Option<&Bartender>), Without<Player>>),
+    (hostiles_query, health_query, _npc_name_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>, Query<(Entity, Option<&crate::components::Name>, Option<&Bartender>), Without<Player>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,
@@ -405,44 +405,7 @@ pub fn input_system(
             }
             // ── Interact with adjacent NPC (X key) ──────────────
             KeyCode::Char('x') if awaiting_input => {
-                let player_gv = player_pos.as_grid_vec();
-                // Find an adjacent NPC (any entity with Health that is not the player)
-                let mut found_npc = None;
-                for dx in -1i32..=1 {
-                    for dy in -1i32..=1 {
-                        if dx == 0 && dy == 0 { continue; }
-                        let adj = player_gv + GridVec::new(dx, dy);
-                        for &ent in spatial.entities_at(&adj) {
-                            if ent != player_entity && health_query.contains(ent) {
-                                found_npc = Some(ent);
-                                break;
-                            }
-                        }
-                        if found_npc.is_some() { break; }
-                    }
-                    if found_npc.is_some() { break; }
-                }
-                if let Some(npc_entity) = found_npc {
-                    // Check if this NPC is a bartender
-                    let is_bartender = npc_name_query.get(npc_entity).ok()
-                        .map_or(false, |(_, _, bart)| bart.is_some());
-                    let npc_name = npc_name_query.get(npc_entity).ok()
-                        .and_then(|(_, n, _)| n.map(|n| n.0.clone()))
-                        .unwrap_or_else(|| "stranger".into());
-
-                    if is_bartender {
-                        // Open saloon buy menu
-                        input_state.mode = InputMode::SaloonMenu;
-                        combat_log.push(format!("The barkeep eyes you. \"What'll it be?\""));
-                    } else {
-                        // Open NPC interaction menu
-                        input_state.mode = InputMode::InteractMenu;
-                        input_state.interact_target = Some(npc_entity);
-                        combat_log.push(format!("You approach {npc_name}. How do you address them?"));
-                    }
-                } else {
-                    combat_log.push("No one nearby to talk to.".into());
-                }
+                combat_log.push("No time for talk. Shoot or run.".into());
             }
             // ── Hide / unhide in a prop (H key) ─────────────────
             KeyCode::Char('h') if awaiting_input => {

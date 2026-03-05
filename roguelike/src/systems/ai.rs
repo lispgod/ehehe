@@ -737,9 +737,11 @@ pub fn ai_system(
             viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
         );
 
-        // Target the closest hostile entity — not always the player.
-        // Only chase if this NPC has the Hostile marker (aggroed).
-        let chase_target: Option<(Entity, GridVec)> = if npc_is_hostile {
+        // Target the closest hostile entity — faction enemies or aggroed player.
+        // NPCs chase faction enemies on sight (gang warfare). The Hostile marker
+        // is still used for player-specific aggro from combat/crimes.
+        let has_faction_enemy = faction_target.is_some();
+        let chase_target: Option<(Entity, GridVec)> = if npc_is_hostile || has_faction_enemy {
             let player_option = if player_visible {
                 player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
             } else {

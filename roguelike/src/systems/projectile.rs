@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{Faction, Health, Name, Player, Position, Projectile, ProjectileVisual, Renderable, ThrownItemProjectile, display_name};
+use crate::components::{Faction, Health, Name, PlayerControlled, Position, Projectile, ProjectileVisual, Renderable, ThrownItemProjectile, display_name};
 use crate::events::DamageEvent;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
@@ -236,8 +236,8 @@ pub fn projectile_system(
     mut commands: Commands,
     mut projectiles: Query<(Entity, &mut Position, &mut Projectile, &mut Renderable, Option<&ThrownItemProjectile>), Without<crate::components::ThrownExplosive>>,
     mut damage_events: MessageWriter<DamageEvent>,
-    targets: Query<(Entity, &Position, &Health, Option<&Name>, Option<&Faction>), (Without<Player>, Without<Projectile>)>,
-    player_query: Query<(Entity, &Position, &Health, Option<&Name>), (With<Player>, Without<Projectile>)>,
+    targets: Query<(Entity, &Position, &Health, Option<&Name>, Option<&Faction>), (Without<PlayerControlled>, Without<Projectile>)>,
+    player_query: Query<(Entity, &Position, &Health, Option<&Name>), (With<PlayerControlled>, Without<Projectile>)>,
     source_factions: Query<Option<&Faction>>,
     source_names: Query<Option<&Name>>,
     game_map: Res<GameMapResource>,
@@ -257,7 +257,7 @@ pub fn projectile_system(
             .push((target_entity, t_name, target_health.max, target_faction.copied()));
     }
 
-    // Player position for NPC bullet hits and shrapnel self-damage.
+    // PlayerControlled position for NPC bullet hits and shrapnel self-damage.
     let player_info = player_query.single().ok();
 
     for (proj_entity, mut proj_pos, mut proj, mut renderable, thrown_item) in &mut projectiles {

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{AiState, Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
+use crate::components::{AiState, Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, PlayerControlled, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
@@ -92,8 +92,8 @@ pub fn combat_system(
     seed: Res<crate::resources::MapSeed>,
     mut combat_log: ResMut<CombatLog>,
     faction_query: Query<(Option<&Faction>, Option<&Position>)>,
-    npc_query: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
-    player_query: Query<Entity, With<Player>>,
+    npc_query: Query<(Entity, &Position, Option<&Faction>), Without<PlayerControlled>>,
+    player_query: Query<Entity, With<PlayerControlled>>,
     mut star_level: ResMut<crate::resources::StarLevel>,
 ) {
     // Collect aggro events to apply after processing all intents
@@ -191,12 +191,16 @@ pub fn combat_system(
 /// Applies damage events to entity health pools using `Health::apply_damage`.
 /// Also records the damage source on the target for kill attribution.
 /// When god mode is active, damage to the player is ignored.
+///
+/// A 1d3 variance is applied to all damage: final = base ± rand(1..=3).
 pub fn apply_damage_system(
     mut commands: Commands,
     mut events: MessageReader<DamageEvent>,
     mut health_query: Query<&mut Health>,
-    player_query: Query<Entity, With<Player>>,
+    player_query: Query<Entity, With<PlayerControlled>>,
     god_mode: Res<crate::resources::GodMode>,
+    dynamic_rng: Res<crate::resources::DynamicRng>,
+    seed: Res<crate::resources::MapSeed>,
 ) {
     let player_entity = player_query.single().ok();
     for event in events.read() {
@@ -205,7 +209,17 @@ pub fn apply_damage_system(
             continue;
         }
         if let Ok(mut health) = health_query.get_mut(event.target) {
-            health.apply_damage(event.amount);
+            // 1d3 variance: roll [0.0, 1.0), map to {-3,-2,-1,+1,+2,+3}
+            let roll = dynamic_rng.roll(seed.0, event.target.to_bits() ^ event.amount as u64 ^ 0xDA3);
+            let variance = if roll < 0.5 {
+                // Negative: map [0, 0.5) → {-3, -2, -1}
+                -((roll * 6.0) as i32 + 1).min(3)
+            } else {
+                // Positive: map [0.5, 1.0) → {1, 2, 3}
+                (((roll - 0.5) * 6.0) as i32 + 1).min(3)
+            };
+            let final_damage = (event.amount + variance).max(0);
+            health.apply_damage(final_damage);
             if let Some(source) = event.source {
                 commands.entity(event.target).insert(LastDamageSource(source));
             }
@@ -222,8 +236,8 @@ pub fn apply_damage_system(
 /// If the player dies, transitions to the Dead state.
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
-    player_entities: Query<Entity, With<Player>>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Position>, Option<&LootTable>, Option<&PlayerControlled>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
+    player_entities: Query<Entity, With<PlayerControlled>>,
     item_query: Query<&ItemKind>,
     mut combat_log: ResMut<CombatLog>,
     mut kill_count: ResMut<KillCount>,
@@ -555,8 +569,8 @@ pub fn melee_wide_system(
     _commands: Commands,
     mut intents: MessageReader<MeleeWideIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
-    attacker_query: Query<(&Position, &CombatStats, Option<&Name>), With<Player>>,
-    mut targets: Query<(Entity, &mut Position, Option<&Name>, Option<&Health>), Without<Player>>,
+    attacker_query: Query<(&Position, &CombatStats, Option<&Name>), With<PlayerControlled>>,
+    mut targets: Query<(Entity, &mut Position, Option<&Name>, Option<&Health>), Without<PlayerControlled>>,
     blockers: Query<(), With<crate::components::BlocksMovement>>,
     mut combat_log: ResMut<CombatLog>,
     mut game_map: ResMut<GameMapResource>,

@@ -27,6 +27,9 @@ pub struct GameMap {
     /// Faction anchor buildings: (center position, faction, building name).
     /// Factions seed from these defensible positions rather than randomly.
     pub faction_anchors: Vec<(GridVec, Faction, String)>,
+    /// Shared spatial occupancy grid. True = tile is already occupied by
+    /// a road, river, beach, or building. No later pass may place on it.
+    pub occupancy: Vec<Vec<bool>>,
 }
 
 /// A rectangular building footprint used during town generation.
@@ -119,6 +122,7 @@ impl TerrainPhase {
             sand_cloud_turns: HashMap::new(),
             sand_cloud_previous_floor: HashMap::new(),
             faction_anchors: Vec::new(),
+            occupancy: vec![vec![false; height as usize]; width as usize],
         };
 
         // Forest on outskirts
@@ -188,17 +192,19 @@ impl WorldGenPhase for WaterPhase {
     ) {
         let river_seed = seed.wrapping_add(88800);
         let river_cx = width as f64 / 2.0;
-        // River flows top to bottom with layered sinusoidal wobble and
-        // noise-driven meanders for a more natural, organic shape.
+        // Track the previous row's center so each row drifts at most ±1 tile.
+        let mut prev_center_x = river_cx;
+        // River flows top to bottom with smooth banks.
         for y in 1..height - 1 {
             let fy = y as f64;
-            // Multi-octave wobble: large sweeping bends + medium curves + fine noise
-            let wobble = (fy * 0.008).sin() * 40.0      // large meander
-                + (fy * 0.020).sin() * 20.0              // medium curve
-                + (fy * 0.045).cos() * 8.0               // small ripple
-                + value_noise(0, y, river_seed) * 10.0   // per-row noise jitter
-                + value_noise(y, 0, river_seed.wrapping_add(222)) * 5.0;
-            let center_x = river_cx + wobble;
+            // Desired center from multi-octave noise (determines general shape).
+            let desired = river_cx
+                + (fy * 0.008).sin() * 40.0      // large meander
+                + (fy * 0.020).sin() * 20.0;     // medium curve
+            // Clamp drift to ±1 tile per row for smooth banks.
+            let drift = (desired - prev_center_x).clamp(-1.0, 1.0);
+            let center_x = prev_center_x + drift;
+            prev_center_x = center_x;
             // River width varies smoothly along its length.
             let base_width = 14.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 10.0;
             let width_pulse = (fy * 0.012).sin() * 6.0; // gentle widening/narrowing
@@ -225,6 +231,18 @@ impl WorldGenPhase for WaterPhase {
                             voxel.floor = Some(Floor::Beach);
                             voxel.props = None;
                         }
+            }
+        }
+
+        // Mark water and beach tiles as occupied
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = map.get_voxel_at(&pos) {
+                    if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                        map.occupancy[x as usize][y as usize] = true;
+                    }
+                }
             }
         }
     }
@@ -358,17 +376,79 @@ impl WorldGenPhase for InfrastructurePhase {
         }
 
         // ── Pass 3b: Bridges where roads cross the river ─────────────────
-        // Scan each avenue band for water/beach interruptions and span them
-        // with bridge tiles, connecting flush with the road on both banks.
+        // For each avenue, first detect if/where it crosses water, then
+        // bridge the FULL river width (not just the road band) to ensure
+        // connectivity across the smoothed river.
+        let road_band = avenue_half_width + sidewalk_width;
         for &ay in &data.avenue_ys {
             let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
             let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
+            // First pass: identify X positions where the road band crosses water
+            let mut crosses_water = vec![false; width as usize];
             for x in 1..width - 1 {
                 let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
-                let band = avenue_half_width + sidewalk_width;
-                for hw in -band..=band {
-                    let y = ay + hw + curve_offset as CoordinateUnit;
+                let center_y = ay + curve_offset as CoordinateUnit;
+                for hw in -road_band..=road_band {
+                    let y = center_y + hw;
                     if y <= 0 || y >= height - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            crosses_water[x as usize] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Second pass: at crossing X positions, bridge a wide band to span
+            // the full river width (±30 tiles covers any river + beach).
+            let bridge_band = 30;
+            for x in 1..width - 1 {
+                if !crosses_water[x as usize] { continue; }
+                let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
+                let center_y = ay + curve_offset as CoordinateUnit;
+                for hw in -bridge_band..=bridge_band {
+                    let y = center_y + hw;
+                    if y <= 0 || y >= height - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            voxel.floor = Some(Floor::Bridge);
+                            voxel.props = None;
+                        }
+                    }
+                }
+            }
+        }
+        // Also bridge cross streets where they cross the river
+        for &cx in &data.cross_xs {
+            let cross_curve_amp = 2.0 + value_noise(cx, 0, curve_seed.wrapping_add(500)) * 3.0;
+            let cross_curve_freq = 0.018 + value_noise(0, cx, curve_seed.wrapping_add(600)) * 0.01;
+            let cross_band = cross_half_width + 1;
+            let mut crosses_water_cross = vec![false; height as usize];
+            for y in 1..height - 1 {
+                let curve_offset = (y as f64 * cross_curve_freq).sin() * cross_curve_amp;
+                let center_x = cx + curve_offset as CoordinateUnit;
+                for hw in -cross_band..=cross_band {
+                    let x = center_x + hw;
+                    if x <= 0 || x >= width - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            crosses_water_cross[y as usize] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            let bridge_band_cross = 30;
+            for y in 1..height - 1 {
+                if !crosses_water_cross[y as usize] { continue; }
+                let curve_offset = (y as f64 * cross_curve_freq).sin() * cross_curve_amp;
+                let center_x = cx + curve_offset as CoordinateUnit;
+                for hw in -bridge_band_cross..=bridge_band_cross {
+                    let x = center_x + hw;
+                    if x <= 0 || x >= width - 1 { continue; }
                     let pos = GridVec::new(x, y);
                     if let Some(voxel) = map.get_voxel_at_mut(&pos) {
                         if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
@@ -398,6 +478,18 @@ impl WorldGenPhase for InfrastructurePhase {
                     });
                     if adjacent_non_road {
                         data.road_edge_tiles.push((x, y));
+                    }
+                }
+            }
+        }
+
+        // Mark road/sidewalk tiles as occupied
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = map.get_voxel_at(&pos) {
+                    if matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk) | Some(Floor::Bridge)) {
+                        map.occupancy[x as usize][y as usize] = true;
                     }
                 }
             }
@@ -537,9 +629,9 @@ impl WorldGenPhase for LandmarkPhase {
         place_grand_saloon(map, width, height, seed, &data.buildings);
         place_stone_church(map, width, height, seed, &data.buildings);
 
-        place_town_plaza(map, width, height, seed);
-        place_cemetery(map, width, height, seed);
-        place_corral(map, width, height, seed);
+        place_town_plaza(map, width, height, seed, &data.buildings);
+        place_cemetery(map, width, height, seed, &data.buildings);
+        place_corral(map, width, height, seed, &data.buildings);
 
         place_town_well(map, width, height, seed);
         place_gallows(map, width, height, seed);
@@ -626,10 +718,6 @@ impl WorldGenPhase for FinalizationPhase {
                 }
             }
         }
-
-        // Debug assertions: validate world generation invariants
-        #[cfg(debug_assertions)]
-        validate_world(map, &data.buildings, &data.avenue_ys, &data.cross_xs, width, height);
     }
 }
 
@@ -644,7 +732,46 @@ impl GameMap {
     ///   5. **Landmarks** — Town Hall, Grand Saloon, plazas, urban features.
     ///   6. **Details** — street props, decorations, gunpowder barrels.
     ///   7. **Finalization** — spawn clearing, water cleanup.
+    ///
+    /// After generation, structural verification checks are run. If any
+    /// check fails, the map is regenerated with a modified seed (up to 10
+    /// retries). In debug builds, panics if no valid map is produced.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
+        const MAX_RETRIES: u32 = 10;
+        let mut last_map = None;
+        let mut last_reason = String::new();
+        for attempt in 0..=MAX_RETRIES {
+            let current_seed = if attempt == 0 { seed } else { seed.wrapping_add(attempt as u64 * 7919) };
+            let (map, data) = Self::generate_with_seed(width, height, current_seed);
+
+            match verify_world(&map, &data.buildings, &data.avenue_ys, &data.cross_xs, width, height) {
+                Ok(()) => return map,
+                Err(reason) => {
+                    eprintln!(
+                        "World gen verification failed (seed={}, attempt {}): {}",
+                        current_seed, attempt, reason
+                    );
+                    last_reason = reason;
+                    last_map = Some(map);
+                }
+            }
+        }
+        #[cfg(debug_assertions)]
+        panic!(
+            "World generation failed after {} retries. Last failure: {}",
+            MAX_RETRIES, last_reason
+        );
+        // In release builds, return the last attempt.
+        #[allow(unreachable_code)]
+        last_map.unwrap()
+    }
+
+    /// Internal: run all generation phases with a specific seed.
+    fn generate_with_seed(
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) -> (Self, WorldGenData) {
         let mut map = TerrainPhase::create_map(width, height, seed);
         let mut data = WorldGenData::default();
 
@@ -661,7 +788,7 @@ impl GameMap {
             phase.execute(&mut map, &mut data, width, height, seed);
         }
 
-        map
+        (map, data)
     }
 
     /// Get a reference to the voxel at the given map coordinate.
@@ -684,6 +811,49 @@ impl GameMap {
         } else {
             None
         }
+    }
+
+    /// Marks a rectangle as occupied in the occupancy grid.
+    pub fn mark_occupied(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        for iy in y..y + h {
+            for ix in x..x + w {
+                if ix >= 0 && ix < self.width && iy >= 0 && iy < self.height {
+                    self.occupancy[ix as usize][iy as usize] = true;
+                }
+            }
+        }
+    }
+
+    /// Returns true if any cell in the rectangle is occupied.
+    pub fn is_occupied(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        for iy in y..y + h {
+            for ix in x..x + w {
+                if ix >= 0 && ix < self.width && iy >= 0 && iy < self.height {
+                    if self.occupancy[ix as usize][iy as usize] {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns true if any cell in the rectangle is water or beach.
+    /// Used for landmark placement that may intentionally straddle roads.
+    pub fn is_water_occupied(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        for iy in y..y + h {
+            for ix in x..x + w {
+                if ix >= 0 && ix < self.width && iy >= 0 && iy < self.height {
+                    let pos = GridVec::new(ix, iy);
+                    if let Some(voxel) = self.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Returns `true` if the tile at `point` is passable (no blocking props
@@ -714,6 +884,23 @@ impl GameMap {
             }
             None => false,
         }
+    }
+
+    /// Finds a spawnable tile near the given center within the given radius.
+    /// Searches in expanding rings from the center outward.
+    pub fn find_spawnable_near(&self, center: GridVec, radius: i32) -> Option<GridVec> {
+        for r in 0..=radius {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs() != r && dy.abs() != r { continue; } // only ring perimeter
+                    let pos = center + GridVec::new(dx, dy);
+                    if self.is_spawnable(&pos) {
+                        return Some(pos);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Finds a passable tile right outside the door of a house.
@@ -1254,23 +1441,53 @@ fn generate_buildings_bsp(
         let bw = (lw - pad * 2).min(22);
         let bh = (lh - pad * 2).min(18);
 
-        if bw < 6 || bh < 5 {
+        if bw < 4 || bh < 4 {
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
 
-        // Check building footprint (not leaf) against cross streets
+        // Check building footprint (not leaf) against cross streets.
+        // If it overlaps, try shrinking the building to fit beside the street.
         let building_on_cross = cross_xs.iter().any(|&cx| {
             bx < cx + cross_half_width + 1 && bx + bw > cx - cross_half_width - 1
         });
-        if building_on_cross {
-            open_lots.push((lx, ly, lw, lh));
-            continue;
-        }
+        let (bx, bw) = if building_on_cross {
+            // Try to fit on either side of the cross street
+            let mut result: Option<(CoordinateUnit, CoordinateUnit)> = None;
+            for &cx in cross_xs {
+                // Try placing to the left of the cross street
+                let left_edge = cx - cross_half_width - 1;
+                if left_edge > bx {
+                    let left_w = (left_edge - bx).min(bw);
+                    if left_w >= 4 {
+                        result = Some((bx, left_w));
+                        break;
+                    }
+                }
+                // Try placing to the right of the cross street
+                let right_x = cx + cross_half_width + 1;
+                if right_x >= lx && right_x < bx + bw {
+                    let right_w = (bx + bw - right_x).min(bw);
+                    if right_w >= 4 {
+                        result = Some((right_x, right_w));
+                        break;
+                    }
+                }
+            }
+            match result {
+                Some(fit) => fit,
+                None => {
+                    open_lots.push((lx, ly, lw, lh));
+                    continue;
+                }
+            }
+        } else {
+            (bx, bw)
+        };
 
         // Park allocation: ~10% of eligible leaves become parks
         let park_noise = value_noise(leaf_cx, leaf_cy, bsp_seed.wrapping_add(8888));
-        if park_noise < 0.10 && bw >= 6 && bh >= 5 {
+        if park_noise < 0.10 && bw >= 4 && bh >= 4 {
             parks.push((bx, by, bw, bh));
             placed.push((bx, by, bw, bh));
             continue;
@@ -1282,40 +1499,41 @@ fn generate_buildings_bsp(
             value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
         let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
 
-        // AABB overlap check against all already-placed footprints
+        // AABB overlap check against all already-placed footprints.
+        // Try progressively smaller sizes if the full building doesn't fit.
         let overlap_margin = 1;
-        let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-            rects_overlap(
-                bx - overlap_margin,
-                by - overlap_margin,
-                bw + overlap_margin * 2,
-                bh + overlap_margin * 2,
-                px, py, pw, ph,
-            )
-        });
+        let mut final_w = bw;
+        let mut final_h = bh;
+        let mut fits = false;
 
-        if overlaps {
-            // Constraint propagation: try a smaller structure
-            let fallback_shrink = 2;
-            let sbw = bw - fallback_shrink;
-            let sbh = bh - fallback_shrink;
-            if sbw >= 6 && sbh >= 5 {
-                let still_overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                    rects_overlap(bx, by, sbw, sbh, px, py, pw, ph)
-                });
-                if !still_overlaps {
-                    placed.push((bx, by, sbw, sbh));
-                    buildings.push(Building { x: bx, y: by, w: sbw, h: sbh, kind });
-                    continue;
-                }
+        for shrink in 0..4 {
+            let sw = bw - shrink * 2;
+            let sh = bh - shrink * 2;
+            if sw < 4 || sh < 4 { break; }
+            let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
+                rects_overlap(
+                    bx - overlap_margin,
+                    by - overlap_margin,
+                    sw + overlap_margin * 2,
+                    sh + overlap_margin * 2,
+                    px, py, pw, ph,
+                )
+            });
+            if !overlaps {
+                final_w = sw;
+                final_h = sh;
+                fits = true;
+                break;
             }
-            // Fall back to open lot
+        }
+
+        if !fits {
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
 
-        placed.push((bx, by, bw, bh));
-        buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
+        placed.push((bx, by, final_w, final_h));
+        buildings.push(Building { x: bx, y: by, w: final_w, h: final_h, kind });
     }
 
     (buildings, parks, open_lots)
@@ -1788,6 +2006,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             }
         }
     }
+    map.mark_occupied(b.x, b.y, b.w, b.h);
 }
 
 /// Helper: sets a prop at a position if within bounds, not occupied by a wall,
@@ -2186,21 +2405,19 @@ fn check_connectivity(
     }
 }
 
-/// Debug-only validation of world generation invariants.
-/// Checks: no overlapping building footprints (including padding),
-/// every building has a reachable entrance, the street graph is
-/// fully connected, and every BSP leaf is accounted for.
-#[cfg(debug_assertions)]
-fn validate_world(
+/// Structural verification of world generation invariants.
+/// Returns `Ok(())` if the map passes all checks, or `Err(reason)` describing
+/// which check failed. Used by the retry loop in `GameMap::new()`.
+fn verify_world(
     map: &GameMap,
     buildings: &[Building],
     avenue_ys: &[CoordinateUnit],
     cross_xs: &[CoordinateUnit],
     width: CoordinateUnit,
     height: CoordinateUnit,
-) {
+) -> Result<(), String> {
     if buildings.is_empty() || width < 60 || height < 60 || avenue_ys.is_empty() {
-        return; // Skip validation on maps without a proper road network
+        return Ok(()); // Skip validation on maps without a proper road network
     }
 
     // 1. No two building footprints overlap (including 1-tile padding margin)
@@ -2210,15 +2427,33 @@ fn validate_world(
                 a.x - 1, a.y - 1, a.w + 2, a.h + 2,
                 b.x - 1, b.y - 1, b.w + 2, b.h + 2,
             );
-            debug_assert!(
-                !overlaps,
-                "World validation: buildings at ({},{}) {}x{} and ({},{}) {}x{} overlap (including padding)",
-                a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h
-            );
+            if overlaps {
+                return Err(format!(
+                    "buildings at ({},{}) {}x{} and ({},{}) {}x{} overlap (including padding)",
+                    a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h
+                ));
+            }
         }
     }
 
-    // 2. Every building has a reachable entrance (BFS from all road tiles)
+    // 2. No building tile sits on a river or road tile
+    for b in buildings {
+        for by in b.y..b.y + b.h {
+            for bx in b.x..b.x + b.w {
+                let pos = GridVec::new(bx, by);
+                if let Some(v) = map.get_voxel_at(&pos) {
+                    if matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                        return Err(format!(
+                            "building at ({},{}) has tile on river at ({},{})",
+                            b.x, b.y, bx, by
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Every building has a reachable entrance (BFS from all road tiles)
     let w = width as usize;
     let mut reachable = vec![false; w * height as usize];
     let mut queue = std::collections::VecDeque::new();
@@ -2252,33 +2487,29 @@ fn validate_world(
         let door_y = b.y + b.h;
         if door_x >= 0 && door_x < width && door_y >= 0 && door_y < height {
             let idx = door_y as usize * w + door_x as usize;
-            let door_pos = GridVec::new(door_x, door_y);
-            let door_floor = map.get_voxel_at(&door_pos).map(|v| &v.floor);
-            let door_passable = map.is_passable(&door_pos);
-            debug_assert!(
-                reachable[idx],
-                "World validation: building at ({},{}) has unreachable entrance at ({},{}) floor={:?} passable={}",
-                b.x, b.y, door_x, door_y, door_floor, door_passable
-            );
+            if !reachable[idx] {
+                return Err(format!(
+                    "building at ({},{}) has unreachable entrance at ({},{})",
+                    b.x, b.y, door_x, door_y
+                ));
+            }
         }
     }
 
-    // 3. Street graph is connected: every avenue tile that is passable
+    // 4. Street graph is connected: every avenue tile that is passable
     //    can reach every cross-street tile that is passable.
     if avenue_ys.len() >= 2 {
         let first_ay = avenue_ys[0];
         let last_ay = *avenue_ys.last().unwrap();
         if first_ay >= 0 && first_ay < height && last_ay >= 0 && last_ay < height {
-            // Check first avenue center reaches last avenue center
             let mid_x = width / 2;
             let start_idx = first_ay as usize * w + mid_x as usize;
             let end_idx = last_ay as usize * w + mid_x as usize;
-            if reachable[start_idx] {
-                debug_assert!(
-                    reachable[end_idx],
-                    "World validation: street graph not fully connected — avenue y={} cannot reach avenue y={}",
+            if reachable[start_idx] && !reachable[end_idx] {
+                return Err(format!(
+                    "street graph not fully connected — avenue y={} cannot reach avenue y={}",
                     first_ay, last_ay
-                );
+                ));
             }
         }
     }
@@ -2287,22 +2518,21 @@ fn validate_world(
             if let Some(&ay) = avenue_ys.first() {
                 if ay >= 0 && ay < height {
                     let pos = GridVec::new(cx, ay);
-                    // Only assert connectivity if the intersection tile is
-                    // passable (cross streets don't bridge the river, so
-                    // intersections inside the river are expected to be
-                    // disconnected).
                     if map.is_passable(&pos) {
                         let idx = ay as usize * w + cx as usize;
-                        debug_assert!(
-                            reachable[idx],
-                            "World validation: cross street x={} not connected to avenue y={}",
-                            cx, ay
-                        );
+                        if !reachable[idx] {
+                            return Err(format!(
+                                "cross street x={} not connected to avenue y={}",
+                                cx, ay
+                            ));
+                        }
                     }
                 }
             }
         }
     }
+
+    Ok(())
 }
 
 /// Returns `true` if the rectangle (rx, ry, rw, rh) overlaps any building
@@ -2333,6 +2563,7 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
     let my = (cy - mh / 2).clamp(2, height - mh - 2);
 
     if overlaps_any_building(mx, my, mw, mh, buildings) { return; }
+    if map.is_water_occupied(mx, my, mw, mh) { return; }
 
     // Lay down thick stone walls and interior
     for y in my..my + mh {
@@ -2419,11 +2650,12 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
         Faction::Civilians,
         "Mission".to_string(),
     ));
+    map.mark_occupied(mx, my, mw, mh);
 }
 
 /// Places a town plaza — an open killzone at the heart of the map.
 /// The plaza is flanked by buildings with window-facing tiles overlooking it.
-fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let pw: CoordinateUnit = 16;
     let ph: CoordinateUnit = 12;
     if width < pw + 20 || height < ph + 20 {
@@ -2435,6 +2667,10 @@ fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: Coordinate
     let cy = height / 2 + 10 + (value_noise(6, 6, p_seed) * 10.0) as CoordinateUnit;
     let px = (cx - pw / 2).clamp(2, width - pw - 2);
     let py = (cy - ph / 2).clamp(2, height - ph - 2);
+
+    // Skip if overlaps existing buildings or water
+    if overlaps_any_building(px, py, pw, ph, buildings) { return; }
+    if map.is_water_occupied(px, py, pw, ph) { return; }
 
     // Clear the plaza area — open exposed killzone
     for y in py..py + ph {
@@ -2457,6 +2693,7 @@ fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: Coordinate
     set_prop(map, center.x + 2, center.y, Props::Bench);
     set_prop(map, center.x, center.y - 2, Props::Bench);
     set_prop(map, center.x, center.y + 2, Props::Bench);
+    map.mark_occupied(px, py, pw, ph);
 }
 
 /// Places a large Town Hall building near the center of the map.
@@ -2476,6 +2713,7 @@ fn place_town_hall(map: &mut GameMap, width: CoordinateUnit, height: CoordinateU
     let ty = (cy - th / 2).clamp(2, height - th - 2);
 
     if overlaps_any_building(tx, ty, tw, th, buildings) { return; }
+    if map.is_water_occupied(tx, ty, tw, th) { return; }
 
     // Lay down walls and wood-plank floor
     for y in ty..ty + th {
@@ -2515,6 +2753,7 @@ fn place_town_hall(map: &mut GameMap, width: CoordinateUnit, height: CoordinateU
     set_prop(map, tx + tw - 2, ty + 1, Props::Barrel);
     set_prop(map, tx + 1, ty + th - 2, Props::Crate);
     set_prop(map, tx + tw - 2, ty + th - 2, Props::Crate);
+    map.mark_occupied(tx, ty, tw, th);
 }
 
 /// Places a Grand Saloon — a large 20×14 saloon with piano, many tables,
@@ -2533,6 +2772,7 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     let sy = (cy - sh / 2).clamp(2, height - sh - 2);
 
     if overlaps_any_building(sx, sy, sw, sh, buildings) { return; }
+    if map.is_water_occupied(sx, sy, sw, sh) { return; }
 
     // Lay down walls and wood-plank floor
     for y in sy..sy + sh {
@@ -2574,6 +2814,7 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     // Corner barrels
     set_prop(map, sx + sw - 2, sy + 1, Props::Barrel);
     set_prop(map, sx + sw - 2, sy + sh - 2, Props::Crate);
+    map.mark_occupied(sx, sy, sw, sh);
 }
 
 /// Places street props (benches, barrels, signs, hitching posts, crates) on
@@ -2667,7 +2908,7 @@ fn place_desert_decorations(
 }
 
 /// Places a small cemetery on the outskirts of the town.
-fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let cw: CoordinateUnit = 14;
     let ch: CoordinateUnit = 10;
     if width < cw + 20 || height < ch + 20 {
@@ -2679,6 +2920,9 @@ fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
     let cy = height * 3 / 4 + (value_noise(8, 8, c_seed) * 10.0) as CoordinateUnit;
     let px = (cx - cw / 2).clamp(2, width - cw - 2);
     let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    if overlaps_any_building(px, py, cw, ch, buildings) { return; }
+    if map.is_water_occupied(px, py, cw, ch) { return; }
 
     // Fence perimeter with gate
     for y in py..py + ch {
@@ -2707,7 +2951,7 @@ fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
 }
 
 /// Places a livestock corral with fenced area and hay bales.
-fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let cw: CoordinateUnit = 12;
     let ch: CoordinateUnit = 8;
     if width < cw + 20 || height < ch + 20 {
@@ -2718,6 +2962,9 @@ fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit
     let cy = height * 3 / 4 + (value_noise(10, 10, c_seed) * 10.0) as CoordinateUnit;
     let px = (cx - cw / 2).clamp(2, width - cw - 2);
     let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    if overlaps_any_building(px, py, cw, ch, buildings) { return; }
+    if map.is_water_occupied(px, py, cw, ch) { return; }
 
     // Fence perimeter with gate
     for y in py..py + ch {
@@ -2948,6 +3195,7 @@ fn place_stone_church(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     let by = (cy - ch / 2).clamp(2, height - ch - 2);
 
     if overlaps_any_building(bx, by, cw, ch, buildings) { return; }
+    if map.is_water_occupied(bx, by, cw, ch) { return; }
 
     // Stone walls and floor
     for y in by..by + ch {
@@ -3001,6 +3249,7 @@ fn place_stone_church(map: &mut GameMap, width: CoordinateUnit, height: Coordina
             }
         }
     }
+    map.mark_occupied(bx, by, cw, ch);
 }
 
 /// Places small outpost structures along the map edges — defensive positions
@@ -3493,8 +3742,10 @@ mod tests {
 
     #[test]
     fn stress_test_20_seeds() {
-        // Part 7: Run the generator across 20 different seeds and verify
-        // all validation checks pass for each one.
+        // Run the generator across 20 different seeds and verify
+        // all structural verification checks pass for each one.
+        // GameMap::new() runs verify_world internally and retries on
+        // failure, panicking in debug builds if exhausted.
         for seed in 0..20u64 {
             let map = GameMap::new(400, 280, seed);
             // Basic structural checks
@@ -3524,6 +3775,22 @@ mod tests {
             // Spawn area must be clear
             let spawn_passable = map.is_passable(&SPAWN_POINT);
             assert!(spawn_passable, "Seed {seed}: spawn point must be passable");
+
+            // Confirm no building tiles sit on river tiles (post-verification)
+            let mut building_on_water = false;
+            for y in 0..280 {
+                for x in 0..400 {
+                    // If it has a wall and water floor, it's a violation
+                    if let Some(voxel) = map.get_voxel_at(&GridVec::new(x as i32, y as i32)) {
+                        if voxel.props.as_ref().is_some_and(|p| p.is_wall())
+                            && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
+                        {
+                            building_on_water = true;
+                        }
+                    }
+                }
+            }
+            assert!(!building_on_water, "Seed {seed}: no building walls should be on river tiles");
         }
     }
 

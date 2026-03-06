@@ -36,7 +36,7 @@ impl From<Position> for GridVec {
 
 /// Marker component: tags the player-controlled entity.
 #[derive(Component, Debug)]
-pub struct Player;
+pub struct PlayerControlled;
 
 /// Marker component: tags an entity that has died.
 /// Dead entities are excluded from most gameplay systems (pickup, healing,
@@ -276,11 +276,30 @@ impl Default for AiPersonality {
     }
 }
 
-/// Deprecated: Hostility is now determined purely by faction.
-/// This marker component is kept for backward compatibility with tests
-/// but is no longer inserted by any game system.
-#[derive(Component, Debug)]
-pub struct Hostile;
+/// Aiming style assigned randomly when an NPC acquires a target.
+/// Determines how the NPC approaches ranged combat.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub enum AimingStyle {
+    /// Takes extra turns tracking the cursor onto the target before firing.
+    CarefulAim,
+    /// Fires quickly with reduced accuracy.
+    SnapShot,
+    /// Fires vaguely in the target's direction without precise aim.
+    Suppression,
+}
+
+/// Persistent target tracking for NPC AI.
+/// Once an NPC acquires a target, it pursues and attacks that target
+/// until the target is dead or escapes the NPC's awareness range.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AiTarget {
+    /// The entity being pursued.
+    pub entity: Entity,
+    /// Last known position of the target.
+    pub last_pos: GridVec,
+    /// Turn number when target was last seen.
+    pub last_seen: u32,
+}
 
 /// Faction affiliation for group-based spawning.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]

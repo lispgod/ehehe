@@ -336,7 +336,7 @@ pub fn spawn_monster(
         Energy(0),
     )).insert((
         AiState::Idle,
-        AiLookDir(GridVec::new(0, -1)), // default: looking south
+        AiLookDir(GridVec::new(0, -1), 0), // default: looking south
         PatrolOrigin(GridVec::new(x, y)),
         AiMemory::default(),
         AiPersonality {

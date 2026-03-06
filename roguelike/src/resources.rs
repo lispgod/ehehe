@@ -74,23 +74,38 @@ impl GameMapResource {
     pub fn detonate_gunpowder_barrel(&mut self, origin: GridVec, turn: u32) -> i32 {
         let radius = GUNPOWDER_BARREL_EXPLOSION_RADIUS;
         let mut fire_count = 0;
+        // Collect tiles to ignite so we don't hold mutable borrow during iteration.
+        let mut tiles_to_ignite: Vec<(GridVec, Option<Floor>, bool)> = Vec::new();
         for gdx in -radius..=radius {
             for gdy in -radius..=radius {
                 let gp_dist = gdx.abs().max(gdy.abs());
                 if gp_dist > radius { continue; }
                 let fire_pos = origin + GridVec::new(gdx, gdy);
-                if let Some(voxel) = self.0.get_voxel_at_mut(&fire_pos) {
+                if let Some(voxel) = self.0.get_voxel_at(&fire_pos) {
                     if matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
-                    if let Some(ref prop) = voxel.props {
-                        if prop.is_flammable() {
-                            voxel.props = None;
-                            fire_count += 1;
-                        }
-                    }
-                    if !matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
-                        voxel.floor = Some(Floor::Fire);
-                        self.0.fire_turns.entry(fire_pos).or_insert(turn);
-                    }
+                    let is_water = matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater));
+                    let has_flammable = voxel.props.as_ref().is_some_and(|p| p.is_flammable());
+                    let prev = voxel.floor.clone();
+                    tiles_to_ignite.push((fire_pos, prev, has_flammable));
+                    if is_water { continue; }
+                }
+            }
+        }
+        for (fire_pos, prev, has_flammable) in tiles_to_ignite {
+            if has_flammable {
+                if let Some(voxel) = self.0.get_voxel_at_mut(&fire_pos) {
+                    voxel.props = None;
+                }
+                fire_count += 1;
+            }
+            // Save previous floor before setting fire (avoids double mutable borrow).
+            let is_water = self.0.get_voxel_at(&fire_pos)
+                .is_some_and(|v| matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)));
+            if !is_water {
+                self.0.fire_previous_floor.entry(fire_pos).or_insert(prev);
+                self.0.fire_turns.entry(fire_pos).or_insert(turn);
+                if let Some(voxel) = self.0.get_voxel_at_mut(&fire_pos) {
+                    voxel.floor = Some(Floor::Fire);
                 }
             }
         }

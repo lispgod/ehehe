@@ -390,7 +390,7 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
             dirty: true,
         },
         AiState::Idle,
-        AiLookDir(GridVec::new(0, -1)),
+        AiLookDir(GridVec::new(0, -1), 0),
         PatrolOrigin(GridVec::new(spawn_pos.x, spawn_pos.y)),
         AiMemory::default(),
         AiPersonality { aggression: 0.5, courage: 1.0 },

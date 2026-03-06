@@ -156,7 +156,7 @@ pub fn fire_system(
                         burnout_tiles.push(pos);
                     }
 
-                // Spread fire to adjacent flammable props and wooden floors.
+                // Spread fire to adjacent flammable props and wooden/bridge floors.
                 for neighbor in pos.cardinal_neighbors() {
                     if let Some(n_voxel) = game_map.0.get_voxel_at(&neighbor) {
                         // Skip tiles already on fire
@@ -165,8 +165,8 @@ pub fn fire_system(
                         }
                         let has_flammable_prop = n_voxel.props.as_ref()
                             .is_some_and(|f| f.is_flammable());
-                        let has_wood_floor = matches!(n_voxel.floor, Some(Floor::WoodPlanks));
-                        if has_flammable_prop || has_wood_floor {
+                        let has_flammable_floor = matches!(n_voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::Bridge));
+                        if has_flammable_prop || has_flammable_floor {
                             new_fire_tiles.push(neighbor);
                         }
                     }
@@ -177,19 +177,46 @@ pub fn fire_system(
 
     // Apply fire spread.
     for tile in new_fire_tiles {
+        if let Some(voxel) = game_map.0.get_voxel_at(&tile) {
+            let prev = voxel.floor.clone();
+            game_map.0.fire_previous_floor.entry(tile).or_insert(prev);
+        }
         if let Some(voxel) = game_map.0.get_voxel_at_mut(&tile) {
             voxel.props = None;
             voxel.floor = Some(Floor::Fire);
         }
     }
 
-    // Apply burnout: destroy any remaining props and leave scorched earth.
+    // Apply burnout: destroy any remaining props. Burned-out bridges
+    // revert to water (matching adjacent river tiles); everything else
+    // becomes scorched earth.
     for tile in &burnout_tiles {
+        let was_bridge = game_map.0.fire_previous_floor.get(tile)
+            .is_some_and(|f| matches!(f, Some(Floor::Bridge)));
+        let replacement = if was_bridge {
+            // Determine water depth by inspecting the cardinal neighbors
+            // for river tiles and picking the most common type.
+            let mut shallow = 0u32;
+            let mut deep = 0u32;
+            for n in tile.cardinal_neighbors() {
+                if let Some(nv) = game_map.0.get_voxel_at(&n) {
+                    match nv.floor {
+                        Some(Floor::ShallowWater) => shallow += 1,
+                        Some(Floor::DeepWater) => deep += 1,
+                        _ => {}
+                    }
+                }
+            }
+            if deep >= shallow { Floor::DeepWater } else { Floor::ShallowWater }
+        } else {
+            Floor::ScorchedEarth
+        };
         if let Some(voxel) = game_map.0.get_voxel_at_mut(tile) {
             voxel.props = None;
-            voxel.floor = Some(Floor::ScorchedEarth);
+            voxel.floor = Some(replacement);
         }
         game_map.0.fire_turns.remove(tile);
+        game_map.0.fire_previous_floor.remove(tile);
     }
 
     // ── Sand cloud dissipation ──────────────────────────────────────

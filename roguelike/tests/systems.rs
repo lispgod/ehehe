@@ -59,7 +59,7 @@ fn test_app() -> App {
 fn spawn_test_player(app: &mut App, x: i32, y: i32) -> Entity {
     app.world_mut().spawn((
         Position { x, y },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -242,7 +242,7 @@ fn low_attack_still_deals_damage() {
     // Spawn player
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -411,7 +411,7 @@ fn combat_log_no_damage_message() {
     // Player with 0 attack
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -598,7 +598,7 @@ fn spell_damages_nearby_enemies() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -640,7 +640,7 @@ fn spell_does_not_damage_distant_enemies() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -677,7 +677,7 @@ fn spell_hits_multiple_enemies() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -733,7 +733,7 @@ fn spell_kills_weak_enemy_and_increments_kill_count() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -806,7 +806,7 @@ fn spell_no_hit_logs_message() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -868,7 +868,7 @@ fn spell_damages_hostile_entity() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -1018,7 +1018,7 @@ fn spawn_test_player_with_gun(app: &mut App, x: i32, y: i32, attack: i32) -> (En
     )).id();
     let player = app.world_mut().spawn((
         Position { x, y },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -1109,7 +1109,7 @@ fn ranged_bullet_penetrates_multiple_enemies() {
     )).id();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -1251,7 +1251,7 @@ fn fov_cursor_centered_produces_circle() {
     let player_pos = Position { x: 60, y: 40 };
     app.world_mut().spawn((
         player_pos,
-        Player,
+        PlayerControlled,
         Viewshed {
             range: 40,
             visible_tiles: std::collections::HashSet::new(),
@@ -1291,7 +1291,7 @@ fn fov_far_cursor_has_narrow_cone() {
     let player_pos = Position { x: 60, y: 40 };
     app.world_mut().spawn((
         player_pos,
-        Player,
+        PlayerControlled,
         Viewshed {
             range: 40,
             visible_tiles: std::collections::HashSet::new(),
@@ -1326,7 +1326,7 @@ fn fov_min_radius_always_visible() {
     let player_pos = Position { x: 60, y: 40 };
     app.world_mut().spawn((
         player_pos,
-        Player,
+        PlayerControlled,
         Viewshed {
             range: 40,
             visible_tiles: std::collections::HashSet::new(),
@@ -1433,7 +1433,7 @@ fn fov_centered_cursor_gives_full_circle() {
 // ═══════════════════════════════════════════════════════════════════
 
 /// Creates an app wired for cactus damage testing.
-/// Includes movement + cactus_damage_system + combat chain + state management.
+/// Includes movement + combat chain + state management.
 fn test_app_with_cactus() -> App {
     let mut app = App::new();
     app.add_plugins(bevy::app::ScheduleRunnerPlugin::default());
@@ -1463,7 +1463,6 @@ fn test_app_with_cactus() -> App {
         (
             spatial_index::spatial_index_system,
             movement::movement_system,
-            movement::cactus_damage_system,
             combat::combat_system,
             combat::apply_damage_system,
             combat::death_system,
@@ -1765,7 +1764,7 @@ fn spell_sand_throw_creates_sand_particles() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -1843,7 +1842,6 @@ fn test_app_with_ai() -> App {
             ai::energy_accumulate_system,
             ai::ai_system,
             movement::movement_system,
-            movement::cactus_damage_system,
             inventory::pickup_system,
             inventory::use_item_system,
             inventory::throw_system,
@@ -2382,7 +2380,7 @@ fn kill_awards_kill_count_with_damage_source() {
     let mut app = test_app();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -2498,7 +2496,7 @@ fn spell_consumes_stamina() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -2531,7 +2529,7 @@ fn sand_throw_costs_less_stamina_than_grenade() {
     let mut app = test_app_with_spells();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -3150,7 +3148,7 @@ fn shrapnel_projectile_has_bullet_trail_visual() {
     )).id();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },
@@ -3187,7 +3185,7 @@ fn explosive_projectile_has_asterisk_visual() {
     )).id();
     let player = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Player,
+        PlayerControlled,
         BlocksMovement,
         Name("Player".into()),
         Health { current: 30, max: 30 },

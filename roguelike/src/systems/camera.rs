@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CameraFollow, Player, Position};
+use crate::components::{CameraFollow, PlayerControlled, Position};
 use crate::resources::{CameraPosition, CursorPosition};
 
 /// Centers the camera between the player and cursor positions.
@@ -10,7 +10,7 @@ use crate::resources::{CameraPosition, CursorPosition};
 /// the system is automatically skipped when the player entity doesn't exist
 /// (e.g., during restart), without requiring manual `if let Ok(...)` checks.
 pub fn camera_follow_system(
-    player: Single<&Position, (With<CameraFollow>, With<Player>)>,
+    player: Single<&Position, (With<CameraFollow>, With<PlayerControlled>)>,
     cursor: Res<CursorPosition>,
     mut camera: ResMut<CameraPosition>,
 ) {

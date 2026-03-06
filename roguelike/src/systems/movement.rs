@@ -1,11 +1,9 @@
 use bevy::prelude::*;
 
-use crate::components::{BlocksMovement, Dead, Health, Player, Position, Stamina, Viewshed};
+use crate::components::{BlocksMovement, Dead, Health, PlayerControlled, Position, Stamina, Viewshed};
 use crate::events::MoveIntent;
 use crate::grid_vec::GridVec;
 use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, GameState, InputState, SpatialIndex, TurnCounter, TurnState};
-use crate::typeenums::Props;
-
 /// Health threshold below which entities leave blood trails when moving.
 const BLOOD_DRIP_THRESHOLD: i32 = 40;
 
@@ -38,7 +36,7 @@ pub fn movement_system(
     mut blood_map: ResMut<BloodMap>,
     turn_counter: Res<TurnCounter>,
     blockers: Query<(), With<BlocksMovement>>,
-    players: Query<(), With<Player>>,
+    players: Query<(), With<PlayerControlled>>,
     mut healths: Query<&mut Health>,
     mut movers: Query<(&mut Position, Option<&mut Viewshed>)>,
     dead_query: Query<(), With<Dead>>,
@@ -111,7 +109,7 @@ pub fn movement_system(
 /// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
 /// automatically skipped when the player entity doesn't exist.
 pub fn victory_check_system(
-    player_pos: Single<&Position, With<Player>>,
+    player_pos: Single<&Position, With<PlayerControlled>>,
     game_map: Res<GameMapResource>,
     mut next_state: ResMut<NextState<GameState>>,
     mut combat_log: ResMut<CombatLog>,
@@ -132,7 +130,7 @@ pub fn victory_check_system(
 /// nothing to slow down. This system is kept as a no-op stub so the
 /// plugin's system registration doesn't need to change.
 pub fn water_slowdown_system(
-    _player_pos: Single<&Position, With<Player>>,
+    _player_pos: Single<&Position, With<PlayerControlled>>,
     _game_map: Res<GameMapResource>,
     _extra_ticks: ResMut<crate::resources::ExtraWorldTicks>,
     _combat_log: ResMut<CombatLog>,
@@ -141,56 +139,12 @@ pub fn water_slowdown_system(
     // Water is impassable; this system is intentionally a no-op.
 }
 
-/// Damage dealt by walking into a cactus (adjacent tile).
-const CACTUS_DAMAGE: i32 = 1;
-
-/// Applies cactus contact damage: any entity standing on a tile adjacent to a
-/// cactus takes `CACTUS_DAMAGE` each turn. Runs after movement.
-///
-/// **Turn-gated**: only applies damage during `PlayerTurn` or `WorldTurn`,
-/// not during `AwaitingInput` (which runs every frame at 30 FPS). Without
-/// this gate the system would deal 30 damage/second, instantly killing
-/// any entity near a cactus.
-pub fn cactus_damage_system(
-    game_map: Res<GameMapResource>,
-    mut health_query: Query<(&Position, &mut Health, Option<&crate::components::Name>)>,
-    mut combat_log: ResMut<CombatLog>,
-    turn_state: Option<Res<State<TurnState>>>,
-) {
-    // Only apply cactus damage during actual turns, not every frame.
-    let is_active_turn = turn_state.as_ref().is_some_and(|ts| {
-        matches!(ts.get(), TurnState::PlayerTurn | TurnState::WorldTurn)
-    });
-    if !is_active_turn {
-        return;
-    }
-
-    for (pos, mut hp, name) in &mut health_query {
-        let p = pos.as_grid_vec();
-        let entity_name = crate::components::display_name(name);
-        // Check if standing adjacent to (or on) a cactus
-        for neighbor in p.cardinal_neighbors() {
-            if let Some(voxel) = game_map.0.get_voxel_at(&neighbor)
-                && matches!(voxel.props, Some(Props::Cactus)) {
-                    let actual = hp.apply_damage(CACTUS_DAMAGE);
-                    if actual > 0 {
-                        combat_log.push_at(
-                            format!("{entity_name} is pricked by a cactus for {actual} damage!"),
-                            p,
-                        );
-                    }
-                    break; // Only one cactus damage per turn even if multiple adjacent
-                }
-        }
-    }
-}
-
 /// Consumes pending dive stamina after movement is processed.
 /// The input system sets `dive_stamina_pending` and the movement system
 /// processes the move intents. This system deducts the stamina.
 pub fn dive_stamina_system(
     mut input_state: ResMut<InputState>,
-    mut player_query: Query<&mut Stamina, With<Player>>,
+    mut player_query: Query<&mut Stamina, With<PlayerControlled>>,
 ) {
     if input_state.dive_stamina_pending > 0 {
         if let Ok(mut stamina) = player_query.single_mut() {

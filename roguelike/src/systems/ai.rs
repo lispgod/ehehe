@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, PlayerControlled, Position, Speed, Stamina, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
@@ -377,7 +377,7 @@ fn has_friendly_in_path(
     my_faction: Option<Faction>,
     self_entity: Entity,
     spatial: &SpatialIndex,
-    npc_factions: &Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
+    npc_factions: &Query<(Entity, &Position, Option<&Faction>), Without<PlayerControlled>>,
 ) -> bool {
     let Some(my_f) = my_faction else { return false; };
     let path = origin.bresenham_line(target);
@@ -512,10 +512,10 @@ pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
         (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
-        Without<Player>,
+        Without<PlayerControlled>,
     >,
-    player_query: Query<(Entity, &Position, &Health), With<Player>>,
-    npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
+    player_query: Query<(Entity, &Position, &Health), With<PlayerControlled>>,
+    npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<PlayerControlled>>,
     floor_items: Query<(Entity, &Position), With<Item>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
@@ -606,7 +606,7 @@ pub fn ai_system(
             None
         };
 
-        // Player is always visible as a target if in the NPC's viewshed.
+        // PlayerControlled is always visible as a target if in the NPC's viewshed.
         // Hostility is purely faction-based — all NPCs with a faction target
         // the player (who has no faction).
         let player_visible = player_vec.is_some_and(|pv|

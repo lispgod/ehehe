@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{CombatStats, Inventory, Item, ItemKind, Player, Projectile, ProjectileVisual, SPELL_STAMINA_COST, Stamina, ThrownExplosive, Name, Position, Renderable, display_name};
+use crate::components::{CombatStats, Inventory, Item, ItemKind, PlayerControlled, Projectile, ProjectileVisual, SPELL_STAMINA_COST, Stamina, ThrownExplosive, Name, Position, Renderable, display_name};
 use crate::events::{MolotovCastIntent, SpellCastIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, GameMapResource, InputState, MapSeed, SpellParticles, TurnCounter};
@@ -425,7 +425,7 @@ fn detonate_molotov(
 pub fn water_bucket_system(
     mut input_state: ResMut<InputState>,
     mut game_map: ResMut<GameMapResource>,
-    player_query: Query<(&Position, &Inventory), With<Player>>,
+    player_query: Query<(&Position, &Inventory), With<PlayerControlled>>,
     mut item_kind_query: Query<&mut ItemKind>,
 ) {
     let Some((idx, radius)) = input_state.water_bucket_pending.take() else {

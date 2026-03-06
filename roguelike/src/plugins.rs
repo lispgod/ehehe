@@ -4,8 +4,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::components::{
+    AiLookDir, AiMemory, AiPersonality, AiState,
     BlocksMovement, Caliber, CameraFollow, CombatStats, Energy, Faction,
-    Health, Inventory, Item, ItemKind, Stamina, Name, Player, Position,
+    Health, Inventory, Item, ItemKind, Stamina, Name, PatrolOrigin, PlayerControlled, Position,
     Renderable, Speed, Viewshed, ACTION_COST,
 };
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
@@ -161,7 +162,6 @@ impl Plugin for ActionPlugin {
                 Update,
                 (
                     movement::movement_system,
-                    movement::cactus_damage_system,
                     movement::dive_stamina_system,
                     inventory::pickup_system,
                     inventory::auto_pickup_system,
@@ -354,7 +354,7 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
             x: spawn_pos.x,
             y: spawn_pos.y,
         },
-        Player,
+        PlayerControlled,
         Name("Rogue".into()),
         Renderable {
             symbol: "@".into(),
@@ -385,6 +385,11 @@ fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
             revealed_tiles: HashSet::new(),
             dirty: true,
         },
+        AiState::Idle,
+        AiLookDir(GridVec::new(0, -1)),
+        PatrolOrigin(GridVec::new(spawn_pos.x, spawn_pos.y)),
+        AiMemory::default(),
+        AiPersonality { aggression: 0.5, courage: 1.0 },
     ));
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, Faction, Player, Position, Viewshed};
+use crate::components::{AiLookDir, Faction, PlayerControlled, Position, Viewshed};
 use crate::grid_vec::GridVec;
 use crate::resources::{CursorPosition, GameMapResource};
 use crate::typedefs::{CoordinateUnit, MyPoint};
@@ -30,7 +30,7 @@ pub const FOV_MAX_RANGE: CoordinateUnit = 120;
 pub fn visibility_system(
     game_map: Res<GameMapResource>,
     mut query: Query<(Entity, &Position, &mut Viewshed, Option<&AiLookDir>, Option<&Faction>)>,
-    player_query: Query<Entity, With<Player>>,
+    player_query: Query<Entity, With<PlayerControlled>>,
     cursor: Res<CursorPosition>,
     spell_particles: Res<crate::resources::SpellParticles>,
 ) {
@@ -85,7 +85,7 @@ pub fn visibility_system(
                 (100, 0.97)
             }
         } else {
-            // Player: use the original formula.
+            // PlayerControlled: use the original formula.
             compute_fov_params(cone_dir)
         };
 

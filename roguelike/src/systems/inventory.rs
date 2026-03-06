@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::{
-    CollectibleKind, Dead, Health, Inventory, Item, ItemKind, Name, Player, Position,
+    CollectibleKind, Dead, Health, Inventory, Item, ItemKind, Name, PlayerControlled, Position,
     item_display_name,
 };
 use crate::events::{PickupItemIntent, ThrowItemIntent, UseItemIntent};
@@ -149,7 +149,7 @@ pub fn use_item_system(
 /// and can be reloaded with available collectibles, then reloads one round.
 /// If the first gun's caliber is unavailable, tries other guns before failing.
 pub fn reload_system(
-    player_query: Query<&Inventory, With<Player>>,
+    player_query: Query<&Inventory, With<PlayerControlled>>,
     mut item_kind_query: Query<(&mut ItemKind, Option<&Name>)>,
     mut combat_log: ResMut<CombatLog>,
     mut input_state: ResMut<InputState>,
@@ -220,10 +220,10 @@ pub fn reload_system(
 /// over it. Runs after movement.
 pub fn auto_pickup_system(
     mut commands: Commands,
-    player_query: Query<&Position, (With<Player>, Without<Dead>)>,
+    player_query: Query<&Position, (With<PlayerControlled>, Without<Dead>)>,
     items_query: Query<(Entity, &Position, Option<&Name>, Option<&CollectibleKind>), With<Item>>,
     spatial: Res<SpatialIndex>,
-    mut inventory_query: Query<&mut Inventory, (With<Player>, Without<Dead>)>,
+    mut inventory_query: Query<&mut Inventory, (With<PlayerControlled>, Without<Dead>)>,
     mut combat_log: ResMut<CombatLog>,
     mut collectibles: ResMut<Collectibles>,
 ) {
@@ -265,7 +265,7 @@ pub fn auto_pickup_system(
 pub fn throw_system(
     mut intents: MessageReader<ThrowItemIntent>,
     mut commands: Commands,
-    mut inventory_query: Query<(&mut Inventory, &Position), With<Player>>,
+    mut inventory_query: Query<(&mut Inventory, &Position), With<PlayerControlled>>,
     mut combat_log: ResMut<CombatLog>,
     name_query: Query<Option<&Name>>,
 ) {

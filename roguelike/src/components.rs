@@ -36,7 +36,7 @@ impl From<Position> for GridVec {
 
 /// Marker component: tags the player-controlled entity.
 #[derive(Component, Debug)]
-pub struct Player;
+pub struct PlayerControlled;
 
 /// Marker component: tags an entity that has died.
 /// Dead entities are excluded from most gameplay systems (pickup, healing,
@@ -275,12 +275,6 @@ impl Default for AiPersonality {
         }
     }
 }
-
-/// Deprecated: Hostility is now determined purely by faction.
-/// This marker component is kept for backward compatibility with tests
-/// but is no longer inserted by any game system.
-#[derive(Component, Debug)]
-pub struct Hostile;
 
 /// Faction affiliation for group-based spawning.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]

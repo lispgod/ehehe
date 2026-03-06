@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{Dead, Health, Stamina, Player, Position};
+use crate::components::{Dead, Health, Stamina, PlayerControlled, Position};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, DynamicRng, ExtraWorldTicks, GameMapResource, MapSeed, SoundEvents, SpectatingAfterDeath, TurnCounter, TurnState};
 use crate::typeenums::Floor;
@@ -32,7 +32,7 @@ pub fn end_player_turn_system(mut next_state: ResMut<NextState<TurnState>>) {
 pub fn end_world_turn_system(
     mut next_state: ResMut<NextState<TurnState>>,
     mut turn_counter: ResMut<TurnCounter>,
-    mut player_query: Query<(&mut Stamina, &mut Health), (With<Player>, Without<Dead>)>,
+    mut player_query: Query<(&mut Stamina, &mut Health), (With<PlayerControlled>, Without<Dead>)>,
     mut extra_ticks: ResMut<ExtraWorldTicks>,
     mut sound_events: ResMut<SoundEvents>,
     spectating: Res<SpectatingAfterDeath>,
@@ -272,7 +272,7 @@ pub fn fire_system(
 pub fn star_level_system(
     mut commands: Commands,
     mut star_level: ResMut<crate::resources::StarLevel>,
-    player_pos: Single<&Position, With<Player>>,
+    player_pos: Single<&Position, With<PlayerControlled>>,
     hostile_viewsheds: Query<&crate::components::Viewshed, With<crate::components::Faction>>,
     turn_counter: Res<TurnCounter>,
     game_map: Res<GameMapResource>,

@@ -2,7 +2,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Faction, Health, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
+use crate::components::{Faction, Health, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, PlayerControlled, Position, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
@@ -89,8 +89,8 @@ pub const KEYBINDINGS: &[CommandBinding] = &[
 pub fn input_system(
     mut messages: MessageReader<KeyMessage>,
     mut intents: IntentWriters,
-    player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>), With<Player>>,
-    mut player_viewshed: Query<&mut Viewshed, With<Player>>,
+    player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>), With<PlayerControlled>>,
+    mut player_viewshed: Query<&mut Viewshed, With<PlayerControlled>>,
     item_kind_query: Query<&ItemKind>,
     (hostiles_query, health_query): (Query<&Position, With<Faction>>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
@@ -123,7 +123,7 @@ pub fn input_system(
     }
 
     let Ok((player_entity, player_pos, player_stamina, player_inv)) = player_query.single() else {
-        // Player entity is gone (should only happen transiently).
+        // PlayerControlled entity is gone (should only happen transiently).
         messages.read().for_each(|_| {});
         return;
     };
@@ -718,7 +718,7 @@ fn advance_turn(next_turn_state: &mut Option<ResMut<NextState<TurnState>>>) {
 
 /// Helper: marks the player's viewshed as dirty so FOV is recalculated.
 #[inline]
-fn mark_viewshed_dirty(player_viewshed: &mut Query<&mut Viewshed, With<Player>>) {
+fn mark_viewshed_dirty(player_viewshed: &mut Query<&mut Viewshed, With<PlayerControlled>>) {
     if let Ok(mut vs) = player_viewshed.single_mut() {
         vs.dirty = true;
     }
@@ -730,7 +730,7 @@ fn move_cursor(
     cursor: &mut ResMut<CursorPosition>,
     dx: i32,
     dy: i32,
-    player_viewshed: &mut Query<&mut Viewshed, With<Player>>,
+    player_viewshed: &mut Query<&mut Viewshed, With<PlayerControlled>>,
     next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
 ) {
     cursor.pos.x += dx;

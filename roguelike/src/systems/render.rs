@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
-use crate::components::{AiLookDir, Faction, Health, Inventory, ItemKind, Projectile, ProjectileVisual, Stamina, Name, Player, Position, Renderable, Viewshed, display_name, item_display_name};
+use crate::components::{AiLookDir, Faction, Health, Inventory, ItemKind, Projectile, ProjectileVisual, Stamina, Name, PlayerControlled, Position, Renderable, Viewshed, display_name, item_display_name};
 use crate::grid_vec::GridVec;
 use crate::resources::{
     BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
@@ -35,7 +35,7 @@ const WATER_ANIM_FRAMES: u32 = 20;
 pub fn particle_tick_system(
     mut particles: ResMut<SpellParticles>,
     sound_events: Res<SoundEvents>,
-    player_query: Query<(&Position, Option<&Viewshed>), With<Player>>,
+    player_query: Query<(&Position, Option<&Viewshed>), With<PlayerControlled>>,
 ) {
     particles.tick();
 
@@ -77,11 +77,11 @@ pub fn draw_system(
     renderables: Query<(&Position, &Renderable, Option<&Name>), Without<Projectile>>,
     player_query: Query<
         (&Position, Option<&Viewshed>, Option<&Health>, Option<&Stamina>, Option<&Inventory>),
-        With<Player>,
+        With<PlayerControlled>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
     npc_viewsheds: Query<(&Viewshed, Option<&Faction>, &Position, Option<&AiLookDir>)>,
-    npc_info_query: Query<(&Position, Option<&Name>, Option<&Faction>, Option<&Inventory>, Option<&Health>), Without<Player>>,
+    npc_info_query: Query<(&Position, Option<&Name>, Option<&Faction>, Option<&Inventory>, Option<&Health>)>,
     projectiles: Query<(&Position, &Renderable, &Projectile)>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
@@ -442,7 +442,7 @@ pub fn draw_system(
         }
 
         // ── Final pass: re-draw entities OVER everything else ──
-        // Player and NPC symbols should always be drawn over every other symbol
+        // PlayerControlled and NPC symbols should always be drawn over every other symbol
         // (particles, projectiles, blood, etc.)
         for (pos, renderable, _) in &renderables {
             let screen = pos.as_grid_vec() - bottom_left;

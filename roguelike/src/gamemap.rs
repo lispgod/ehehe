@@ -1201,14 +1201,14 @@ const BUILDING_TYPE_COUNT: u32 = 12;
 
 /// Minimum width for a BSP leaf node. Leaves narrower than this cannot
 /// contain a building and are treated as open lots.
-const BSP_MIN_LEAF_W: CoordinateUnit = 14;
+const BSP_MIN_LEAF_W: CoordinateUnit = 5;
 /// Minimum height for a BSP leaf node.
-const BSP_MIN_LEAF_H: CoordinateUnit = 12;
+const BSP_MIN_LEAF_H: CoordinateUnit = 5;
 /// Padding between building footprint and leaf boundary. Creates natural
 /// alleyways and breathing room between adjacent structures.
-const BSP_PADDING: CoordinateUnit = 2;
+const BSP_PADDING: CoordinateUnit = 0;
 /// Maximum BSP recursion depth.
-const BSP_MAX_DEPTH: u32 = 7;
+const BSP_MAX_DEPTH: u32 = 15;
 
 /// Semantic zone types assigned to BSP regions.
 const ZONE_COMMERCIAL: u32 = 0;
@@ -1489,650 +1489,658 @@ fn rects_overlap(
 
 // ── BSP-based building generation ────────────────────────────────────────
 
-/// Generates building footprints using BSP spatial partitioning.
-///
-/// The algorithm:
-///  1. Pre-places landmark anchor buildings at biased positions.
-///  2. Builds a BSP tree over the buildable area, biasing splits to align
-///     with the street network.
-///  3. Assigns a semantic zone to each leaf based on position.
-///  4. Places one building per leaf, selecting the type from the zone palette.
-///     A small fraction of leaves become parks instead of buildings.
-///  5. Validates each placement with an AABB overlap check against all
-///     already-placed footprints including their padding margins.
-///  6. Records unoccupied leaves as open lots for later scatter.
-///
-/// Returns (buildings, parks, open_lots).
-fn generate_buildings_bsp(
-    width: CoordinateUnit,
-    height: CoordinateUnit,
-    seed: NoiseSeed,
-    avenue_ys: &[CoordinateUnit],
-    cross_xs: &[CoordinateUnit],
-    avenue_half_width: CoordinateUnit,
-    cross_half_width: CoordinateUnit,
-) -> (Vec<Building>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>) {
-    let mut buildings = Vec::new();
-    let mut parks = Vec::new();
-    let mut open_lots = Vec::new();
-    let bsp_seed = seed.wrapping_add(11111);
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-    // Keep BSP within the road network. Use the forest margin on large maps,
-    // but scale down for smaller maps to preserve buildable area.
-    let margin = (30 as CoordinateUnit).min(width / 8).min(height / 8).max(6);
-    let build_w = width - margin * 2;
-    let build_h = height - margin * 2;
+/// The inner rectangle of a lot after stripping road, sidewalk, and curve
+/// buffers from all four edges. All building placement works from this.
+#[derive(Clone, Copy, Debug)]
+struct LotRect {
+    x: CoordinateUnit,
+    y: CoordinateUnit,
+    w: CoordinateUnit,
+    h: CoordinateUnit,
+}
+
+impl LotRect {
+    fn right(self) -> CoordinateUnit { self.x + self.w }
+    fn bot(self)   -> CoordinateUnit { self.y + self.h }
+    fn cx(self)    -> CoordinateUnit { self.x + self.w / 2 }
+    fn cy(self)    -> CoordinateUnit { self.y + self.h / 2 }
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Tiles stripped from a road-bounded edge.
+const ROAD_EDGE_BUFFER: CoordinateUnit = 0;
+
+/// Tiles stripped from a map-edge boundary (no adjacent road).
+const MAP_EDGE_BUFFER: CoordinateUnit = 1;
+
+/// Minimum lot side length below which no placement is attempted.
+const LOT_MIN_DIM: CoordinateUnit = 14;
+
+/// Minimum side length for the large anchor building placed first in each lot.
+const ANCHOR_MIN_DIM: CoordinateUnit = 12;
+
+/// Minimum side length for smaller filler buildings placed in strips around the anchor.
+const FILLER_MIN_DIM: CoordinateUnit = 6;
+
+/// Gap in tiles enforced between every pair of adjacent buildings.
+const GAP: CoordinateUnit = 1;
+
+/// Maximum side lengths for BSP-leaf buildings.
+const BSP_MAX_W: CoordinateUnit = 40;
+const BSP_MAX_H: CoordinateUnit = 36;
+
+/// Padding between a BSP leaf boundary and the building inside it.
+const BSP_PADDING_LOCAL: CoordinateUnit = BSP_PADDING;
+
+/// Alley gap detection threshold in tiles.
+const ALLEY_GAP_MAX: i64 = 6;
+
+/// Fraction of BSP leaves that become parks instead of buildings.
+const PARK_NOISE_THRESHOLD: f64 = 0.10;
+
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/// Returns `true` when rect `(bx,by,bw,bh)` padded by `margin` overlaps any
+/// already-placed footprint.
+#[inline]
+fn overlaps_placed(
+    placed: &[(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)],
+    bx: CoordinateUnit,
+    by: CoordinateUnit,
+    bw: CoordinateUnit,
+    bh: CoordinateUnit,
+    margin: CoordinateUnit,
+) -> bool {
+    placed.iter().any(|&(px, py, pw, ph)| {
+        rects_overlap(bx - margin, by - margin, bw + margin * 2, bh + margin * 2, px, py, pw, ph)
+    })
+}
+
+/// Selects the building kind for a given world position.
+#[inline]
+fn pick_kind(
+    cx:         CoordinateUnit,
+    cy:         CoordinateUnit,
+    noise_x:    i32,
+    noise_y:    i32,
+    noise_seed: NoiseSeed,
+    width:      CoordinateUnit,
+    height:     CoordinateUnit,
+    avenue_ys:  &[CoordinateUnit],
+    seed:       NoiseSeed,
+) -> u32 {
+    let zone = assign_zone(cx, cy, width, height, avenue_ys, seed);
+    let kn   = value_noise(noise_x, noise_y, noise_seed);
+    zone_building_kind(zone, kn).min(BUILDING_TYPE_COUNT - 1)
+}
+
+/// Records a building if it passes the size check (`bw,bh >= min_dim`) and the
+/// overlap check. Returns `true` on success.
+#[inline]
+fn try_place(
+    bx:      CoordinateUnit,
+    by:      CoordinateUnit,
+    bw:      CoordinateUnit,
+    bh:      CoordinateUnit,
+    min_dim: CoordinateUnit,
+    kind:    u32,
+    placed:  &mut Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+    out:     &mut Vec<Building>,
+) -> bool {
+    if bw < min_dim || bh < min_dim { return false; }
+    if overlaps_placed(placed, bx, by, bw, bh, GAP) { return false; }
+    placed.push((bx, by, bw, bh));
+    out.push(Building { x: bx, y: by, w: bw, h: bh, kind });
+    true
+}
+
+/// Derives the inner lot boundary from a pair of boundary coordinates.
+fn lot_inner(
+    lo:         CoordinateUnit,
+    hi:         CoordinateUnit,
+    lo_is_road: bool,
+    hi_is_road: bool,
+    half_width: CoordinateUnit,
+    sidewalk:   CoordinateUnit,
+) -> (CoordinateUnit, CoordinateUnit) {
+    let inner_lo = if lo_is_road {
+        lo + half_width + sidewalk + 1 + ROAD_EDGE_BUFFER
+    } else {
+        lo + MAP_EDGE_BUFFER
+    };
+    let inner_hi = if hi_is_road {
+        hi - half_width - sidewalk - 1 - ROAD_EDGE_BUFFER
+    } else {
+        hi - MAP_EDGE_BUFFER
+    };
+    (inner_lo, inner_hi)
+}
+
+/// Computes the `LotRect` for grid cell `(xi, yi)`. Returns `None` if the
+/// resulting lot is below `LOT_MIN_DIM`.
+fn compute_lot(
+    xi:                usize,
+    yi:                usize,
+    x_bounds:          &[CoordinateUnit],
+    y_bounds:          &[CoordinateUnit],
+    avenue_set:        &HashSet<CoordinateUnit>,
+    cross_set:         &HashSet<CoordinateUnit>,
+    avenue_half_width: CoordinateUnit,
+    cross_half_width:  CoordinateUnit,
+) -> Option<LotRect> {
+    const SIDEWALK: CoordinateUnit = 1;
+
+    let (lot_left, lot_right) = lot_inner(
+        x_bounds[xi], x_bounds[xi + 1],
+        cross_set.contains(&x_bounds[xi]),
+        cross_set.contains(&x_bounds[xi + 1]),
+        cross_half_width, SIDEWALK,
+    );
+    let (lot_top, lot_bot) = lot_inner(
+        y_bounds[yi], y_bounds[yi + 1],
+        avenue_set.contains(&y_bounds[yi]),
+        avenue_set.contains(&y_bounds[yi + 1]),
+        avenue_half_width, SIDEWALK,
+    );
+
+    let w = lot_right - lot_left;
+    let h = lot_bot   - lot_top;
+    if w < LOT_MIN_DIM || h < LOT_MIN_DIM { return None; }
+
+    Some(LotRect { x: lot_left, y: lot_top, w, h })
+}
+
+// ── Per-lot two-phase placement ────────────────────────────────────────────────
+
+/// Places buildings in `lot` in two phases.
+///
+/// **Phase 1 — Anchor.**  One large building occupying 55–80% of the lot in
+/// each axis is placed first. Its position is centred with a small noise-driven
+/// offset so every lot looks slightly different.
+///
+/// **Phase 2 — Strip fill.**  The four rectangular strips of free space around
+/// the anchor (top, bottom, left flank, right flank) are each passed to
+/// `fill_strip`, which packs 1–3 smaller buildings into them.
+///
+///  ┌─────────────────────────┐
+///  │         TOP             │
+///  ├──────┬──────────┬───────┤
+///  │ LEFT │  ANCHOR  │ RIGHT │
+///  ├──────┴──────────┴───────┤
+///  │        BOTTOM           │
+///  └─────────────────────────┘
+fn place_lot_buildings(
+    lot:       LotRect,
+    lot_seed:  NoiseSeed,
+    placed:    &mut Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+    out:       &mut Vec<Building>,
+    width:     CoordinateUnit,
+    height:    CoordinateUnit,
+    avenue_ys: &[CoordinateUnit],
+    seed:      NoiseSeed,
+) {
+    // ── Phase 1: anchor ───────────────────────────────────────────────
+    // Size the anchor at 55–80% of the lot in each axis. The two axes use
+    // complementary fractions so tall lots get wide anchors and vice versa,
+    // producing natural variety rather than a uniform aspect ratio.
+    let size_n  = value_noise(lot.cx(), lot.cy(), lot_seed.wrapping_add(1111));
+    let frac_w  = 0.55 + size_n * 0.25;
+    let frac_h  = 0.55 + (1.0 - size_n) * 0.25;
+
+    let anchor_w = ((lot.w as f64 * frac_w) as CoordinateUnit)
+        .max(ANCHOR_MIN_DIM)
+        .min(lot.w.saturating_sub(GAP * 2));
+    let anchor_h = ((lot.h as f64 * frac_h) as CoordinateUnit)
+        .max(ANCHOR_MIN_DIM)
+        .min(lot.h.saturating_sub(GAP * 2));
+
+    if anchor_w < ANCHOR_MIN_DIM || anchor_h < ANCHOR_MIN_DIM {
+        // Lot too small for an anchor — fill the whole thing as one small building.
+        let kind = pick_kind(lot.cx(), lot.cy(), lot.x, lot.y,
+            lot_seed, width, height, avenue_ys, seed);
+        try_place(lot.x + GAP, lot.y + GAP,
+            lot.w.saturating_sub(GAP * 2), lot.h.saturating_sub(GAP * 2),
+            FILLER_MIN_DIM, kind, placed, out);
+        return;
+    }
+
+    // Centre the anchor with a noise-driven jitter (up to ⅓ of the free margin
+    // on each axis) so lots don't all look stamped from the same template.
+    let jitter_n        = value_noise(lot.x, lot.y, lot_seed.wrapping_add(2222));
+    let free_x          = lot.w.saturating_sub(anchor_w).saturating_sub(GAP * 2);
+    let free_y          = lot.h.saturating_sub(anchor_h).saturating_sub(GAP * 2);
+    let jitter_range_x  = free_x / 3;
+    let jitter_range_y  = free_y / 3;
+    let jitter_x = ((jitter_n * (jitter_range_x * 2) as f64) as CoordinateUnit)
+        .saturating_sub(jitter_range_x);
+    let jitter_y = (((1.0 - jitter_n) * (jitter_range_y * 2) as f64) as CoordinateUnit)
+        .saturating_sub(jitter_range_y);
+
+    let anchor_x = (lot.cx() - anchor_w / 2 + jitter_x)
+        .max(lot.x + GAP)
+        .min(lot.right().saturating_sub(anchor_w + GAP));
+    let anchor_y = (lot.cy() - anchor_h / 2 + jitter_y)
+        .max(lot.y + GAP)
+        .min(lot.bot().saturating_sub(anchor_h + GAP));
+
+    let anchor_kind = pick_kind(lot.cx(), lot.cy(), lot.x, lot.y,
+        lot_seed.wrapping_add(3333), width, height, avenue_ys, seed);
+
+    let anchor_placed = try_place(
+        anchor_x, anchor_y, anchor_w, anchor_h,
+        ANCHOR_MIN_DIM, anchor_kind, placed, out,
+    );
+
+    // If the anchor couldn't land (overlaps a landmark, etc.) treat the whole
+    // lot as a single free strip and try to fit something.
+    if !anchor_placed {
+        fill_strip(lot.x, lot.y, lot.w, lot.h,
+            lot_seed.wrapping_add(9999), placed, out, width, height, avenue_ys, seed);
+        return;
+    }
+
+    // ── Phase 2: fill strips around the anchor ────────────────────────
+
+    // Top strip — full lot width, above the anchor.
+    let top_h = anchor_y - GAP - lot.y;
+    if top_h >= FILLER_MIN_DIM {
+        fill_strip(lot.x, lot.y, lot.w, top_h,
+            lot_seed.wrapping_add(4444), placed, out, width, height, avenue_ys, seed);
+    }
+
+    // Bottom strip — full lot width, below the anchor.
+    let bot_y = anchor_y + anchor_h + GAP;
+    let bot_h = lot.bot() - bot_y;
+    if bot_h >= FILLER_MIN_DIM {
+        fill_strip(lot.x, bot_y, lot.w, bot_h,
+            lot_seed.wrapping_add(5555), placed, out, width, height, avenue_ys, seed);
+    }
+
+    // Left and right flanks share the anchor's vertical band so the four
+    // strips tile the lot without leaving uncovered corners.
+    let side_y = anchor_y;
+    let side_h = anchor_h;
+
+    // Left flank — between the top/bottom strips, left of the anchor.
+    let left_w = anchor_x - GAP - lot.x;
+    if left_w >= FILLER_MIN_DIM && side_h >= FILLER_MIN_DIM {
+        fill_strip(lot.x, side_y, left_w, side_h,
+            lot_seed.wrapping_add(6666), placed, out, width, height, avenue_ys, seed);
+    }
+
+    // Right flank — between the top/bottom strips, right of the anchor.
+    let right_x = anchor_x + anchor_w + GAP;
+    let right_w = lot.right() - right_x;
+    if right_w >= FILLER_MIN_DIM && side_h >= FILLER_MIN_DIM {
+        fill_strip(right_x, side_y, right_w, side_h,
+            lot_seed.wrapping_add(7777), placed, out, width, height, avenue_ys, seed);
+    }
+}
+
+/// Packs 1–3 smaller buildings into the rectangle `(sx, sy, sw, sh)`.
+///
+/// The strip is divided along its longer axis into equal segments; each
+/// segment receives one building sized to fill it minus the inter-building gap.
+/// The number of segments is determined by how many `FILLER_MIN_DIM`-sized
+/// buildings fit side by side, capped at 3.
+fn fill_strip(
+    sx:         CoordinateUnit,
+    sy:         CoordinateUnit,
+    sw:         CoordinateUnit,
+    sh:         CoordinateUnit,
+    strip_seed: NoiseSeed,
+    placed:     &mut Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+    out:        &mut Vec<Building>,
+    width:      CoordinateUnit,
+    height:     CoordinateUnit,
+    avenue_ys:  &[CoordinateUnit],
+    seed:       NoiseSeed,
+) {
+    if sw < FILLER_MIN_DIM || sh < FILLER_MIN_DIM { return; }
+
+    // Divide along the longer axis; cap at 3 segments to avoid tiny slivers.
+    let segments: CoordinateUnit = if sw >= sh {
+        (sw / (FILLER_MIN_DIM + GAP)).min(3).max(1)
+    } else {
+        (sh / (FILLER_MIN_DIM + GAP)).min(3).max(1)
+    };
+
+    if sw >= sh {
+        // Horizontal division: `segments` columns.
+        let seg_w = sw / segments;
+        for s in 0..segments {
+            let bx  = sx + s * seg_w + if s > 0 { GAP } else { 0 };
+            let by  = sy;
+            let bw  = (if s == segments - 1 { sw - s * seg_w } else { seg_w })
+                .saturating_sub(if s < segments - 1 { GAP } else { 0 });
+            let bh  = sh;
+            let kind = pick_kind(bx + bw / 2, by + bh / 2, bx, by,
+                strip_seed.wrapping_add(s as u64 * 31),
+                width, height, avenue_ys, seed);
+            try_place(bx, by, bw, bh, FILLER_MIN_DIM, kind, placed, out);
+        }
+    } else {
+        // Vertical division: `segments` rows.
+        let seg_h = sh / segments;
+        for s in 0..segments {
+            let bx  = sx;
+            let by  = sy + s * seg_h + if s > 0 { GAP } else { 0 };
+            let bw  = sw;
+            let bh  = (if s == segments - 1 { sh - s * seg_h } else { seg_h })
+                .saturating_sub(if s < segments - 1 { GAP } else { 0 });
+            let kind = pick_kind(bx + bw / 2, by + bh / 2, bx, by,
+                strip_seed.wrapping_add(s as u64 * 37),
+                width, height, avenue_ys, seed);
+            try_place(bx, by, bw, bh, FILLER_MIN_DIM, kind, placed, out);
+        }
+    }
+}
+
+// ── Main generation entry point ────────────────────────────────────────────────
+
+/// Generates all building footprints for the map.
+///
+/// Pipeline:
+///  1. Pre-place immovable landmark anchors.
+///  2. BSP tree: one large building (or park) per leaf.
+///  3. Road-grid lots: per lot, `place_lot_buildings` drops one dominant
+///     anchor building first, then fills the four surrounding strips with
+///     smaller buildings.
+///
+/// Returns `(buildings, parks, open_lots)`.
+fn generate_buildings_bsp(
+    width:             CoordinateUnit,
+    height:            CoordinateUnit,
+    seed:              NoiseSeed,
+    avenue_ys:         &[CoordinateUnit],
+    cross_xs:          &[CoordinateUnit],
+    avenue_half_width: CoordinateUnit,
+    cross_half_width:  CoordinateUnit,
+) -> (
+    Vec<Building>,
+    Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+    Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+) {
+    let mut buildings: Vec<Building> = Vec::new();
+    let mut parks:     Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> = Vec::new();
+    let mut open_lots: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> = Vec::new();
+
+    let bsp_seed = seed.wrapping_add(11111);
+    let margin   = (30 as CoordinateUnit).min(width / 8).min(height / 8).max(6);
+    let build_w  = width  - margin * 2;
+    let build_h  = height - margin * 2;
+
     if build_w < BSP_MIN_LEAF_W || build_h < BSP_MIN_LEAF_H {
         return (buildings, parks, open_lots);
     }
 
-    // Step 1: Pre-place landmark anchors as immovable constraints
+    let mut placed: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> = Vec::new();
+
+    // ── 1. Landmark anchors ───────────────────────────────────────────
     let anchors = pre_place_landmark_anchors(width, height, seed, avenue_ys);
-    let mut placed: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> =
-        Vec::new();
     for a in &anchors {
         placed.push((a.x, a.y, a.w, a.h));
         buildings.push(Building { x: a.x, y: a.y, w: a.w, h: a.h, kind: a.kind });
     }
 
-    // Step 2: Build BSP tree biased to align with streets
+    // ── 2. BSP tree: one large building or park per leaf ─────────────
     let mut root = BspNode::new(margin, margin, build_w, build_h);
     root.subdivide(bsp_seed, 0, avenue_ys, cross_xs);
 
-    // Step 3: Collect leaves and place buildings or parks
-    let mut leaves = Vec::new();
+    let mut leaves: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> = Vec::new();
     root.collect_leaves(&mut leaves);
 
     for (i, &(lx, ly, lw, lh)) in leaves.iter().enumerate() {
         let leaf_cx = lx + lw / 2;
         let leaf_cy = ly + lh / 2;
 
-        // Skip leaves whose center falls on an avenue
         let on_avenue = avenue_ys.iter().any(|&ay| {
             ly < ay + avenue_half_width + 1 && ly + lh > ay - avenue_half_width - 1
         });
-        if on_avenue {
+        if on_avenue { continue; }
+        if anchors.iter().any(|a| rects_overlap(lx, ly, lw, lh, a.x, a.y, a.w, a.h)) {
             continue;
         }
 
-        // Skip leaves that overlap with pre-placed landmark anchors
-        let overlaps_anchor = anchors.iter().any(|a| {
-            rects_overlap(lx, ly, lw, lh, a.x, a.y, a.w, a.h)
-        });
-        if overlaps_anchor {
-            continue;
-        }
+        let pad = BSP_PADDING_LOCAL;
+        let bx  = lx + pad;
+        let by  = ly + pad;
+        let bw  = (lw - pad * 2).min(BSP_MAX_W);
+        let bh  = (lh - pad * 2).min(BSP_MAX_H);
 
-        // Building footprint with padding inside the leaf.
-        // Scale building to fill the available node (up to a generous max)
-        // so every leaf above the minimum threshold attempts placement.
-        let pad = BSP_PADDING;
-        let bx = lx + pad;
-        let by = ly + pad;
-        let bw = (lw - pad * 2).min(30);
-        let bh = (lh - pad * 2).min(24);
-
-        if bw < 4 || bh < 4 {
+        if bw < ANCHOR_MIN_DIM || bh < ANCHOR_MIN_DIM {
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
 
-        // Check building footprint (not leaf) against cross streets.
-        // If it overlaps, try shrinking the building to fit beside the street.
-        let building_on_cross = cross_xs.iter().any(|&cx| {
-            bx < cx + cross_half_width + 1 && bx + bw > cx - cross_half_width - 1
-        });
-        let (bx, bw) = if building_on_cross {
-            // Try to fit on either side of the cross street
-            let mut result: Option<(CoordinateUnit, CoordinateUnit)> = None;
-            for &cx in cross_xs {
-                // Try placing to the left of the cross street
-                let left_edge = cx - cross_half_width - 1;
-                if left_edge > bx {
-                    let left_w = (left_edge - bx).min(bw);
-                    if left_w >= 4 {
-                        result = Some((bx, left_w));
-                        break;
-                    }
-                }
-                // Try placing to the right of the cross street
-                let right_x = cx + cross_half_width + 1;
-                if right_x >= lx && right_x < bx + bw {
-                    let right_w = (bx + bw - right_x).min(bw);
-                    if right_w >= 4 {
-                        result = Some((right_x, right_w));
-                        break;
-                    }
-                }
-            }
-            match result {
-                Some(fit) => fit,
-                None => {
-                    open_lots.push((lx, ly, lw, lh));
-                    continue;
-                }
-            }
-        } else {
-            (bx, bw)
+        let (bx, bw) = match fit_beside_cross_streets(bx, bw, lx, cross_xs, cross_half_width) {
+            Some(fit) => fit,
+            None => { open_lots.push((lx, ly, lw, lh)); continue; }
         };
 
-        // Park allocation: ~10% of eligible leaves become parks
-        let park_noise = value_noise(leaf_cx, leaf_cy, bsp_seed.wrapping_add(8888));
-        if park_noise < 0.10 && bw >= 4 && bh >= 4 {
+        if value_noise(leaf_cx, leaf_cy, bsp_seed.wrapping_add(8888)) < PARK_NOISE_THRESHOLD {
             parks.push((bx, by, bw, bh));
             placed.push((bx, by, bw, bh));
             continue;
         }
 
-        // Semantic zone assignment
-        let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
-        let kind_noise =
-            value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
-        let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
+        let kind = pick_kind(leaf_cx, leaf_cy, i as i32, leaf_cx + leaf_cy,
+            bsp_seed.wrapping_add(2222), width, height, avenue_ys, seed);
 
-        // AABB overlap check against all already-placed footprints.
-        // Try progressively smaller sizes if the full building doesn't fit.
-        let overlap_margin = 1;
-        let mut final_w = bw;
-        let mut final_h = bh;
-        let mut fits = false;
+        // Try at full size, shrinking up to 4 steps if needed.
+        let placed_ok = (0u32..4).find_map(|s| {
+            let sw = bw - s as CoordinateUnit * 2;
+            let sh = bh - s as CoordinateUnit * 2;
+            if sw < ANCHOR_MIN_DIM || sh < ANCHOR_MIN_DIM { return None; }
+            if overlaps_placed(&placed, bx, by, sw, sh, GAP) { return None; }
+            Some((sw, sh))
+        });
 
-        for shrink in 0..4 {
-            let sw = bw - shrink * 2;
-            let sh = bh - shrink * 2;
-            if sw < 4 || sh < 4 { break; }
-            let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                rects_overlap(
-                    bx - overlap_margin,
-                    by - overlap_margin,
-                    sw + overlap_margin * 2,
-                    sh + overlap_margin * 2,
-                    px, py, pw, ph,
-                )
-            });
-            if !overlaps {
-                final_w = sw;
-                final_h = sh;
-                fits = true;
-                break;
+        match placed_ok {
+            Some((fw, fh)) => {
+                placed.push((bx, by, fw, fh));
+                buildings.push(Building { x: bx, y: by, w: fw, h: fh, kind });
             }
-        }
-
-        if !fits {
-            open_lots.push((lx, ly, lw, lh));
-            continue;
-        }
-
-        placed.push((bx, by, final_w, final_h));
-        buildings.push(Building { x: bx, y: by, w: final_w, h: final_h, kind });
-    }
-
-    // ── Sub-partition large leaves for additional buildings ───────────
-    // Re-scan leaves: any leaf large enough to hold two minimum-size
-    // buildings gets a secondary split. Each sub-plot receives its own
-    // building. The threshold is kept low so lots are densely filled.
-    let sub_threshold_w = 4 * 2 + BSP_PADDING * 2; // minimum 12 tiles wide
-    let sub_threshold_h = 4 * 2 + BSP_PADDING * 2; // minimum 12 tiles tall
-    let mut extra_buildings: Vec<Building> = Vec::new();
-    for &(lx, ly, lw, lh) in &leaves {
-        // Only subdivide leaves that are genuinely large
-        if lw < sub_threshold_w && lh < sub_threshold_h {
-            continue;
-        }
-        // Skip leaves already covered by a building or park
-        let already_used = placed.iter().any(|&(px, py, pw, ph)| {
-            rects_overlap(lx, ly, lw, lh, px, py, pw, ph)
-        });
-        if already_used { continue; }
-
-        // Simple two-way split (horizontal or vertical)
-        let sub_rects: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> =
-            if lw > lh && lw >= sub_threshold_w {
-                let half = lw / 2;
-                vec![(lx, ly, half - 1, lh), (lx + half + 1, ly, lw - half - 1, lh)]
-            } else if lh >= sub_threshold_h {
-                let half = lh / 2;
-                vec![(lx, ly, lw, half - 1), (lx, ly + half + 1, lw, lh - half - 1)]
-            } else {
-                continue;
-            };
-
-        for (si, &(sx, sy, sw, sh)) in sub_rects.iter().enumerate() {
-            let pad = BSP_PADDING;
-            let sbx = sx + pad;
-            let sby = sy + pad;
-            let sbw = (sw - pad * 2).min(30);
-            let sbh = (sh - pad * 2).min(24);
-            if sbw < 4 || sbh < 4 { continue; }
-
-            let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                rects_overlap(sbx - 1, sby - 1, sbw + 2, sbh + 2, px, py, pw, ph)
-            });
-            if overlaps { continue; }
-
-            let leaf_cx = sx + sw / 2;
-            let leaf_cy = sy + sh / 2;
-            let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
-            let kind_noise = value_noise(
-                si as i32 + 100,
-                leaf_cx + leaf_cy,
-                bsp_seed.wrapping_add(5555),
-            );
-            let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-
-            placed.push((sbx, sby, sbw, sbh));
-            extra_buildings.push(Building { x: sbx, y: sby, w: sbw, h: sbh, kind });
+            None => open_lots.push((lx, ly, lw, lh)),
         }
     }
-    buildings.extend(extra_buildings);
 
-    // ── Densification: fill remaining open lots with buildings ────────
-    // Open lots are leaves that couldn't fit a building in the main pass.
-    // Attempt to place a minimal building in each one so lots aren't empty.
-    let mut infill_buildings: Vec<Building> = Vec::new();
-    for &(lx, ly, lw, lh) in &open_lots {
-        let pad = BSP_PADDING;
-        let bx = lx + pad;
-        let by = ly + pad;
-        // Cap infill buildings at modest sizes so they fit snugly in
-        // leftover lots without overwhelming the surrounding buildings.
-        let bw = (lw - pad * 2).min(20);
-        let bh = (lh - pad * 2).min(16);
-        if bw < 4 || bh < 4 { continue; }
-        let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-            rects_overlap(bx - 1, by - 1, bw + 2, bh + 2, px, py, pw, ph)
-        });
-        if overlaps { continue; }
-        let leaf_cx = lx + lw / 2;
-        let leaf_cy = ly + lh / 2;
-        let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
-        let kind_noise = value_noise(
-            leaf_cx + leaf_cy,
-            leaf_cx,
-            bsp_seed.wrapping_add(9999),
-        );
-        let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-        placed.push((bx, by, bw, bh));
-        infill_buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
-    }
-    buildings.extend(infill_buildings);
-
-    // ── Lot-based densification: fill every road-grid cell with buildings ─
-    // A "lot" is the rectangular space between consecutive avenues (horizontal)
-    // and cross streets (vertical). For each lot, find the largest clear
-    // rectangle, BSP-split it, and place a building in every sub-node.
-    let sidewalk_width: CoordinateUnit = 1;
-    let cross_sidewalk_width: CoordinateUnit = 1;
-    // Build sorted boundary lists including map edges
-    let mut y_bounds: Vec<CoordinateUnit> = Vec::new();
-    y_bounds.push(margin);
-    for &ay in avenue_ys {
-        y_bounds.push(ay);
-    }
-    y_bounds.push(height - margin);
-    y_bounds.sort();
-
-    let mut x_bounds: Vec<CoordinateUnit> = Vec::new();
-    x_bounds.push(margin);
-    for &cx in cross_xs {
-        x_bounds.push(cx);
-    }
-    x_bounds.push(width - margin);
-    x_bounds.sort();
-
-    // Minimum lot dimension below which no building is attempted.
-    const LOT_MIN_DIM: CoordinateUnit = 5;
-    // Minimum viable plot that can hold a building (min building = 4×4).
-    const PLOT_MIN_DIM: CoordinateUnit = 5;
-    // Target plot side length for grid subdivision.
-    const PLOT_TARGET: CoordinateUnit = 9;
-
-    let mut lot_buildings: Vec<Building> = Vec::new();
-    // Efficient lookup for distinguishing road boundaries from map edges
+    // ── 3. Road-grid lots: anchor first, then strip fill ──────────────
     let avenue_set: HashSet<CoordinateUnit> = avenue_ys.iter().copied().collect();
-    let cross_set: HashSet<CoordinateUnit> = cross_xs.iter().copied().collect();
+    let cross_set:  HashSet<CoordinateUnit> = cross_xs.iter().copied().collect();
+
+    let mut y_bounds: Vec<CoordinateUnit> = std::iter::once(margin)
+        .chain(avenue_ys.iter().copied())
+        .chain(std::iter::once(height - margin))
+        .collect();
+    y_bounds.sort_unstable();
+
+    let mut x_bounds: Vec<CoordinateUnit> = std::iter::once(margin)
+        .chain(cross_xs.iter().copied())
+        .chain(std::iter::once(width - margin))
+        .collect();
+    x_bounds.sort_unstable();
+
     for yi in 0..y_bounds.len().saturating_sub(1) {
         for xi in 0..x_bounds.len().saturating_sub(1) {
-            // Lot inner boundaries: for road-bounded edges, skip road + 1-tile
-            // sidewalk + 3-tile buffer to account for road curvature. For
-            // map-edge boundaries (no adjacent road), use a minimal 1-tile
-            // buffer so edge lots aren't unnecessarily shrunk.
-            let road_curve_buffer: CoordinateUnit = 3;
-            let lot_top = if avenue_set.contains(&y_bounds[yi]) {
-                y_bounds[yi] + avenue_half_width + sidewalk_width + 1 + road_curve_buffer
-            } else {
-                y_bounds[yi] + 1
+            let lot = match compute_lot(
+                xi, yi, &x_bounds, &y_bounds,
+                &avenue_set, &cross_set,
+                avenue_half_width, cross_half_width,
+            ) {
+                Some(l) => l,
+                None    => continue,
             };
-            let lot_bot = if avenue_set.contains(&y_bounds[yi + 1]) {
-                y_bounds[yi + 1] - avenue_half_width - sidewalk_width - 1 - road_curve_buffer
-            } else {
-                y_bounds[yi + 1] - 1
-            };
-            let lot_left = if cross_set.contains(&x_bounds[xi]) {
-                x_bounds[xi] + cross_half_width + cross_sidewalk_width + 1 + road_curve_buffer
-            } else {
-                x_bounds[xi] + 1
-            };
-            let lot_right = if cross_set.contains(&x_bounds[xi + 1]) {
-                x_bounds[xi + 1] - cross_half_width - cross_sidewalk_width - 1 - road_curve_buffer
-            } else {
-                x_bounds[xi + 1] - 1
-            };
-            let lot_w = lot_right - lot_left;
-            let lot_h = lot_bot - lot_top;
-
-            // Skip lots below minimum size
-            if lot_w < LOT_MIN_DIM || lot_h < LOT_MIN_DIM { continue; }
-
-            // Lots with partial BSP coverage are still partitioned — the
-            // per-plot overlap check will skip individual plots that collide
-            // with existing buildings while filling the remainder.
 
             let lot_seed = bsp_seed.wrapping_add(
-                (yi as u64).wrapping_mul(1000).wrapping_add(xi as u64).wrapping_mul(7)
+                (yi as u64).wrapping_mul(1000).wrapping_add(xi as u64).wrapping_mul(7),
             );
 
-            let lot_cx = lot_left + lot_w / 2;
-            let lot_cy = lot_top + lot_h / 2;
-
-            // Small lots just above the minimum: single building filling the lot
-            if lot_w < PLOT_MIN_DIM * 2 && lot_h < PLOT_MIN_DIM * 2 {
-                let bx = lot_left;
-                let by = lot_top;
-                let bw = lot_w;
-                let bh = lot_h;
-                if bw < 4 || bh < 4 { continue; }
-                let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                    rects_overlap(bx - 1, by - 1, bw + 2, bh + 2, px, py, pw, ph)
-                });
-                if overlaps { continue; }
-                let zone = assign_zone(lot_cx, lot_cy, width, height, avenue_ys, seed);
-                let kind_noise = value_noise(lot_left, lot_top, lot_seed.wrapping_add(6666));
-                let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-                placed.push((bx, by, bw, bh));
-                lot_buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
-                continue;
-            }
-
-            // Grid-based partitioning: divide lot into a grid of plots.
-            // For elongated lots, partition only along the longer axis.
-            let cols = if lot_w >= PLOT_MIN_DIM * 2 {
-                (lot_w / PLOT_TARGET).max(1).min(lot_w / PLOT_MIN_DIM)
-            } else { 1 };
-            let rows = if lot_h >= PLOT_MIN_DIM * 2 {
-                (lot_h / PLOT_TARGET).max(1).min(lot_h / PLOT_MIN_DIM)
-            } else { 1 };
-
-            // Compute column x-offsets and widths with slight jitter
-            let base_col_w = lot_w / cols;
-            let mut col_xs: Vec<CoordinateUnit> = Vec::with_capacity(cols as usize);
-            let mut col_ws: Vec<CoordinateUnit> = Vec::with_capacity(cols as usize);
-            let mut cur_x = lot_left;
-            for c in 0..cols {
-                col_xs.push(cur_x);
-                let w = if c == cols - 1 {
-                    lot_left + lot_w - cur_x
-                } else {
-                    let jn = value_noise(c, yi as i32, lot_seed.wrapping_add(111));
-                    let jitter = (jn.clamp(0.0, 0.999) * 3.0) as CoordinateUnit - 1;
-                    (base_col_w + jitter).max(PLOT_MIN_DIM)
-                };
-                col_ws.push(w);
-                cur_x += w;
-            }
-
-            // Compute row y-offsets and heights with slight jitter
-            let base_row_h = lot_h / rows;
-            let mut row_ys: Vec<CoordinateUnit> = Vec::with_capacity(rows as usize);
-            let mut row_hs: Vec<CoordinateUnit> = Vec::with_capacity(rows as usize);
-            let mut cur_y = lot_top;
-            for r in 0..rows {
-                row_ys.push(cur_y);
-                let h = if r == rows - 1 {
-                    lot_top + lot_h - cur_y
-                } else {
-                    let jn = value_noise(r, xi as i32, lot_seed.wrapping_add(222));
-                    let jitter = (jn.clamp(0.0, 0.999) * 3.0) as CoordinateUnit - 1;
-                    (base_row_h + jitter).max(PLOT_MIN_DIM)
-                };
-                row_hs.push(h);
-                cur_y += h;
-            }
-
-            // Place one building per plot, sized to fill it
-            for r in 0..rows as usize {
-                for c in 0..cols as usize {
-                    let plot_x = col_xs[c];
-                    let plot_y = row_ys[r];
-                    let plot_w = col_ws[c];
-                    let plot_h = row_hs[r];
-
-                    // 1-tile gap between adjacent buildings within the lot
-                    let gap_r: CoordinateUnit = if c < (cols - 1) as usize { 1 } else { 0 };
-                    let gap_b: CoordinateUnit = if r < (rows - 1) as usize { 1 } else { 0 };
-                    let bx = plot_x;
-                    let by = plot_y;
-                    let bw = plot_w - gap_r;
-                    let bh = plot_h - gap_b;
-
-                    if bw < 4 || bh < 4 { continue; }
-
-                    let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                        rects_overlap(bx - 1, by - 1, bw + 2, bh + 2, px, py, pw, ph)
-                    });
-                    if overlaps { continue; }
-
-                    // Each plot gets its own building type from the zone palette
-                    let plot_cx = plot_x + plot_w / 2;
-                    let plot_cy = plot_y + plot_h / 2;
-                    let zone = assign_zone(plot_cx, plot_cy, width, height, avenue_ys, seed);
-                    let kind_noise = value_noise(
-                        c as i32 + r as i32 * 7 + plot_cx,
-                        plot_cy,
-                        lot_seed.wrapping_add(6666),
-                    );
-                    let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-
-                    placed.push((bx, by, bw, bh));
-                    lot_buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
-                }
-            }
+            place_lot_buildings(lot, lot_seed, &mut placed, &mut buildings,
+                width, height, avenue_ys, seed);
         }
     }
-    buildings.extend(lot_buildings);
-
-    // ── Random fill: try to squeeze additional buildings into lots ────
-    // After grid partitioning, some lots still have unused space between
-    // or beside the placed buildings. For each lot, make several random
-    // placement attempts with small buildings to increase density.
-    let mut random_fill: Vec<Building> = Vec::new();
-    let fill_seed = bsp_seed.wrapping_add(12345);
-    for yi in 0..y_bounds.len().saturating_sub(1) {
-        for xi in 0..x_bounds.len().saturating_sub(1) {
-            let road_curve_buffer: CoordinateUnit = 3;
-            let lot_top = if avenue_set.contains(&y_bounds[yi]) {
-                y_bounds[yi] + avenue_half_width + sidewalk_width + 1 + road_curve_buffer
-            } else {
-                y_bounds[yi] + 1
-            };
-            let lot_bot = if avenue_set.contains(&y_bounds[yi + 1]) {
-                y_bounds[yi + 1] - avenue_half_width - sidewalk_width - 1 - road_curve_buffer
-            } else {
-                y_bounds[yi + 1] - 1
-            };
-            let lot_left = if cross_set.contains(&x_bounds[xi]) {
-                x_bounds[xi] + cross_half_width + cross_sidewalk_width + 1 + road_curve_buffer
-            } else {
-                x_bounds[xi] + 1
-            };
-            let lot_right = if cross_set.contains(&x_bounds[xi + 1]) {
-                x_bounds[xi + 1] - cross_half_width - cross_sidewalk_width - 1 - road_curve_buffer
-            } else {
-                x_bounds[xi + 1] - 1
-            };
-            let lot_w = lot_right - lot_left;
-            let lot_h = lot_bot - lot_top;
-            if lot_w < LOT_MIN_DIM || lot_h < LOT_MIN_DIM { continue; }
-
-            let lot_fs = fill_seed.wrapping_add(
-                (yi as u64).wrapping_mul(997).wrapping_add(xi as u64).wrapping_mul(13)
-            );
-
-            // Try a handful of random placements within this lot
-            let attempts = 4;
-            for ai in 0..attempts {
-                let nx = value_noise(ai, yi as i32, lot_fs.wrapping_add(ai as u64 * 31));
-                let ny = value_noise(xi as i32, ai, lot_fs.wrapping_add(ai as u64 * 37));
-                let nw = value_noise(ai + 10, yi as i32 + xi as i32, lot_fs.wrapping_add(ai as u64 * 41));
-                let nh = value_noise(yi as i32 + xi as i32, ai + 10, lot_fs.wrapping_add(ai as u64 * 43));
-
-                let bw = 4 + (nw * 8.0) as CoordinateUnit; // 4-12 width
-                let bh = 4 + (nh * 6.0) as CoordinateUnit; // 4-10 height
-                let bx = lot_left + (nx * (lot_w - bw).max(0) as f64) as CoordinateUnit;
-                let by = lot_top + (ny * (lot_h - bh).max(0) as f64) as CoordinateUnit;
-
-                if bx < lot_left || by < lot_top { continue; }
-                if bx + bw > lot_right || by + bh > lot_bot { continue; }
-                if bw < 4 || bh < 4 { continue; }
-
-                // Check placement rules: no overlap with existing buildings
-                let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                    rects_overlap(bx - 1, by - 1, bw + 2, bh + 2, px, py, pw, ph)
-                });
-                if overlaps { continue; }
-
-                let plot_cx = bx + bw / 2;
-                let plot_cy = by + bh / 2;
-                let zone = assign_zone(plot_cx, plot_cy, width, height, avenue_ys, seed);
-                let kind_noise = value_noise(bx + by, ai, lot_fs.wrapping_add(8888));
-                let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-
-                placed.push((bx, by, bw, bh));
-                random_fill.push(Building { x: bx, y: by, w: bw, h: bh, kind });
-            }
-        }
-    }
-    buildings.extend(random_fill);
 
     (buildings, parks, open_lots)
 }
 
-/// Places alley floor tiles in the gaps between adjacent buildings.
-/// BSP partitioning naturally creates gaps via inter-node padding; alleys
-/// fill those gaps with shadowed ambush terrain.
+/// Returns the adjusted `(bx, bw)` so the building avoids any cross street.
+/// Returns `None` if no valid position exists.
+fn fit_beside_cross_streets(
+    bx:               CoordinateUnit,
+    bw:               CoordinateUnit,
+    lx:               CoordinateUnit,
+    cross_xs:         &[CoordinateUnit],
+    cross_half_width: CoordinateUnit,
+) -> Option<(CoordinateUnit, CoordinateUnit)> {
+    let on_cross = cross_xs.iter().any(|&cx| {
+        bx < cx + cross_half_width + 1 && bx + bw > cx - cross_half_width - 1
+    });
+    if !on_cross { return Some((bx, bw)); }
+
+    for &cx in cross_xs {
+        let left_edge = cx - cross_half_width - 1;
+        if left_edge > bx {
+            let w = (left_edge - bx).min(bw);
+            if w >= ANCHOR_MIN_DIM { return Some((bx, w)); }
+        }
+        let right_x = cx + cross_half_width + 1;
+        if right_x >= lx && right_x < bx + bw {
+            let w = (bx + bw - right_x).min(bw);
+            if w >= ANCHOR_MIN_DIM { return Some((right_x, w)); }
+        }
+    }
+    None
+}
+
+// ── Alley placement ────────────────────────────────────────────────────────────
+
+/// Places `Floor::Alley` tiles in every gap of up to `ALLEY_GAP_MAX` tiles
+/// between adjacent building pairs.
 fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
-    // Detect gaps up to 6 tiles (BSP_PADDING + 2 × building pad).
-    let alley_gap_threshold: i64 = 6;
     for (i, a) in buildings.iter().enumerate() {
         for b in &buildings[i + 1..] {
-            // Horizontal adjacency: overlapping Y ranges with an X gap
-            if a.y < b.y + b.h && b.y < a.y + a.h {
-                let gap = b.x as i64 - (a.x + a.w) as i64;
-                if (1..=alley_gap_threshold).contains(&gap) {
-                    let overlap_y_min = a.y.max(b.y);
-                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
-                    for y in overlap_y_min..overlap_y_max {
-                        for gx in 0..gap as CoordinateUnit {
-                            let pos = GridVec::new(a.x + a.w + gx, y);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
-                                    voxel.floor = Some(Floor::Alley);
-                                }
-                        }
-                    }
-                }
-                // Check reverse direction
-                let gap_rev = a.x as i64 - (b.x + b.w) as i64;
-                if (1..=alley_gap_threshold).contains(&gap_rev) {
-                    let overlap_y_min = a.y.max(b.y);
-                    let overlap_y_max = (a.y + a.h).min(b.y + b.h);
-                    for y in overlap_y_min..overlap_y_max {
-                        for gx in 0..gap_rev as CoordinateUnit {
-                            let pos = GridVec::new(b.x + b.w + gx, y);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
-                                    voxel.floor = Some(Floor::Alley);
-                                }
-                        }
-                    }
+            try_place_alley_strip(map, a, b);
+        }
+    }
+}
+
+/// Fills the gap between one building pair with alley tiles.
+fn try_place_alley_strip(map: &mut GameMap, a: &Building, b: &Building) {
+    let (a, b) = if a.x <= b.x && a.y <= b.y { (a, b) } else { (b, a) };
+
+    // Horizontal gap (shared Y band, gap along X).
+    if a.y < b.y + b.h && b.y < a.y + a.h {
+        let gap = b.x as i64 - (a.x + a.w) as i64;
+        if (1..=ALLEY_GAP_MAX).contains(&gap) {
+            let y_min = a.y.max(b.y);
+            let y_max = (a.y + a.h).min(b.y + b.h);
+            for y in y_min..y_max {
+                for gx in 0..gap as CoordinateUnit {
+                    write_alley(map, a.x + a.w + gx, y);
                 }
             }
-            // Vertical adjacency: overlapping X ranges with a Y gap
-            if a.x < b.x + b.w && b.x < a.x + a.w {
-                let gap = b.y as i64 - (a.y + a.h) as i64;
-                if (1..=alley_gap_threshold).contains(&gap) {
-                    let overlap_x_min = a.x.max(b.x);
-                    let overlap_x_max = (a.x + a.w).min(b.x + b.w);
-                    for x in overlap_x_min..overlap_x_max {
-                        for gy in 0..gap as CoordinateUnit {
-                            let pos = GridVec::new(x, a.y + a.h + gy);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
-                                    voxel.floor = Some(Floor::Alley);
-                                }
-                        }
-                    }
-                }
-                let gap_rev = a.y as i64 - (b.y + b.h) as i64;
-                if (1..=alley_gap_threshold).contains(&gap_rev) {
-                    let overlap_x_min = a.x.max(b.x);
-                    let overlap_x_max = (a.x + a.w).min(b.x + b.w);
-                    for x in overlap_x_min..overlap_x_max {
-                        for gy in 0..gap_rev as CoordinateUnit {
-                            let pos = GridVec::new(x, b.y + b.h + gy);
-                            if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
-                                    voxel.floor = Some(Floor::Alley);
-                                }
-                        }
-                    }
+        }
+    }
+
+    // Vertical gap (shared X band, gap along Y).
+    if a.x < b.x + b.w && b.x < a.x + a.w {
+        let gap = b.y as i64 - (a.y + a.h) as i64;
+        if (1..=ALLEY_GAP_MAX).contains(&gap) {
+            let x_min = a.x.max(b.x);
+            let x_max = (a.x + a.w).min(b.x + b.w);
+            for x in x_min..x_max {
+                for gy in 0..gap as CoordinateUnit {
+                    write_alley(map, x, a.y + a.h + gy);
                 }
             }
         }
     }
 }
 
-/// Ensures every alley region connects to a road or sidewalk. If an alley
-/// is fully enclosed by building walls on both ends, clears one adjacent
-/// wall tile to create a passage so the alley remains reachable.
+/// Writes a single `Floor::Alley` tile if the cell is unoccupied.
+#[inline]
+fn write_alley(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit) {
+    let pos = GridVec::new(x, y);
+    if let Some(v) = map.get_voxel_at_mut(&pos) {
+        if v.props.is_none()
+            && !matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+        {
+            v.floor = Some(Floor::Alley);
+        }
+    }
+}
+
+// ── Alley connectivity ─────────────────────────────────────────────────────────
+
+/// Ensures every enclosed alley region has at least one exit to the street
+/// by punching through an adjacent wall tile if necessary.
 fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit) {
-    // Collect all Alley tiles
-    let mut alley_tiles: Vec<GridVec> = Vec::new();
+    let alley_tiles = collect_floor_tiles(map, width, height, |f| matches!(f, Floor::Alley));
+    if alley_tiles.is_empty() { return; }
+
+    let regions = flood_fill_regions(&alley_tiles, width, height, map, |f| {
+        matches!(f, Floor::Alley)
+    });
+
+    for region in &regions {
+        if region_has_road_exit(region, map, width, height) { continue; }
+        open_wall_passage(region, map, width, height);
+    }
+}
+
+fn collect_floor_tiles(
+    map:    &GameMap,
+    width:  CoordinateUnit,
+    height: CoordinateUnit,
+    pred:   impl Fn(&Floor) -> bool,
+) -> Vec<GridVec> {
+    let mut tiles = Vec::new();
     for y in 0..height {
         for x in 0..width {
             let pos = GridVec::new(x, y);
             if let Some(v) = map.get_voxel_at(&pos) {
-                if matches!(v.floor, Some(Floor::Alley)) {
-                    alley_tiles.push(pos);
+                if v.floor.as_ref().is_some_and(|f| pred(f)) {
+                    tiles.push(pos);
                 }
             }
         }
     }
-    if alley_tiles.is_empty() { return; }
+    tiles
+}
 
-    // Flood-fill connected regions of alley tiles
-    let map_w = width as usize;
+fn flood_fill_regions(
+    seeds:    &[GridVec],
+    width:    CoordinateUnit,
+    height:   CoordinateUnit,
+    map:      &GameMap,
+    passable: impl Fn(&Floor) -> bool,
+) -> Vec<Vec<GridVec>> {
+    let map_w       = width as usize;
     let mut visited = vec![false; map_w * height as usize];
-    let mut regions: Vec<Vec<GridVec>> = Vec::new();
+    let mut regions = Vec::new();
 
-    for &start in &alley_tiles {
+    for &start in seeds {
         let idx = start.y as usize * map_w + start.x as usize;
         if visited[idx] { continue; }
+
         let mut region = Vec::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut queue  = std::collections::VecDeque::new();
         visited[idx] = true;
         queue.push_back(start);
+
         while let Some(pos) = queue.pop_front() {
             region.push(pos);
-            for nb in pos.cardinal_neighbors() {
-                if nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height {
-                    let ni = nb.y as usize * map_w + nb.x as usize;
-                    if !visited[ni] {
-                        if let Some(v) = map.get_voxel_at(&nb) {
-                            if matches!(v.floor, Some(Floor::Alley)) {
-                                visited[ni] = true;
-                                queue.push_back(nb);
-                            }
+            for nb in in_bounds_neighbors(pos, width, height) {
+                let ni = nb.y as usize * map_w + nb.x as usize;
+                if !visited[ni] {
+                    if let Some(v) = map.get_voxel_at(&nb) {
+                        if v.floor.as_ref().is_some_and(|f| passable(f)) {
+                            visited[ni] = true;
+                            queue.push_back(nb);
                         }
                     }
                 }
@@ -2140,44 +2148,55 @@ fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: C
         }
         regions.push(region);
     }
+    regions
+}
 
-    // For each region, check if any tile is adjacent to a non-wall passable
-    // tile (road, sidewalk, dirt). If not, clear one adjacent wall tile.
-    for region in &regions {
-        let connected = region.iter().any(|pos| {
-            pos.cardinal_neighbors().iter().any(|nb| {
-                if nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height {
-                    if let Some(v) = map.get_voxel_at(nb) {
-                        return matches!(v.floor, Some(Floor::DirtRoad) | Some(Floor::Sidewalk)
-                            | Some(Floor::Dirt) | Some(Floor::Bridge))
-                            && !v.props.as_ref().is_some_and(|p| p.is_wall());
-                    }
-                }
-                false
+fn region_has_road_exit(
+    region: &[GridVec],
+    map:    &GameMap,
+    width:  CoordinateUnit,
+    height: CoordinateUnit,
+) -> bool {
+    region.iter().any(|&pos| {
+        in_bounds_neighbors(pos, width, height).iter().any(|&nb| {
+            map.get_voxel_at(&nb).is_some_and(|v| {
+                matches!(
+                    v.floor.as_ref(),
+                    Some(Floor::DirtRoad) | Some(Floor::Sidewalk) |
+                    Some(Floor::Dirt)     | Some(Floor::Bridge)
+                ) && !v.props.as_ref().is_some_and(|p| p.is_wall())
             })
-        });
-        if connected { continue; }
+        })
+    })
+}
 
-        // Enclosed region — find a wall tile adjacent to any region tile
-        // and clear it to create a passage.
-        'outer: for pos in region {
-            for nb in pos.cardinal_neighbors() {
-                if nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height {
-                    if let Some(v) = map.get_voxel_at(&nb) {
-                        if v.props.as_ref().is_some_and(|p| p.is_wall()) {
-                            // Clear the wall to make a passage
-                            if let Some(voxel) = map.get_voxel_at_mut(&nb) {
-                                voxel.props = None;
-                            }
-                            break 'outer;
-                        }
-                    }
+fn open_wall_passage(
+    region: &[GridVec],
+    map:    &mut GameMap,
+    width:  CoordinateUnit,
+    height: CoordinateUnit,
+) {
+    'outer: for &pos in region {
+        for nb in in_bounds_neighbors(pos, width, height) {
+            if map.get_voxel_at(&nb)
+                .is_some_and(|v| v.props.as_ref().is_some_and(|p| p.is_wall()))
+            {
+                if let Some(voxel) = map.get_voxel_at_mut(&nb) {
+                    voxel.props = None;
                 }
+                break 'outer;
             }
         }
     }
 }
 
+#[inline]
+fn in_bounds_neighbors(pos: GridVec, width: CoordinateUnit, height: CoordinateUnit) -> Vec<GridVec> {
+    pos.cardinal_neighbors()
+        .into_iter()
+        .filter(|nb| nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height)
+        .collect()
+}
 /// Assigns faction anchor buildings — each faction seeds from a specific
 /// defensible building type rather than spawning randomly.
 fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {

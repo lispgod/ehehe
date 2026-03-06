@@ -192,17 +192,19 @@ impl WorldGenPhase for WaterPhase {
     ) {
         let river_seed = seed.wrapping_add(88800);
         let river_cx = width as f64 / 2.0;
-        // River flows top to bottom with layered sinusoidal wobble and
-        // noise-driven meanders for a more natural, organic shape.
+        // Track the previous row's center so each row drifts at most ±1 tile.
+        let mut prev_center_x = river_cx;
+        // River flows top to bottom with smooth banks.
         for y in 1..height - 1 {
             let fy = y as f64;
-            // Multi-octave wobble: large sweeping bends + medium curves + fine noise
-            let wobble = (fy * 0.008).sin() * 40.0      // large meander
-                + (fy * 0.020).sin() * 20.0              // medium curve
-                + (fy * 0.045).cos() * 8.0               // small ripple
-                + value_noise(0, y, river_seed) * 10.0   // per-row noise jitter
-                + value_noise(y, 0, river_seed.wrapping_add(222)) * 5.0;
-            let center_x = river_cx + wobble;
+            // Desired center from multi-octave noise (determines general shape).
+            let desired = river_cx
+                + (fy * 0.008).sin() * 40.0      // large meander
+                + (fy * 0.020).sin() * 20.0;     // medium curve
+            // Clamp drift to ±1 tile per row for smooth banks.
+            let drift = (desired - prev_center_x).clamp(-1.0, 1.0);
+            let center_x = prev_center_x + drift;
+            prev_center_x = center_x;
             // River width varies smoothly along its length.
             let base_width = 14.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 10.0;
             let width_pulse = (fy * 0.012).sin() * 6.0; // gentle widening/narrowing
@@ -374,17 +376,79 @@ impl WorldGenPhase for InfrastructurePhase {
         }
 
         // ── Pass 3b: Bridges where roads cross the river ─────────────────
-        // Scan each avenue band for water/beach interruptions and span them
-        // with bridge tiles, connecting flush with the road on both banks.
+        // For each avenue, first detect if/where it crosses water, then
+        // bridge the FULL river width (not just the road band) to ensure
+        // connectivity across the smoothed river.
+        let road_band = avenue_half_width + sidewalk_width;
         for &ay in &data.avenue_ys {
             let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
             let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
+            // First pass: identify X positions where the road band crosses water
+            let mut crosses_water = vec![false; width as usize];
             for x in 1..width - 1 {
                 let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
-                let band = avenue_half_width + sidewalk_width;
-                for hw in -band..=band {
-                    let y = ay + hw + curve_offset as CoordinateUnit;
+                let center_y = ay + curve_offset as CoordinateUnit;
+                for hw in -road_band..=road_band {
+                    let y = center_y + hw;
                     if y <= 0 || y >= height - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            crosses_water[x as usize] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Second pass: at crossing X positions, bridge a wide band to span
+            // the full river width (±30 tiles covers any river + beach).
+            let bridge_band = 30;
+            for x in 1..width - 1 {
+                if !crosses_water[x as usize] { continue; }
+                let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
+                let center_y = ay + curve_offset as CoordinateUnit;
+                for hw in -bridge_band..=bridge_band {
+                    let y = center_y + hw;
+                    if y <= 0 || y >= height - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            voxel.floor = Some(Floor::Bridge);
+                            voxel.props = None;
+                        }
+                    }
+                }
+            }
+        }
+        // Also bridge cross streets where they cross the river
+        for &cx in &data.cross_xs {
+            let cross_curve_amp = 2.0 + value_noise(cx, 0, curve_seed.wrapping_add(500)) * 3.0;
+            let cross_curve_freq = 0.018 + value_noise(0, cx, curve_seed.wrapping_add(600)) * 0.01;
+            let cross_band = cross_half_width + 1;
+            let mut crosses_water_cross = vec![false; height as usize];
+            for y in 1..height - 1 {
+                let curve_offset = (y as f64 * cross_curve_freq).sin() * cross_curve_amp;
+                let center_x = cx + curve_offset as CoordinateUnit;
+                for hw in -cross_band..=cross_band {
+                    let x = center_x + hw;
+                    if x <= 0 || x >= width - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            crosses_water_cross[y as usize] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            let bridge_band_cross = 30;
+            for y in 1..height - 1 {
+                if !crosses_water_cross[y as usize] { continue; }
+                let curve_offset = (y as f64 * cross_curve_freq).sin() * cross_curve_amp;
+                let center_x = cx + curve_offset as CoordinateUnit;
+                for hw in -bridge_band_cross..=bridge_band_cross {
+                    let x = center_x + hw;
+                    if x <= 0 || x >= width - 1 { continue; }
                     let pos = GridVec::new(x, y);
                     if let Some(voxel) = map.get_voxel_at_mut(&pos) {
                         if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {

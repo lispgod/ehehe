@@ -110,6 +110,7 @@ impl Plugin for RoguelikePlugin {
             .init_resource::<SoundEvents>()
             .init_resource::<BloodMap>()
             .init_resource::<SpectatingAfterDeath>()
+            .init_resource::<crate::resources::DeathFade>()
             .init_resource::<DynamicRng>()
             .init_resource::<crate::resources::GodMode>()
             .init_resource::<crate::resources::StarLevel>()
@@ -266,8 +267,8 @@ impl Plugin for ViewPlugin {
 }
 
 /// Spawns the player entity with all required ECS components.
-fn spawn_player(mut commands: Commands, map: Res<GameMapResource>) {
-    do_spawn_player(&mut commands, &map);
+fn spawn_player(mut commands: Commands, mut map: ResMut<GameMapResource>) {
+    do_spawn_player(&mut commands, &mut map);
 }
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
@@ -278,12 +279,15 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
 }
 
 /// Helper: spawns the player entity.
-fn do_spawn_player(commands: &mut Commands, map: &GameMapResource) {
+fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
     // Spawn the player inside a building near the center of the map.
     let center = GridVec::new(map.0.width / 2, map.0.height / 2);
     let spawn_pos = map.0.find_building_interior(center, 40)
         .or_else(|| map.0.find_spawnable_near(center, 20))
         .unwrap_or(center);
+
+    // Clear props directly around the player spawn so they don't start blocked.
+    crate::gamemap::clear_around(&mut map.0, spawn_pos, 3);
 
     // Spawn starting weapon: Colt Pocket (.31 caliber)
     let caliber = Caliber::Cal31;
@@ -405,7 +409,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
             crate::components::Faction::Police => (&[4, 5], 66666),
             crate::components::Faction::Outlaws => (&[6, 7], 77700),
             crate::components::Faction::Lawmen => (&[8, 9], 77800),
-            crate::components::Faction::Indians => (&[2, 3], 77900),
+            crate::components::Faction::Apache => (&[2, 3], 77900),
             crate::components::Faction::Vaqueros => (&[0], 78000),
             _ => continue,
         };
@@ -440,7 +444,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
 
     // (template indices, faction offset seed, number of groups, is_civilian)
     let gang_configs: &[(&[usize], u64, i32, bool)] = &[
-        (&[2, 3], 10, 5, false),   // Indians: 5 groups
+        (&[2, 3], 10, 5, false),   // Apache: 5 groups
         (&[0], 20, 5, false),      // Vaqueros: 5 groups
         (&[1], 30, 4, true),       // Civilians: 4 groups (exempt from radius)
         (&[4, 5], 40, 4, false),   // Police: 4 groups
@@ -504,6 +508,7 @@ struct RestartResources<'w> {
     god_mode: ResMut<'w, crate::resources::GodMode>,
     star_level: ResMut<'w, crate::resources::StarLevel>,
     prop_health: ResMut<'w, crate::resources::PropHealth>,
+    death_fade: ResMut<'w, crate::resources::DeathFade>,
 }
 
 /// System that handles game restart by despawning all entities and re-spawning.
@@ -549,9 +554,10 @@ fn restart_system(
     res.dynamic_rng.reset();
     *res.star_level = crate::resources::StarLevel::default();
     res.prop_health.hp.clear();
+    res.death_fade.frames = 0;
 
     res.next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands, &res.game_map);
+    do_spawn_player(&mut commands, &mut res.game_map);
     do_spawn_monsters(&mut commands, &res.game_map, res.seed.0);
 }

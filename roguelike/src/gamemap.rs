@@ -2183,9 +2183,9 @@ fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: C
 fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
     // Map building kinds to factions:
     // 1=Saloon → Outlaws, 2=Stable → Vaqueros, 4=Police Station → Police,
-    // 7=Bank → Lawmen, 8=Hotel → Civilians, 0=House → Indians (outskirts)
+    // 7=Bank → Lawmen, 8=Hotel → Civilians, 0=House → Apache (outskirts)
     let mut used_kinds: HashSet<u32> = HashSet::new();
-    let mut indians_anchor_assigned = false;
+    let mut apache_anchor_assigned = false;
 
     for b in buildings {
         let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
@@ -2210,14 +2210,14 @@ fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
                 used_kinds.insert(8);
                 (Faction::Civilians, "Hotel".to_string())
             }
-            0 if !indians_anchor_assigned => {
-                // Use first house on outskirts for Indians
+            0 if !apache_anchor_assigned => {
+                // Use first house on outskirts for Apache
                 let dist_to_center = center.distance_squared(GridVec::new(
                     map.width / 2, map.height / 2
                 ));
                 if dist_to_center > (map.width / 4) * (map.width / 4) {
-                    indians_anchor_assigned = true;
-                    (Faction::Indians, "Hacienda".to_string())
+                    apache_anchor_assigned = true;
+                    (Faction::Apache, "Hacienda".to_string())
                 } else {
                     continue;
                 }
@@ -4178,7 +4178,7 @@ fn place_gunpowder_barrels(
 
 /// Clears all props within a given radius of a point and replaces water
 /// floors with Dirt so the area is walkable.
-fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
+pub fn clear_around(map: &mut GameMap, center: GridVec, radius: CoordinateUnit) {
     let radius_sq = radius * radius;
     let map_width = map.width;
     let map_height = map.height;

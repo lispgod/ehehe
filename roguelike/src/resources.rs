@@ -444,6 +444,14 @@ pub struct RestartRequested(pub bool);
 #[derive(Resource, Debug, Default)]
 pub struct SpectatingAfterDeath(pub bool);
 
+/// Tracks how many render frames the player has been dead, used to
+/// gradually fade in the red death overlay.
+#[derive(Resource, Debug, Default)]
+pub struct DeathFade {
+    /// Number of render frames since the player died.
+    pub frames: u32,
+}
+
 /// God mode: when true, the player cannot take damage. Toggled with Shift+G.
 #[derive(Resource, Debug, Default)]
 pub struct GodMode(pub bool);

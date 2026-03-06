@@ -328,7 +328,7 @@ pub enum Faction {
     /// Town civilians — shopkeepers, townsfolk. No allies.
     Civilians,
     /// Native American faction. No allies.
-    Indians,
+    Apache,
     /// Police officers and deputies. No allies.
     Police,
 }
@@ -503,7 +503,7 @@ pub enum ItemKind {
     Whiskey { heal: i32, blunt_damage: i32 },
     /// A molotov cocktail. Thrown toward cursor; sets a large area on fire.
     Molotov { damage: i32, radius: i32, blunt_damage: i32 },
-    /// A bow. Fires arrows. Used by Indians.
+    /// A bow. Fires arrows. Used by Apache.
     Bow { attack: i32, blunt_damage: i32 },
     /// Beer. Restores a small amount of health when consumed.
     Beer { heal: i32, blunt_damage: i32 },

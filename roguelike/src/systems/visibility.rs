@@ -110,9 +110,14 @@ pub fn visibility_system(
         // Directional FOV: filter visible tiles to a cone when aiming.
         // When the cursor is off-center, the player can no longer see behind
         // themselves — only tiles within the computed cone are kept.
+        // NPCs also keep a 3-tile circular awareness radius around them.
         if let Some(dir) = cone_dir {
             let (cdx, cdy) = (dir.x as f64, dir.y as f64);
             let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
+
+            /// Radius of the circular awareness zone around NPCs (Euclidean).
+            const NPC_PROXIMITY_RADIUS: i32 = 3;
+            let prox_sq = (NPC_PROXIMITY_RADIUS * NPC_PROXIMITY_RADIUS) as i64;
 
             viewshed.visible_tiles.retain(|&tile| {
                 let diff = tile - origin;
@@ -123,6 +128,13 @@ pub fn visibility_system(
                 // are always visible for the player.
                 if is_player && diff.x.abs() <= 1 && diff.y.abs() <= 1 {
                     return true;
+                }
+                // NPC circular proximity awareness: always see within 3 tiles.
+                if is_npc {
+                    let dist_sq = (diff.x as i64) * (diff.x as i64) + (diff.y as i64) * (diff.y as i64);
+                    if dist_sq <= prox_sq {
+                        return true;
+                    }
                 }
                 let (dx, dy) = (diff.x as f64, diff.y as f64);
                 let len = (dx * dx + dy * dy).sqrt();

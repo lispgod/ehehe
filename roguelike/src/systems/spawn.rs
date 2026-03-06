@@ -14,8 +14,8 @@ use crate::typedefs::RatColor;
 // All NPC names are single-word for UI readability and variety.
 // Each faction has a distinct name generator:
 //   - Cowboys (Outlaws/Lawmen): Western first names and surnames
-//   - Indians: Compound nature names (e.g., Eaglefoot, SittingBear)
-//   - Mexicans (Vaqueros): Spanish names
+//   - Apache: Compound nature names (e.g., Eaglefoot, SittingBear)
+//   - Vaqueros: Spanish names
 //   - Police: Famous lawman surnames
 //   - Civilians: Nicknames (e.g., Dusty, Slim, Maverick)
 
@@ -31,8 +31,8 @@ const COWBOY_NAMES: &[&str] = &[
     "Larkin", "Mcgraw", "Pickett", "Slade", "Tucker",
 ];
 
-/// Indian compound names — nature-inspired single words.
-const INDIAN_NAMES: &[&str] = &[
+/// Apache compound names — nature-inspired single words.
+const APACHE_NAMES: &[&str] = &[
     "Eaglefoot", "SittingBear", "RedCloud", "IronHawk", "TallElk",
     "SwiftWolf", "RunningDeer", "LoneBull", "ThunderSky", "SilentArrow",
     "PaintedMoon", "BrokenFeather", "RisingFire", "BurningWind", "HighStar",
@@ -43,8 +43,8 @@ const INDIAN_NAMES: &[&str] = &[
     "Ironbow", "Dustwolf", "Ashfeather", "Deepsky", "Fireheart",
 ];
 
-/// Mexican names — used by Vaqueros faction.
-const MEXICAN_NAMES: &[&str] = &[
+/// Vaquero names — used by Vaqueros faction.
+const VAQUERO_NAMES: &[&str] = &[
     "Carlos", "Miguel", "Diego", "Rafael", "Alejandro",
     "Fernando", "Santiago", "Joaquin", "Esteban", "Mateo",
     "Rodrigo", "Emilio", "Ignacio", "Salvador", "Teodoro",
@@ -77,7 +77,7 @@ const CIVILIAN_NAMES: &[&str] = &[
 
 /// Generates a single-word faction-appropriate name from position hash.
 /// Each faction has its own distinct pool:
-///   - Indians: Compound nature names (Eaglefoot, SittingBear)
+///   - Apache: Compound nature names (Eaglefoot, SittingBear)
 ///   - Vaqueros: Spanish first names or surnames
 ///   - Police: Famous lawman surnames
 ///   - Civilians: Wild West nicknames
@@ -86,8 +86,8 @@ fn generate_npc_name(x: i32, y: i32, faction: &Faction) -> String {
     let hash = (x.wrapping_mul(7919) ^ y.wrapping_mul(104729)).unsigned_abs() as usize;
 
     let pool = match faction {
-        Faction::Indians => INDIAN_NAMES,
-        Faction::Vaqueros => MEXICAN_NAMES,
+        Faction::Apache => APACHE_NAMES,
+        Faction::Vaqueros => VAQUERO_NAMES,
         Faction::Police => POLICE_NAMES,
         Faction::Civilians => CIVILIAN_NAMES,
         _ => COWBOY_NAMES,
@@ -116,16 +116,16 @@ pub struct MonsterTemplate {
 /// Shared monster templates used by both initial and wave spawning.
 /// NPC speeds are tuned so that movement frequency roughly matches the
 /// player's movement rate (1 action per 3 world ticks).
-/// - Vaquero: 32, Civilian: 28, Indian Brave: 40, Indian Scout: 45
+/// - Vaquero: 32, Civilian: 28, Apache Brave: 40, Apache Scout: 45
 /// - Police Officer: 32, Deputy: 30
 pub const MONSTER_TEMPLATES: &[MonsterTemplate] = &[
     // Index 0: Vaqueros — faction color: lime green
     MonsterTemplate { name: "Vaquero", symbol: "@", fg: RatColor::Rgb(140, 220, 60), health: 100, attack: 5, speed: 32, sight_range: 10, faction: Faction::Vaqueros, has_gun: false },
     // Index 1: Civilians — faction color: off-white/off-gray (player is pure white)
     MonsterTemplate { name: "Civilian", symbol: "@", fg: RatColor::Rgb(200, 195, 185), health: 60, attack: 2, speed: 28, sight_range: 8, faction: Faction::Civilians, has_gun: false },
-    // Index 2–3: Indians — faction color: warm brown
-    MonsterTemplate { name: "Indian Brave", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 120, attack: 5, speed: 40, sight_range: 12, faction: Faction::Indians, has_gun: false },
-    MonsterTemplate { name: "Indian Scout", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Indians, has_gun: false },
+    // Index 2–3: Apache — faction color: warm brown
+    MonsterTemplate { name: "Apache Brave", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 120, attack: 5, speed: 40, sight_range: 12, faction: Faction::Apache, has_gun: false },
+    MonsterTemplate { name: "Apache Scout", symbol: "@", fg: RatColor::Rgb(200, 120, 60), health: 80, attack: 4, speed: 45, sight_range: 14, faction: Faction::Apache, has_gun: false },
     // Index 4–5: Police and deputies — faction color: gold
     MonsterTemplate { name: "Police Officer", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 150, attack: 8, speed: 32, sight_range: 14, faction: Faction::Police, has_gun: true },
     MonsterTemplate { name: "Deputy", symbol: "@", fg: RatColor::Rgb(255, 215, 0), health: 100, attack: 6, speed: 30, sight_range: 12, faction: Faction::Police, has_gun: true },
@@ -205,8 +205,8 @@ pub fn spawn_monster(
         inv_items.push(gun);
     }
 
-    // Indians get a bow instead of a gun.
-    if matches!(template.faction, Faction::Indians) {
+    // Apache get a bow instead of a gun.
+    if matches!(template.faction, Faction::Apache) {
         let bow = commands.spawn((
             Item,
             Name("Bow".into()),
@@ -289,7 +289,7 @@ pub fn spawn_monster(
                     Some(prefixes[prefix_hash / 100 % prefixes.len()])
                 } else { None }
             }
-            Faction::Indians => {
+            Faction::Apache => {
                 if prefix_roll < 15 {
                     let prefixes = ["Chief", "Brave", "Shaman", "Elder"];
                     Some(prefixes[prefix_hash / 100 % prefixes.len()])

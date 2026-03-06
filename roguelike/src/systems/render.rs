@@ -89,6 +89,7 @@ pub fn draw_system(
     spell_particles: Res<SpellParticles>,
     input_state: Res<InputState>,
     (cursor, collectibles, star_level): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>),
+    mut death_fade: ResMut<crate::resources::DeathFade>,
 ) -> Result {
     context.draw(|frame| {
         let area = frame.area();
@@ -216,9 +217,12 @@ pub fn draw_system(
         // All NPCs (hostile or not): tint only a small arc in their facing direction.
         // This shows just enough of their FOV to indicate where they're looking.
         // Animals (Wildlife) and Civilians are excluded from FOV highlighting.
+        // The 3-tile circular proximity awareness zone is NOT tinted.
         {
             /// Maximum Chebyshev distance from an NPC for direction tint.
             const FOV_TINT_ARC_RADIUS: i32 = 8;
+            /// Proximity radius excluded from tinting (matches visibility.rs).
+            const NPC_PROXIMITY_RADIUS: i32 = 3;
 
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
             for (vs, faction, npc_pos, ai_look) in &npc_viewsheds {
@@ -234,10 +238,18 @@ pub fn draw_system(
                     continue;
                 }
 
+                let prox_sq = (NPC_PROXIMITY_RADIUS * NPC_PROXIMITY_RADIUS) as i64;
+
                 // Tint only a small arc in facing direction — just enough to
                 // see where people are looking.
+                // Skip tiles within the circular proximity zone.
                 for &tile in &vs.visible_tiles {
                     let diff = tile - npc_gv;
+                    let dist_sq = (diff.x as i64) * (diff.x as i64) + (diff.y as i64) * (diff.y as i64);
+                    // Don't tint the circular proximity zone
+                    if dist_sq <= prox_sq {
+                        continue;
+                    }
                     if diff.x.abs().max(diff.y.abs()) <= FOV_TINT_ARC_RADIUS {
                         if let Some(look) = ai_look {
                             let dot = diff.x as i64 * look.0.x as i64
@@ -484,8 +496,14 @@ pub fn draw_system(
         // When the player is dead, tint the entire map background dark
         // red and darken tiles in a circle around the player — the further
         // a tile is from the player, the darker it becomes.
+        // The effect fades in gradually over ~120 frames (~2 seconds at 60 FPS).
         let player_is_dead = player_hp.is_some_and(|hp| hp.is_dead());
         if player_is_dead {
+            death_fade.frames = death_fade.frames.saturating_add(1);
+            // Fade-in over 120 frames: 0.0 → 1.0
+            const DEATH_FADE_FRAMES: u32 = 120;
+            let fade = (death_fade.frames as f32 / DEATH_FADE_FRAMES as f32).min(1.0);
+
             let player_screen = player_world_pos
                 .map(|pw| pw - bottom_left);
             for (screen_y, row) in render_packet.iter_mut().enumerate() {
@@ -504,22 +522,26 @@ pub fn draw_system(
                     const DEATH_DARK_RADIUS: i32 = 20;
                     let factor = 1.0 - (dist as f32 / DEATH_DARK_RADIUS as f32).min(1.0);
 
-                    // Tint both fg and bg toward dark red.
+                    // Tint both fg and bg toward dark red, scaled by fade.
                     // Dark red base: (80, 0, 0).
                     if let RatColor::Rgb(r, g, b) = cell.1 {
-                        let nr = ((r as f32 * factor) as u8).max((80.0 * (1.0 - factor)) as u8);
-                        let ng = (g as f32 * factor * 0.3) as u8;
-                        let nb = (b as f32 * factor * 0.3) as u8;
+                        let nr = ((r as f32 * (1.0 - fade + fade * factor)) as u8)
+                            .max((80.0 * fade * (1.0 - factor)) as u8);
+                        let ng = (g as f32 * (1.0 - fade + fade * factor * 0.3)) as u8;
+                        let nb = (b as f32 * (1.0 - fade + fade * factor * 0.3)) as u8;
                         cell.1 = RatColor::Rgb(nr, ng, nb);
                     }
                     if let RatColor::Rgb(r, g, b) = cell.2 {
-                        let nr = ((r as f32 * factor) as u8).max((80.0 * (1.0 - factor)) as u8);
-                        let ng = (g as f32 * factor * 0.3) as u8;
-                        let nb = (b as f32 * factor * 0.3) as u8;
+                        let nr = ((r as f32 * (1.0 - fade + fade * factor)) as u8)
+                            .max((80.0 * fade * (1.0 - factor)) as u8);
+                        let ng = (g as f32 * (1.0 - fade + fade * factor * 0.3)) as u8;
+                        let nb = (b as f32 * (1.0 - fade + fade * factor * 0.3)) as u8;
                         cell.2 = RatColor::Rgb(nr, ng, nb);
                     }
                 }
             }
+        } else {
+            death_fade.frames = 0;
         }
 
         let mut render_lines = Vec::new();
@@ -540,7 +562,9 @@ pub fn draw_system(
         render_lines.reverse();
 
         let game_bg = if player_is_dead {
-            RatColor::Rgb(80, 0, 0) // dark red when dead
+            let fade = (death_fade.frames as f32 / 120.0).min(1.0);
+            let r = (80.0 * fade) as u8;
+            RatColor::Rgb(r, 0, 0) // gradually darken to dark red when dead
         } else {
             RatColor::Black
         };
@@ -567,7 +591,7 @@ pub fn draw_system(
                                 ItemKind::Tomahawk { attack, .. } => format!("+{attack} atk"),
                                 ItemKind::Grenade { damage, radius, .. } => format!("{damage} dmg r{radius}"),
                                 ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
+                                ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius}"),
                                 ItemKind::Bow { .. } => "Bow".to_string(),
                                 ItemKind::Beer { heal, .. } => format!("Heal {heal} HP"),
                                 ItemKind::Ale { heal, .. } => format!("Heal {heal} HP"),
@@ -930,11 +954,10 @@ fn render_cursor_info(
                 Span::from(format!(" {cursor_npc_hp}")).white(),
             ]));
         }
-        for (i, item_name) in cursor_npc_inv.iter().enumerate() {
+        for item_name in cursor_npc_inv.iter() {
             if left_lines.len() >= max_lines { break; }
             left_lines.push(Line::from(vec![
-                Span::from(format!("  Inv{}:", i + 1)).dark_gray(),
-                Span::from(format!(" {item_name}")).white(),
+                Span::from(format!("  {item_name}")).white(),
             ]));
         }
     }

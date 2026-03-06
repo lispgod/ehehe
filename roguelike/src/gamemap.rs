@@ -45,6 +45,10 @@ struct Building {
 
 /// Intermediate data accumulated between world generation phases.
 #[derive(Default)]
+/// Intermediate data accumulated during hierarchical world generation.
+/// Phases produce and consume this data, enabling later phases to reference
+/// layout decisions made by earlier ones (e.g., street positions inform
+/// building placement).
 struct WorldGenData {
     avenue_ys: Vec<CoordinateUnit>,
     cross_xs: Vec<CoordinateUnit>,
@@ -52,7 +56,10 @@ struct WorldGenData {
     avenue_half_width: CoordinateUnit,
 }
 
-/// A single step in the world generation pipeline.
+/// A single step in the hierarchical world generation pipeline.
+/// Each phase receives the map and shared data, applying one category of
+/// generation (terrain, water, infrastructure, buildings, etc.).
+/// Phases run in order; later phases may read data produced by earlier ones.
 trait WorldGenPhase {
     fn execute(
         &self,

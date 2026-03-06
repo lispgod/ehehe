@@ -207,7 +207,7 @@ pub fn fire_system(
                     }
                 }
             }
-            if deep >= shallow { Floor::DeepWater } else { Floor::ShallowWater }
+            if deep > shallow { Floor::DeepWater } else { Floor::ShallowWater }
         } else {
             Floor::ScorchedEarth
         };

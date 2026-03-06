@@ -4596,9 +4596,11 @@ mod tests {
             }
             in_road = is_road;
         }
-        // With the wider spacing (48-64 base), there should be fewer cross streets.
-        // On a 400-wide map with old 28-42 spacing, there were ~8-10 roads.
-        // With new 48-64 spacing, expect roughly 5-7 or fewer.
+        // With the wider spacing (48-64 base + ±12 variance), there should be
+        // fewer cross streets. On a 400-wide map with old 28-42 spacing, there
+        // were ~8-10 roads. With new 48-64 spacing, expect roughly 4-7.
+        assert!(cross_road_xs.len() >= 3,
+            "Should still generate at least 3 vertical roads, got {}", cross_road_xs.len());
         assert!(cross_road_xs.len() <= 10,
             "Expected fewer vertical roads with wider spacing, got {}", cross_road_xs.len());
     }

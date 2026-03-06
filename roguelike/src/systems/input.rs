@@ -40,7 +40,8 @@ const ROUNDHOUSE_STAMINA_COST: i32 = 10;
 /// Stamina cost per tile of movement (WASD / arrows).
 const MOVE_STAMINA_COST: i32 = 2;
 
-/// A single command binding entry: the key(s) that trigger it, a short name, and documentation.
+/// A single command binding entry: the key(s) that trigger it, a short name, documentation,
+/// and a category for UI grouping.
 pub struct CommandBinding {
     /// Key combination string shown in the help/welcome screen.
     pub key: &'static str,
@@ -48,23 +49,25 @@ pub struct CommandBinding {
     pub name: &'static str,
     /// Longer description / documentation for the command.
     pub docs: &'static str,
+    /// Category for grouping in the Q menu: "Movement", "Combat", "Inventory", or "Other".
+    pub category: &'static str,
 }
 
 /// All keybindings, generated from the exhaustive match arms below.
 /// Used by the `?` help overlay to display available commands.
 /// Related keys are grouped (WASD, IJKL) to reduce visual clutter.
 pub const KEYBINDINGS: &[CommandBinding] = &[
-    CommandBinding { key: "WASD / ↑↓←→", name: "Move (3 ticks)", docs: "Move the player one tile. Physical movement costs 3 ticks and 2 stamina." },
-    CommandBinding { key: "IJKL", name: "Cursor (1 tick)", docs: "Move the cursor one tile for aiming. Costs 1 tick." },
-    CommandBinding { key: "C", name: "Center cursor", docs: "Snap cursor onto your position. Costs 1 tick." },
-    CommandBinding { key: "V", name: "Auto-aim", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
-    CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 6 ticks." },
-    CommandBinding { key: "F", name: "Roundhouse (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks + 10 stamina." },
-    CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
-    CommandBinding { key: "G", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
-    CommandBinding { key: "E", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
-    CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
-    CommandBinding { key: "Q", name: "Menu", docs: "Toggle pause menu" },
+    CommandBinding { key: "WASD / ↑↓←→", name: "Move (3 ticks)", docs: "Move the player one tile. Physical movement costs 3 ticks and 2 stamina.", category: "Movement" },
+    CommandBinding { key: "IJKL", name: "Cursor (1 tick)", docs: "Move the cursor one tile for aiming. Costs 1 tick.", category: "Other" },
+    CommandBinding { key: "C", name: "Center cursor", docs: "Snap cursor onto your position. Costs 1 tick.", category: "Other" },
+    CommandBinding { key: "V", name: "Auto-aim", docs: "Cursor steps toward nearest enemy. Costs 1 tick.", category: "Other" },
+    CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 6 ticks.", category: "Combat" },
+    CommandBinding { key: "F", name: "Roundhouse (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks + 10 stamina.", category: "Combat" },
+    CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick.", category: "Movement" },
+    CommandBinding { key: "G", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor.", category: "Combat" },
+    CommandBinding { key: "E", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor.", category: "Inventory" },
+    CommandBinding { key: "1-0", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks.", category: "Inventory" },
+    CommandBinding { key: "Q", name: "Menu", docs: "Toggle pause menu", category: "Other" },
 ];
 
 /// Reads keyboard input. Global keys (quit, pause, help) are always handled.

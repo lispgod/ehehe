@@ -985,12 +985,14 @@ fn render_inventory_bar(
     let line = Line::from(spans);
     frame.render_widget(
         Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL).title("Inventory 1-6:Use | 7:Dual 8:Fan 9:Sand 0:Throw")),
+            .block(Block::default().borders(Borders::ALL).title("Inventory 1-0:Use")),
         area,
     );
 }
 
 /// Renders the command bar at the very bottom of the screen showing all key commands.
+/// Labels are derived from the live `KEYBINDINGS` array in input.rs so they
+/// automatically update if bindings change.
 fn render_command_bar(frame: &mut ratatui::Frame, area: Rect, input_state: &InputState) {
     let spans = if input_state.mode == InputMode::EscMenu {
         vec![
@@ -998,19 +1000,15 @@ fn render_command_bar(frame: &mut ratatui::Frame, area: Rect, input_state: &Inpu
             Span::from("R").bold().yellow(), Span::from(":Restart ").dark_gray(),
         ]
     } else {
-        vec![
-            Span::from(" WASD").bold().yellow(), Span::from(":Move ").dark_gray(),
-            Span::from("IJKL").bold().yellow(), Span::from(":Cursor ").dark_gray(),
-            Span::from("G").bold().yellow(), Span::from(":Punch ").dark_gray(),
-            Span::from("F").bold().yellow(), Span::from(":Kick ").dark_gray(),
-            Span::from("C").bold().yellow(), Span::from(":Center ").dark_gray(),
-            Span::from("V").bold().yellow(), Span::from(":Autoaim ").dark_gray(),
-            Span::from("R").bold().yellow(), Span::from(":Reload ").dark_gray(),
-            Span::from("E").bold().yellow(), Span::from(":Pickup ").dark_gray(),
-            Span::from("Z").bold().yellow(), Span::from(":Dive ").dark_gray(),
-            Span::from("T").bold().yellow(), Span::from(":Wait ").dark_gray(),
-            Span::from("Q").bold().yellow(), Span::from(":Menu").dark_gray(),
-        ]
+        let mut s: Vec<Span> = Vec::new();
+        for binding in KEYBINDINGS {
+            if !s.is_empty() {
+                s.push(Span::from(" ").dark_gray());
+            }
+            s.push(Span::from(format!("{}", binding.key)).bold().yellow());
+            s.push(Span::from(format!(":{} ", binding.name)).dark_gray());
+        }
+        s
     };
     let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line).on_black(), area);
@@ -1048,7 +1046,7 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
         Line::from("  their own business... unless you start").white(),
         Line::from("  trouble.").white(),
         Line::from(""),
-        Line::from("  Punch (G) or Kick (F) someone to start").yellow(),
+        Line::from("  Kick (F) or Throw sand (G) to start").yellow(),
         Line::from("  a brawl! Their faction will aggro.").yellow(),
         Line::from("  Cause too much chaos and sheriffs will").yellow(),
         Line::from("  come after you (star level).").yellow(),
@@ -1079,8 +1077,33 @@ fn render_welcome_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
 
 /// Renders the ESC menu overlay with Resume and Restart options.
 fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
-    let w = 40u16.min(game_area.width.saturating_sub(4));
-    let h = 8u16.min(game_area.height.saturating_sub(4));
+    // Build keybinding reference grouped by category from the live binding map.
+    let categories = ["Movement", "Combat", "Inventory", "Other"];
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Prominent restart line at the top
+    lines.push(Line::from(""));
+    lines.push(Line::from("  R — Restart").bold().yellow());
+    lines.push(Line::from(""));
+    lines.push(Line::from("  Q — Resume").white());
+    lines.push(Line::from(""));
+
+    // Full keybinding reference derived from the live binding map.
+    for cat in &categories {
+        let group: Vec<&crate::systems::input::CommandBinding> = KEYBINDINGS.iter()
+            .filter(|b| b.category == *cat)
+            .collect();
+        if group.is_empty() { continue; }
+        lines.push(Line::from(format!("  {cat}")).bold().dark_gray());
+        for binding in &group {
+            lines.push(Line::from(format!("    [{}]  {}", binding.key, binding.name)).white());
+        }
+    }
+    lines.push(Line::from(""));
+
+    let content_height = lines.len() as u16 + 2; // +2 for border
+    let w = 44u16.min(game_area.width.saturating_sub(4));
+    let h = content_height.min(game_area.height.saturating_sub(4));
 
     if w < 20 || h < 5 {
         return;
@@ -1096,15 +1119,6 @@ fn render_esc_menu_overlay(frame: &mut ratatui::Frame, game_area: Rect) {
     };
 
     frame.render_widget(Clear, menu_area);
-
-    let lines = vec![
-        Line::from(""),
-        Line::from("  PAUSED").bold().yellow(),
-        Line::from(""),
-        Line::from("  Q   — Resume").white(),
-        Line::from("  R   — Restart").white(),
-        Line::from(""),
-    ];
 
     frame.render_widget(
         Paragraph::new(lines)

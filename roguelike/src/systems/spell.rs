@@ -303,6 +303,8 @@ pub fn explosive_projectile_system(
 }
 
 /// Detonates dynamite at the given position: spawns shrapnel and destroys obstacles.
+/// Dynamite destroys ALL props unconditionally — walls, stone walls, barrels, crates,
+/// signs, windows, and everything else within the blast radius.
 fn detonate_dynamite(
     commands: &mut Commands,
     game_map: &mut ResMut<GameMapResource>,
@@ -319,26 +321,30 @@ fn detonate_dynamite(
     crate::systems::projectile::spawn_shrapnel(commands, origin, radius, damage, source);
 
     let mut destroyed_count = 0;
-    let mut fire_count = 0;
     let mut water_count = 0;
     let mut gunpowder_positions: Vec<GridVec> = Vec::new();
+    // Collect tiles that had fire so we can clear fire tracking data after the voxel loop.
+    let mut fire_clear_positions: Vec<GridVec> = Vec::new();
     for dx in -radius..=radius {
         for dy in -radius..=radius {
             let dist = dx.abs().max(dy.abs());
             if dist > 0 && dist <= radius {
                 let target_pos = origin + GridVec::new(dx, dy);
-                if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos)
-                    && let Some(ref prop) = voxel.props {
-                        let is_flammable = prop.is_flammable();
+                if let Some(voxel) = game_map.0.get_voxel_at_mut(&target_pos) {
+                    // Clear Floor::Fire to avoid double-ignition artifacts.
+                    if matches!(voxel.floor, Some(Floor::Fire)) {
+                        fire_clear_positions.push(target_pos);
+                    }
+
+                    if let Some(ref prop) = voxel.props {
                         let is_water_trough = matches!(prop, Props::WaterTrough);
                         let is_lootable = matches!(prop, Props::Crate | Props::Barrel);
-                        let is_indestructible = matches!(prop, Props::Wall | Props::StoneWall | Props::HitchingPost);
                         let is_gunpowder = matches!(prop, Props::GunpowderBarrel);
                         if is_water_trough {
                             voxel.props = None;
                             voxel.floor = Some(Floor::Water);
                             water_count += 1;
-                        } else if !is_indestructible {
+                        } else {
                             if is_gunpowder {
                                 gunpowder_positions.push(target_pos);
                             }
@@ -346,30 +352,33 @@ fn detonate_dynamite(
                                 let loot_roll = crate::noise::value_noise(target_pos.x, target_pos.y, seed.0.wrapping_add(88888));
                                 spawn_container_loot(commands, target_pos.x, target_pos.y, loot_roll);
                             }
-                            if is_flammable && dist <= 1 {
-                                voxel.props = None;
-                                voxel.floor = Some(Floor::Fire);
-                                fire_count += 1;
-                            } else {
-                                voxel.props = None;
-                                destroyed_count += 1;
-                            }
+                            // Dynamite destroys everything unconditionally.
+                            voxel.props = None;
+                            destroyed_count += 1;
                         }
                     }
+                }
             }
+        }
+    }
+    // Restore previous floor for tiles that were on fire (avoid double-ignition).
+    for pos in fire_clear_positions {
+        let prev = game_map.0.fire_previous_floor.remove(&pos).flatten();
+        game_map.0.fire_turns.remove(&pos);
+        if let Some(voxel) = game_map.0.get_voxel_at_mut(&pos) {
+            voxel.floor = prev.or(Some(Floor::ScorchedEarth));
         }
     }
     // Chain-react gunpowder barrels: each one explodes in a fire radius
     for gp_pos in &gunpowder_positions {
         combat_log.push("Gunpowder barrel explodes!".to_string());
-        let destroyed = game_map.detonate_gunpowder_barrel(*gp_pos, turn_counter.0);
-        fire_count += destroyed;
+        let fire_destroyed = game_map.detonate_gunpowder_barrel(*gp_pos, turn_counter.0);
+        if fire_destroyed > 0 {
+            combat_log.push(format!("{fire_destroyed} object(s) catch fire!"));
+        }
     }
     if destroyed_count > 0 {
         combat_log.push(format!("The explosion destroys {destroyed_count} obstacle(s)!"));
-    }
-    if fire_count > 0 {
-        combat_log.push(format!("{fire_count} object(s) catch fire!"));
     }
     if water_count > 0 {
         combat_log.push(format!("{water_count} water trough(s) spill water!"));

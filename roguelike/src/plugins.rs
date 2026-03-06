@@ -266,8 +266,9 @@ impl Plugin for ViewPlugin {
 }
 
 /// Spawns the player entity with all required ECS components.
-fn spawn_player(mut commands: Commands, mut map: ResMut<GameMapResource>) {
-    do_spawn_player(&mut commands, &mut map);
+fn spawn_player(mut commands: Commands, mut map: ResMut<GameMapResource>, mut collectibles: ResMut<Collectibles>) {
+    let caliber = do_spawn_player(&mut commands, &mut map);
+    *collectibles = Collectibles::for_starting_caliber(caliber);
 }
 
 /// Spawns monsters on passable tiles using deterministic noise placement.
@@ -278,7 +279,9 @@ fn spawn_monsters(mut commands: Commands, map: Res<GameMapResource>, seed: Res<M
 }
 
 /// Helper: spawns the player entity.
-fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
+/// Returns the caliber of the player's starting gun so collectibles can be
+/// initialized with matching ammo.
+fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) -> Caliber {
     // Spawn the player inside a building near the center of the map.
     let center = GridVec::new(map.0.width / 2, map.0.height / 2);
     let spawn_pos = map.0.find_building_interior(center, 40)
@@ -451,6 +454,14 @@ fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
         AiMemory::default(),
         AiPersonality { aggression: 0.5, courage: 1.0 },
     ));
+
+    // debug_assert that the ammo caliber matches the gun's caliber at spawn.
+    debug_assert!(
+        weapon_pool[gun_idx].1 == caliber,
+        "Starting ammo caliber must match the player's starting gun caliber"
+    );
+
+    caliber
 }
 
 /// Helper: spawns NPCs in faction groups distributed across the full map.
@@ -588,6 +599,7 @@ fn restart_system(
 
     res.next_game_state.set(GameState::Playing);
 
-    do_spawn_player(&mut commands, &mut res.game_map);
+    let caliber = do_spawn_player(&mut commands, &mut res.game_map);
+    *res.collectibles = Collectibles::for_starting_caliber(caliber);
     do_spawn_monsters(&mut commands, &res.game_map, res.seed.0);
 }

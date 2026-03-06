@@ -570,6 +570,10 @@ const PACK_ALERT_RANGE: i32 = 15;
 /// perpendicular offset approach instead of a direct A* path.
 const FLANK_INTERVAL: u32 = 6;
 
+/// If cursor is farther than this threshold from aim_pos, move two king-steps
+/// per turn to catch up faster. Never teleport.
+const CURSOR_CATCHUP_THRESHOLD: i32 = 6;
+
 /// Minimum turns between consecutive burst fires.
 const BURST_COOLDOWN: u32 = 2;
 
@@ -746,8 +750,8 @@ pub fn ai_system(
     blockers: Query<(), With<BlocksMovement>>,
     mut item_kinds: Query<&mut ItemKind>,
     mut move_intents: MessageWriter<MoveIntent>,
-    (mut ranged_intents, mut attack_intents, mut spell_intents): (MessageWriter<RangedAttackIntent>, MessageWriter<AttackIntent>, MessageWriter<SpellCastIntent>),
-    (mut molotov_intents, mut melee_wide_intents, mut throw_intents): (MessageWriter<MolotovCastIntent>, MessageWriter<MeleeWideIntent>, MessageWriter<ThrowItemIntent>),
+    (mut ranged_intents, mut attack_intents, _spell_intents): (MessageWriter<RangedAttackIntent>, MessageWriter<AttackIntent>, MessageWriter<SpellCastIntent>),
+    (_molotov_intents, _melee_wide_intents, _throw_intents): (MessageWriter<MolotovCastIntent>, MessageWriter<MeleeWideIntent>, MessageWriter<ThrowItemIntent>),
     (mut use_item_intents, mut pickup_intents): (MessageWriter<UseItemIntent>, MessageWriter<PickupItemIntent>),
     (dynamic_rng, seed, spell_particles): (Res<crate::resources::DynamicRng>, Res<crate::resources::MapSeed>, Res<crate::resources::SpellParticles>),
 ) {
@@ -797,7 +801,7 @@ pub fn ai_system(
             }
     }
 
-    for ((entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin), (mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality, ai_target, aiming_style, mut cursor), pursuit_boost) in &mut ai_query {
+    for ((entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin), (mut inventory, health, _stamina, _combat_stats, mut ai_memory, _personality, ai_target, aiming_style, mut cursor), pursuit_boost) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
@@ -1100,7 +1104,7 @@ pub fn ai_system(
         }
 
         // Count adjacent hostile entities (for melee wide decision)
-        let adjacent_enemy_count = {
+        let _adjacent_enemy_count = {
             let mut count = 0;
             for dir in GridVec::DIRECTIONS_8 {
                 let neighbor = my_pos + dir;
@@ -1531,76 +1535,120 @@ pub fn ai_system(
                     mem.search_attempts = 0;
                 }
 
+                let dist = my_pos.chebyshev_distance(target_vec);
                 let toward_target = (target_vec - my_pos).king_step();
-                let needs_rotation = !toward_target.is_zero()
-                    && ai_look_dir.as_ref().is_some_and(|look| look.0 != toward_target);
+                let has_los = has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles);
+                let in_range = dist <= AI_RANGED_ATTACK_RANGE;
 
-                if needs_rotation {
+                // ── Priority 1 (fire escape) is handled before the state
+                //    machine (fire_count > 0 block above). ────────────────
+
+                // ── Priority 3: HP < 10, has heals → UseItemIntent ──────
+                if let Some(ref hp) = health
+                    && hp.current < 10
+                    && let Some(ref inv) = inventory
+                {
+                    let heal_idx = inv.items.iter().position(|&ent| {
+                        item_kinds.get(ent).ok().is_some_and(|k|
+                            matches!(*k, ItemKind::Whiskey { .. }
+                                | ItemKind::Beer { .. }
+                                | ItemKind::Ale { .. }
+                                | ItemKind::Stout { .. }
+                                | ItemKind::Wine { .. }
+                                | ItemKind::Rum { .. })
+                        )
+                    });
+                    if let Some(idx) = heal_idx {
+                        use_item_intents.write(UseItemIntent {
+                            user: entity,
+                            item_index: idx,
+                        });
+                        energy.spend_action();
+                        continue;
+                    }
+                }
+
+                // ── Priority 4: Adjacent melee attack ──────────────────
+                if dist == 1 {
+                    attack_intents.write(AttackIntent {
+                        attacker: entity,
+                        target: target_entity,
+                    });
+                    lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
+                }
+
+                // ── Cursor advancement (adaptive step rate) ────────────
+                // The cursor destination is the exact aim_pos. Movement
+                // toward it is king-stepped.
+                let aim_pos = target_vec;
+                if let Some(ref mut cur) = cursor {
+                    if cur.pos != aim_pos {
+                        let cursor_dist_before = cur.pos.chebyshev_distance(aim_pos);
+
+                        // Determine number of king-steps this turn.
+                        let steps_this_turn = if cursor_dist_before > CURSOR_CATCHUP_THRESHOLD {
+                            2 // catch-up: two king-steps
+                        } else {
+                            1 // default: one king-step
+                        };
+
+                        for _ in 0..steps_this_turn {
+                            if cur.pos == aim_pos {
+                                break;
+                            }
+                            let step = (aim_pos - cur.pos).king_step();
+                            let next_pos = cur.pos + step;
+                            // Overshoot clamp: if stepping would increase
+                            // distance, snap directly to aim_pos.
+                            if next_pos.chebyshev_distance(aim_pos)
+                                > cur.pos.chebyshev_distance(aim_pos)
+                            {
+                                cur.pos = aim_pos;
+                            } else {
+                                cur.pos = next_pos;
+                            }
+                        }
+
+                        if let Some(ref mut mem) = ai_memory {
+                            mem.cursor_steps = mem.cursor_steps.saturating_add(steps_this_turn as u8);
+                        }
+                    }
+                }
+
+                // ── Fire condition (3d) ─────────────────────────────────
+                let on_aim = cursor.as_ref().is_some_and(|c| c.pos == aim_pos);
+                let near_aim = cursor.as_ref().is_some_and(|c| c.pos.chebyshev_distance(aim_pos) <= 1);
+                let steps_taken = ai_memory.as_ref().map(|m| m.cursor_steps).unwrap_or(0);
+                let tracked_long_enough = steps_taken >= BLIND_FIRE_STEPS;
+                let friendly_blocked = has_friendly_in_path(my_pos, aim_pos, my_faction, entity, &spatial, &npc_positions);
+                // facing_within_45_deg: dot product of look_dir and
+                // direction toward target must be > 0. With king-stepped
+                // unit vectors this is effectively a ~90° cone check.
+                let look_dir = ai_look_dir.as_ref().map(|l| l.0).unwrap_or(toward_target);
+                let facing_within_45_deg = look_dir.dot(toward_target) > 0;
+                let can_fire = (on_aim || (near_aim && tracked_long_enough))
+                    && has_los
+                    && !friendly_blocked
+                    && facing_within_45_deg;
+
+                // If not facing the target, rotate toward it this turn.
+                if !facing_within_45_deg && !toward_target.is_zero() {
                     update_look_dir(toward_target, &mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
                 }
 
-                // CarefulAim: spend an extra turn aiming before firing (every other turn)
-                if matches!(aiming_style, Some(&AimingStyle::CarefulAim)) {
-                    let aim_turn = (entity.to_bits() ^ turn_counter.0 as u64) % 2;
-                    if aim_turn == 0 {
-                        energy.spend_action();
-                        continue;
-                    }
+                // ── Priority 5: Cursor not on aim_pos → advance cursor
+                //    only (do NOT move, do NOT rotate) ───────────────────
+                if !on_aim && !can_fire {
+                    // Spend the turn advancing the cursor. Do not move.
+                    energy.spend_action();
+                    continue;
                 }
 
-                // ── Cursor cadence: advance one king-step per turn ─────
-                // The cursor is persistent and advances exactly one
-                // king-step toward the target each turn, matching player
-                // cursor speed.
-                if let Some(ref mut cur) = cursor {
-                    if cur.pos != target_vec {
-                        let step = (target_vec - cur.pos).king_step();
-                        cur.pos = cur.pos + step;
-                        if let Some(ref mut mem) = ai_memory {
-                            mem.cursor_steps = mem.cursor_steps.saturating_add(1);
-                        }
-                    }
-                }
-
-                let dist = my_pos.chebyshev_distance(target_vec);
-                let cursor_on_target = cursor.as_ref().is_some_and(|c| c.pos == target_vec);
-                let steps_taken = ai_memory.as_ref().map(|m| m.cursor_steps).unwrap_or(0);
-                let can_blind_fire = steps_taken >= BLIND_FIRE_STEPS;
-                let can_fire = cursor_on_target || can_blind_fire;
-
-                // ── PRIORITY 1: Ranged attack ──────────────────────────
+                // ── Priority 6: can_fire → fire ─────────────────────────
                 let mut used_gun = false;
-                if dist > 1
-                    && can_fire
-                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                {
-                    let friendly_blocked = has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions);
-                    if friendly_blocked {
-                        // Arc cursor around the friendly: try perpendicular tiles adjacent to target
-                        if let Some(ref mut cur) = cursor {
-                            let shot_dir = (target_vec - my_pos).king_step();
-                            let perp1 = GridVec::new(-shot_dir.y, shot_dir.x);
-                            let perp2 = GridVec::new(shot_dir.y, -shot_dir.x);
-                            let alt1 = target_vec + perp1;
-                            let alt2 = target_vec + perp2;
-                            // Pick the passable alternative with clear LOS
-                            let chosen = [alt1, alt2].into_iter().find(|&alt| {
-                                game_map.0.is_passable(&alt)
-                                    && has_clear_line_of_sight(my_pos, alt, &game_map, &sand_cloud_tiles)
-                                    && !has_friendly_in_path(my_pos, alt, my_faction, entity, &spatial, &npc_positions)
-                            });
-                            if let Some(alt) = chosen {
-                                let step = (alt - cur.pos).king_step();
-                                cur.pos = cur.pos + step;
-                            }
-                            // else: hold and wait one turn
-                        }
-                        energy.spend_action();
-                        continue;
-                    }
-                    // No friendly in path — attempt to fire
+                if can_fire && dist > 1 {
                     if let Some(ref mut inv) = inventory {
                         let gun_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
@@ -1608,9 +1656,9 @@ pub fn ai_system(
                             )
                         });
                         if let Some(gun_entity) = gun_ent {
-                            let aim_target = cursor.as_ref().map(|c| c.pos).unwrap_or(target_vec);
-                            let mut dx = aim_target.x - my_pos.x;
-                            let mut dy = aim_target.y - my_pos.y;
+                            let fire_target = cursor.as_ref().map(|c| c.pos).unwrap_or(aim_pos);
+                            let mut dx = fire_target.x - my_pos.x;
+                            let mut dy = fire_target.y - my_pos.y;
                             match aiming_style {
                                 Some(&AimingStyle::SnapShot) => {
                                     let spread_hash = (entity.to_bits() ^ turn_counter.0 as u64).wrapping_mul(HASH_LCG);
@@ -1620,7 +1668,7 @@ pub fn ai_system(
                                     dy += spread_y;
                                 }
                                 Some(&AimingStyle::Suppression) => {
-                                    let dir = (aim_target - my_pos).king_step();
+                                    let dir = (fire_target - my_pos).king_step();
                                     let range = dist.max(AI_RANGED_ATTACK_RANGE);
                                     dx = dir.x * range;
                                     dy = dir.y * range;
@@ -1634,12 +1682,12 @@ pub fn ai_system(
                                 dy,
                                 gun_item: Some(gun_entity),
                             });
-                            if let Some(ref mut mem) = ai_memory {
-                                mem.cursor_steps = 0;
-                            }
+                            // Post-fire: do NOT reset cursor_steps and do
+                            // NOT move the cursor. It stays on aim_pos and
+                            // resumes tracking next turn. (Fix 3e)
                             used_gun = true;
                         } else {
-                            // Gun empty but in combat — reload
+                            // Gun empty but in combat — reload in place
                             let reloadable_gun = inv.items.iter().copied().find(|&ent| {
                                 item_kinds.get(ent).ok().is_some_and(|k|
                                     matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
@@ -1658,12 +1706,10 @@ pub fn ai_system(
                     lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 2: Bow attack (unlimited ammo) ────────────
+                // Bow attack (unlimited ammo)
                 let mut used_bow = false;
-                if dist > 1
-                    && can_fire
-                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
+                if can_fire && dist > 1
+                    && !friendly_blocked
                     && let Some(ref inv) = inventory {
                         let bow_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
@@ -1686,9 +1732,7 @@ pub fn ai_system(
                                         bow_atk,
                                         entity,
                                     );
-                                    if let Some(ref mut mem) = ai_memory {
-                                        mem.cursor_steps = 0;
-                                    }
+                                    // Post-fire: do NOT reset cursor_steps (Fix 3e)
                                     used_bow = true;
                                 }
                     }
@@ -1696,180 +1740,61 @@ pub fn ai_system(
                     lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 3: Adjacent melee attack ──────────────────
-                if dist == 1 {
-                    attack_intents.write(AttackIntent {
-                        attacker: entity,
-                        target: target_entity,
+                // ── Priority 7: No LOS or out of range → A* step ────────
+                // Only move if we cannot fire because LOS is blocked or
+                // the target is beyond effective range.
+                if !has_los || !in_range {
+                    let step = a_star_first_step(my_pos, target_vec, |pos| {
+                        tile_cost_for_ai_chase(pos, entity, &game_map, &spatial, &blockers)
+                    })
+                    .unwrap_or_else(|| {
+                        let ks = (target_vec - my_pos).king_step();
+                        if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
                     });
-                    lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
-                }
-
-                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range ──
-                let mut used_throwable = false;
-                if (3..=6).contains(&dist)
-                    && let Some(ref mut inv) = inventory {
-                        let throwable_idx = inv.items.iter().position(|&ent| {
-                            item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(*k, ItemKind::Grenade { .. } | ItemKind::Molotov { .. })
-                            )
+                    if !step.is_zero() {
+                        move_intents.write(MoveIntent {
+                            entity,
+                            dx: step.x,
+                            dy: step.y,
                         });
-                        if let Some(idx) = throwable_idx {
-                            let item_ent = inv.items[idx];
-                            if let Ok(kind) = item_kinds.get(item_ent) {
-                                match *kind {
-                                    ItemKind::Grenade { damage: _, radius, .. } => {
-                                        spell_intents.write(SpellCastIntent {
-                                            caster: entity,
-                                            radius,
-                                            target: target_vec,
-                                            grenade_index: idx,
-                                        });
-                                        used_throwable = true;
-                                    }
-                                    ItemKind::Molotov { damage, radius, .. } => {
-                                        molotov_intents.write(MolotovCastIntent {
-                                            caster: entity,
-                                            radius,
-                                            damage,
-                                            target: target_vec,
-                                            item_index: idx,
-                                        });
-                                        used_throwable = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
+                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                     }
-                if used_throwable {
                     energy.spend_action();
                     continue;
                 }
 
-                // Throw knives/tomahawks at medium range
-                let mut used_thrown_weapon = false;
-                if (2..=8).contains(&dist)
-                    && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                    && let Some(ref mut inv) = inventory {
-                        let knife_idx = inv.items.iter().position(|&ent| {
-                            item_kinds.get(ent).ok().is_some_and(|k|
-                                matches!(*k, ItemKind::Knife { .. } | ItemKind::Tomahawk { .. })
-                            )
-                        });
-                        if let Some(idx) = knife_idx {
-                            let item_ent = inv.items[idx];
-                            if let Ok(kind) = item_kinds.get(item_ent) {
-                                let (dmg, range) = match *kind {
-                                    ItemKind::Knife { attack, .. } => (attack, 12),
-                                    ItemKind::Tomahawk { attack, .. } => (attack, 10),
-                                    _ => (0, 0),
-                                };
-                                if dmg > 0 {
-                                    let toward = (target_vec - my_pos).king_step();
-                                    throw_intents.write(ThrowItemIntent {
-                                        thrower: entity,
-                                        item_entity: item_ent,
-                                        item_index: idx,
-                                        dx: toward.x,
-                                        dy: toward.y,
-                                        range,
-                                        damage: dmg,
-                                    });
-                                    used_thrown_weapon = true;
-                                }
-                            }
-                        }
-                    }
-                if used_thrown_weapon {
-                    energy.spend_action();
-                    continue;
-                }
-
-                // Melee wide (roundhouse kick) when surrounded
-                if adjacent_enemy_count >= 2
-                    && stamina.as_ref().is_some_and(|s| s.current >= 15)
-                    && combat_stats.is_some()
-                {
-                    if let Some(ref mut sta) = stamina {
-                        sta.spend(15);
-                    }
-                    melee_wide_intents.write(MeleeWideIntent {
-                        attacker: entity,
-                    });
-                    energy.spend_action();
-                    continue;
-                }
-
-                // Sand throw (1% chance)
-                let sand_roll = dynamic_rng.roll(seed.0, entity.to_bits() ^ 0x5A4D);
-                if sand_roll < 0.01 && (2..=5).contains(&dist) {
-                    let toward = (target_vec - my_pos).king_step();
-                    if !toward.is_zero() {
-                        let sand_center = my_pos + toward * 2;
-                        spell_intents.write(SpellCastIntent {
-                            caster: entity,
-                            radius: 2,
-                            target: sand_center,
-                            grenade_index: usize::MAX,
-                        });
-                        energy.spend_action();
-                        continue;
-                    }
-                }
-
-                // ── Chase: A* pathfinding toward target ────────────────
-                // Every FLANK_INTERVAL turns OR when stationary 2+ turns,
-                // attempt a perpendicular offset to flank the target.
+                // ── Priority 8: FLANK_INTERVAL → perpendicular offset ──
+                // Flank only when the NPC has been stationary long enough
+                // AND the cursor still hasn't reached the aim position,
+                // meaning the current firing position is ineffective.
                 let stationary = ai_memory.as_ref().map(|m| m.stationary_turns).unwrap_or(0);
-                let flank_trigger = (turn_counter.0 > 0 && turn_counter.0.is_multiple_of(FLANK_INTERVAL))
-                    || stationary >= 2;
-                let flank_goal = if dist > 3 {
-                    // Only compute direct_blocked when needed (dist > 3).
-                    let direct_blocked = if !flank_trigger {
-                        let direct_step = a_star_first_step(my_pos, target_vec, |pos| {
-                            tile_cost_for_ai_chase(pos, entity, &game_map, &spatial, &blockers)
-                        });
-                        direct_step.is_none() || direct_step == Some(GridVec::ZERO)
-                    } else {
-                        false
-                    };
-                    if flank_trigger || direct_blocked {
-                        let bearing = (target_vec - my_pos).king_step();
-                        let perp_cw = GridVec::new(-bearing.y, bearing.x);
-                        let perp_ccw = GridVec::new(bearing.y, -bearing.x);
-                        let cand_cw = target_vec + perp_cw;
-                        let cand_ccw = target_vec + perp_ccw;
-                        // Pick whichever perpendicular candidate is passable; prefer CW.
-                        if game_map.0.is_passable(&cand_cw) { cand_cw }
+                let flank_trigger = u32::from(stationary) >= FLANK_INTERVAL
+                    && cursor.as_ref().is_some_and(|c| c.pos != aim_pos);
+                if flank_trigger && dist > 3 {
+                    let bearing = (target_vec - my_pos).king_step();
+                    let perp_cw = GridVec::new(-bearing.y, bearing.x);
+                    let perp_ccw = GridVec::new(bearing.y, -bearing.x);
+                    let cand_cw = target_vec + perp_cw;
+                    let cand_ccw = target_vec + perp_ccw;
+                    let flank_goal = if game_map.0.is_passable(&cand_cw) { cand_cw }
                         else if game_map.0.is_passable(&cand_ccw) { cand_ccw }
-                        else { target_vec }
-                    } else {
-                        target_vec
-                    }
-                } else {
-                    target_vec
-                };
-                let step = a_star_first_step(my_pos, flank_goal, |pos| {
-                    tile_cost_for_ai_chase(pos, entity, &game_map, &spatial, &blockers)
-                })
-                .unwrap_or_else(|| {
-                    let ks = (target_vec - my_pos).king_step();
-                    if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
-                });
-
-                if !step.is_zero() {
-                    move_intents.write(MoveIntent {
-                        entity,
-                        dx: step.x,
-                        dy: step.y,
+                        else { target_vec };
+                    let step = a_star_first_step(my_pos, flank_goal, |pos| {
+                        tile_cost_for_ai_chase(pos, entity, &game_map, &spatial, &blockers)
+                    })
+                    .unwrap_or_else(|| {
+                        let ks = (target_vec - my_pos).king_step();
+                        if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
                     });
-                    update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                    if !step.is_zero() {
+                        move_intents.write(MoveIntent {
+                            entity,
+                            dx: step.x,
+                            dy: step.y,
+                        });
+                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                    }
                 }
-
-                // ── Lowest priority: heal if wounded ───────────────────
-                // (Healing was already checked before the state machine if
-                // HP < 50%; this covers incremental healing during chase.)
 
                 energy.spend_action();
             }

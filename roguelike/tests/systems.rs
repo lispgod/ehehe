@@ -1366,7 +1366,7 @@ fn fov_npc_uses_ai_look_dir() {
     app.world_mut().spawn((
         npc_pos,
         Faction::Outlaws,
-        AiLookDir(GridVec::new(10, 0)),
+        AiLookDir(GridVec::new(10, 0), 0),
         Viewshed {
             range: 40,
             visible_tiles: std::collections::HashSet::new(),
@@ -1648,7 +1648,7 @@ fn spawn_ai_npc(app: &mut App, x: i32, y: i32, name: &str, faction: Faction) -> 
         Speed(ACTION_COST),
         Energy(0),
         AiState::Idle,
-        AiLookDir(GridVec::new(1, 0)),
+        AiLookDir(GridVec::new(1, 0), 0),
         PatrolOrigin(GridVec::new(x, y)),
         AiMemory::default(),
         AiPersonality::default(),
@@ -3010,7 +3010,7 @@ fn npc_fov_is_narrow_around_45_degrees() {
     app.world_mut().spawn((
         Position { x: 60, y: 40 },
         Faction::Outlaws,
-        AiLookDir(GridVec::new(1, 0)), // looking east
+        AiLookDir(GridVec::new(1, 0), 0), // looking east
         Viewshed {
             range: 20,
             visible_tiles: std::collections::HashSet::new(),
@@ -3059,7 +3059,7 @@ fn wildlife_fov_is_short_range() {
 
     app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        AiLookDir(GridVec::new(1, 0)),
+        AiLookDir(GridVec::new(1, 0), 0),
         Faction::Wildlife,
         Viewshed {
             range: 20,

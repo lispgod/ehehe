@@ -237,8 +237,12 @@ pub enum AiState {
 /// currently looking. Used by the visibility system to restrict the enemy's
 /// viewshed to a cone (mirroring the player's cursor-based FOV). Enemies must
 /// spend ticks to rotate their look direction, making awareness directional.
+///
+/// The second field tracks remaining steps in a circular rotation sequence.
+/// When > 0, the NPC rotates one 45° CW step per turn and decrements until a
+/// full 360° circle is complete before resuming movement.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct AiLookDir(pub GridVec);
+pub struct AiLookDir(pub GridVec, pub u8);
 
 /// Patrol origin: the position this NPC considers "home". It will patrol
 /// around this position when not chasing the player.

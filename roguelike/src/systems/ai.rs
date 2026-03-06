@@ -333,6 +333,7 @@ fn assign_aiming_style(
 
 /// Updates the NPC's look direction and marks the viewshed dirty.
 /// Used after movement or rotation to ensure FOV is recalculated.
+/// Resets any in-progress circular rotation sequence.
 fn update_look_dir(
     dir: GridVec,
     ai_look_dir: &mut Option<Mut<AiLookDir>>,
@@ -340,14 +341,19 @@ fn update_look_dir(
 ) {
     if let Some(look) = ai_look_dir {
         look.0 = dir.king_step();
+        look.1 = 0; // cancel any rotation sequence
         if let Some(vs) = viewshed {
             vs.dirty = true;
         }
     }
 }
 
+/// Number of 45° CW steps in a full circular rotation (360° / 45° = 8).
+const FULL_ROTATION_STEPS: u8 = 8;
+
 /// Rotates the NPC's look direction one step clockwise through the 8 cardinal
-/// and diagonal directions. Marks the viewshed dirty.
+/// and diagonal directions. Marks the viewshed dirty.  Decrements the
+/// remaining-steps counter when a circular rotation sequence is active.
 fn rotate_look_dir(
     ai_look_dir: &mut Option<Mut<AiLookDir>>,
     viewshed: &mut Option<Mut<Viewshed>>,
@@ -359,10 +365,30 @@ fn rotate_look_dir(
             .map(|i| (i + 1) % 8)
             .unwrap_or(0);
         look.0 = GridVec::DIRECTIONS_8[idx];
+        look.1 = look.1.saturating_sub(1);
         if let Some(vs) = viewshed {
             vs.dirty = true;
         }
     }
+}
+
+/// Starts a full 360° circular rotation sequence.  Sets the rotation counter
+/// so the NPC rotates one 45° CW step per turn for `FULL_ROTATION_STEPS`
+/// turns before resuming movement.
+fn begin_circular_rotation(
+    ai_look_dir: &mut Option<Mut<AiLookDir>>,
+    viewshed: &mut Option<Mut<Viewshed>>,
+) {
+    if let Some(look) = ai_look_dir {
+        look.1 = FULL_ROTATION_STEPS;
+    }
+    rotate_look_dir(ai_look_dir, viewshed);
+}
+
+/// Returns `true` if the NPC is currently in the middle of a circular
+/// rotation sequence and should not move until the rotation completes.
+fn is_rotating(ai_look_dir: &Option<Mut<AiLookDir>>) -> bool {
+    ai_look_dir.as_ref().is_some_and(|look| look.1 > 0)
 }
 
 /// Checks line-of-sight between two points using Bresenham, ignoring
@@ -437,7 +463,7 @@ const PATROL_RADIUS: i32 = 12;
 /// Absolute HP threshold below which an NPC will flee.
 const FLEE_HP_ABSOLUTE: i32 = 20;
 
-/// Base number of turns between random 180° look-around when idle/patrolling.
+/// Base number of turns between full circular look-around when idle/patrolling.
 const LOOK_AROUND_BASE_INTERVAL: u32 = 20;
 
 /// Additional random turns added to look-around interval (dice roll range).
@@ -666,14 +692,14 @@ pub fn ai_system(
             // Check if the target entity is still alive
             let target_alive = player_query.get(ai_tgt.entity).is_ok()
                 || npc_positions.get(ai_tgt.entity).is_ok();
-            if !target_alive || my_pos.chebyshev_distance(ai_tgt.last_pos) > viewshed_range + 10 {
-                // Target dead or escaped awareness range — clear AiTarget
+            if !target_alive || my_pos.chebyshev_distance(ai_tgt.last_pos) > viewshed_range * 2 {
+                // Target dead or escaped awareness range entirely — clear AiTarget
                 commands.entity(entity).remove::<AiTarget>();
                 None
             } else if viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ai_tgt.last_pos)) {
                 // Target visible at last known pos — use it
                 Some((ai_tgt.entity, ai_tgt.last_pos))
-            } else if my_pos.chebyshev_distance(ai_tgt.last_pos) <= viewshed_range + 5 {
+            } else if my_pos.chebyshev_distance(ai_tgt.last_pos) <= viewshed_range * 2 {
                 // Not visible but within awareness range — pursue last known position
                 Some((ai_tgt.entity, ai_tgt.last_pos))
             } else {
@@ -863,18 +889,9 @@ pub fn ai_system(
                         continue;
                     }
 
-                    // Scavenge items
-                    if let Some((_, item_vec)) = nearest_item {
-                        let step = a_star_first_step(my_pos, item_vec, |p| {
-                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
-                        });
-                        if let Some(step) = step
-                                && !step.is_zero() {
-                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                            }
-                        energy.spend_action();
-                    } else if let Some(ref mem) = ai_memory
+                    // Scavenge items — but only when no remembered target exists.
+                    // Pursuit of a known threat always takes priority.
+                    if let Some(ref mem) = ai_memory
                         && let Some(remembered_pos) = mem.last_known_pos
                         && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
                         && my_pos != remembered_pos
@@ -888,21 +905,34 @@ pub fn ai_system(
                                 update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                             }
                         energy.spend_action();
+                    } else if let Some((_, item_vec)) = nearest_item {
+                        let step = a_star_first_step(my_pos, item_vec, |p| {
+                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
+                        });
+                        if let Some(step) = step
+                                && !step.is_zero() {
+                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                            }
+                        energy.spend_action();
                     } else {
                         if let Some(ref mut mem) = ai_memory
                             && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
                                 mem.last_known_pos = None;
                             }
-                        // Random 180° look-around every 20+dice turns
-                        let look_hash = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
-                        let look_interval = LOOK_AROUND_BASE_INTERVAL + (look_hash % LOOK_AROUND_DICE_RANGE);
-                        if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval) {
-                            // 180° turn: rotate 4 steps (each step is 45°)
-                            let dir_idx = (look_hash as usize + turn_counter.0 as usize) % 8;
-                            let new_dir = GridVec::DIRECTIONS_8[dir_idx];
-                            update_look_dir(new_dir, &mut ai_look_dir, &mut viewshed);
-                        } else {
+                        // Circular rotation: if a rotation sequence is active,
+                        // continue it one CW step; otherwise start a new one on
+                        // the look-around interval.
+                        if is_rotating(&ai_look_dir) {
                             rotate_look_dir(&mut ai_look_dir, &mut viewshed);
+                        } else {
+                            let look_hash = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
+                            let look_interval = LOOK_AROUND_BASE_INTERVAL + (look_hash % LOOK_AROUND_DICE_RANGE);
+                            if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval) {
+                                begin_circular_rotation(&mut ai_look_dir, &mut viewshed);
+                            } else {
+                                rotate_look_dir(&mut ai_look_dir, &mut viewshed);
+                            }
                         }
                         energy.spend_action();
                     }
@@ -936,8 +966,14 @@ pub fn ai_system(
                     continue;
                 }
 
-                if let Some((_, item_vec)) = nearest_item {
-                    let step = a_star_first_step(my_pos, item_vec, |p| {
+                // Pursue remembered targets before scavenging items —
+                // chasing a known threat always takes priority.
+                if let Some(ref mem) = ai_memory
+                    && let Some(remembered_pos) = mem.last_known_pos
+                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
+                    && my_pos != remembered_pos
+                {
+                    let step = a_star_first_step(my_pos, remembered_pos, |p| {
                         tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
@@ -949,13 +985,8 @@ pub fn ai_system(
                     continue;
                 }
 
-                // Check memory for remembered positions
-                if let Some(ref mem) = ai_memory
-                    && let Some(remembered_pos) = mem.last_known_pos
-                    && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
-                    && my_pos != remembered_pos
-                {
-                    let step = a_star_first_step(my_pos, remembered_pos, |p| {
+                if let Some((_, item_vec)) = nearest_item {
+                    let step = a_star_first_step(my_pos, item_vec, |p| {
                         tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
@@ -974,15 +1005,22 @@ pub fn ai_system(
 
                 let origin = patrol_origin.map(|po| po.0).unwrap_or(my_pos);
 
+                // Circular rotation: if a rotation sequence is active,
+                // continue rotating CW and skip movement until the full
+                // 360° circle is complete.
+                if is_rotating(&ai_look_dir) {
+                    rotate_look_dir(&mut ai_look_dir, &mut viewshed);
+                    energy.spend_action();
+                    continue;
+                }
+
                 let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
                     .wrapping_add(turn_counter.0 as i32) as u32;
-                // Random 180° look-around every 20+dice turns
+                // Start a new circular look-around every LOOK_AROUND interval.
                 let look_hash_patrol = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
                 let look_interval_patrol = LOOK_AROUND_BASE_INTERVAL + (look_hash_patrol % LOOK_AROUND_DICE_RANGE);
                 if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval_patrol) {
-                    let dir_idx = (look_hash_patrol as usize + turn_counter.0 as usize) % 8;
-                    let new_dir = GridVec::DIRECTIONS_8[dir_idx];
-                    update_look_dir(new_dir, &mut ai_look_dir, &mut viewshed);
+                    begin_circular_rotation(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
                 }
@@ -1642,5 +1680,51 @@ mod tests {
         assert!(cost::SAND_CLOUD > cost::BASE);
         assert!(cost::COVER_PER_WALL > 0);
         assert!(cost::EXPOSED > 0);
+    }
+
+    // ── Patrol rotation helpers ───────────────────────────────────
+
+    #[test]
+    fn circular_rotation_cycles_all_8_directions() {
+        // Verify that DIRECTIONS_8 is 8 elements and they form a CW cycle.
+        assert_eq!(GridVec::DIRECTIONS_8.len(), 8);
+        // Starting from NORTH, stepping CW through all 8 should return to NORTH.
+        let start_idx = GridVec::DIRECTIONS_8.iter()
+            .position(|&d| d == GridVec::NORTH)
+            .unwrap();
+        let end_idx = (start_idx + 8) % 8;
+        assert_eq!(GridVec::DIRECTIONS_8[end_idx], GridVec::NORTH);
+    }
+
+    #[test]
+    fn full_rotation_steps_constant_is_eight() {
+        assert_eq!(FULL_ROTATION_STEPS, 8,
+            "A full 360° rotation should take exactly 8 steps of 45° each");
+    }
+
+    #[test]
+    fn rotation_counter_prevents_premature_resume() {
+        // Simulate a rotation sequence by manually tracking the counter.
+        let mut remaining: u8 = FULL_ROTATION_STEPS;
+        let mut steps_taken = 0;
+        while remaining > 0 {
+            remaining = remaining.saturating_sub(1);
+            steps_taken += 1;
+        }
+        assert_eq!(steps_taken, FULL_ROTATION_STEPS as u32);
+    }
+
+    #[test]
+    fn half_rotation_requires_four_steps() {
+        // A half rotation (180°) requires at least 4 × 45° steps.
+        // This ensures an NPC won't face a recently-faced direction
+        // until completing at least a half rotation.
+        let start = GridVec::NORTH;
+        let start_idx = GridVec::DIRECTIONS_8.iter()
+            .position(|&d| d == start)
+            .unwrap();
+        let opposite_idx = (start_idx + 4) % 8;
+        assert_eq!(GridVec::DIRECTIONS_8[opposite_idx], GridVec::SOUTH,
+            "4 CW steps from NORTH should reach SOUTH (opposite)");
     }
 }

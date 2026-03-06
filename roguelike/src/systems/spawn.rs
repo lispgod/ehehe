@@ -257,7 +257,7 @@ pub fn spawn_monster(
             1 => ("Beer", "b", ItemKind::Beer { heal: 5, blunt_damage: 3 }, RatColor::Rgb(200, 180, 80)),
             2 => ("Ale", "a", ItemKind::Ale { heal: 7, blunt_damage: 3 }, RatColor::Rgb(190, 150, 70)),
             3 => ("Stout", "s", ItemKind::Stout { heal: 12, blunt_damage: 4 }, RatColor::Rgb(80, 50, 30)),
-            4 => ("Wine", "w", ItemKind::Wine { heal: 8, blunt_damage: 3 }, RatColor::Rgb(140, 30, 60)),
+            4 => ("Wine", "v", ItemKind::Wine { heal: 8, blunt_damage: 3 }, RatColor::Rgb(140, 30, 60)),
             _ => ("Rum", "r", ItemKind::Rum { heal: 15, blunt_damage: 4 }, RatColor::Rgb(160, 100, 40)),
         };
         let alcohol = commands.spawn((

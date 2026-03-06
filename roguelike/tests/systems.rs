@@ -1038,7 +1038,7 @@ fn ranged_attack_damages_nearest_enemy() {
         Faction::Outlaws,
         BlocksMovement,
         Name("Bandit".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
@@ -1055,7 +1055,7 @@ fn ranged_attack_damages_nearest_enemy() {
     app.update(); // projectile_system advances bullet and applies damage
 
     let monster_hp = app.world().get::<Health>(monster).unwrap();
-    assert!(monster_hp.current < 20, "Ranged attack should damage the target");
+    assert!(monster_hp.current < 100, "Ranged attack should damage the target");
 }
 
 #[test]
@@ -1123,7 +1123,7 @@ fn ranged_bullet_penetrates_multiple_enemies() {
         Faction::Outlaws,
         BlocksMovement,
         Name("Bandit1".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
@@ -1132,7 +1132,7 @@ fn ranged_bullet_penetrates_multiple_enemies() {
         Faction::Outlaws,
         BlocksMovement,
         Name("Bandit2".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
@@ -1151,8 +1151,8 @@ fn ranged_bullet_penetrates_multiple_enemies() {
     // Both monsters should be hit.
     let m1_hp = app.world().get::<Health>(m1).unwrap();
     let m2_hp = app.world().get::<Health>(m2).unwrap();
-    assert!(m1_hp.current < 20, "First enemy in line should be hit by bullet");
-    assert!(m2_hp.current < 20, "Second enemy in line should be hit by penetrating bullet");
+    assert!(m1_hp.current < 100, "First enemy in line should be hit by bullet");
+    assert!(m2_hp.current < 100, "Second enemy in line should be hit by penetrating bullet");
 }
 
 #[test]
@@ -3590,7 +3590,11 @@ fn ai_ranged_attack_via_ranged_intent() {
         }
     }
 
-    let _player = spawn_test_player(&mut app, 50, 40);
+    let player = spawn_test_player(&mut app, 50, 40);
+    // Give the player high HP so they survive the bullet
+    app.world_mut().get_mut::<Health>(player).unwrap().current = 200;
+    app.world_mut().get_mut::<Health>(player).unwrap().max = 200;
+
     let npc = spawn_ai_npc(&mut app, 55, 40, "Outlaw", Faction::Outlaws);
 
     // Give NPC a loaded gun

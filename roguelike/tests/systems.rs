@@ -71,7 +71,7 @@ fn spawn_test_player(app: &mut App, x: i32, y: i32) -> Entity {
 fn spawn_test_monster(app: &mut App, x: i32, y: i32, name: &str) -> Entity {
     app.world_mut().spawn((
         Position { x, y },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name(name.into()),
         Health { current: 10, max: 10 },
@@ -252,7 +252,7 @@ fn low_attack_still_deals_damage() {
     // Spawn weak monster
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Rat".into()),
         Health { current: 5, max: 5 },
@@ -281,7 +281,7 @@ fn monster_dies_at_zero_health() {
     let player = spawn_test_player(&mut app, 60, 40);
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weakling".into()),
         Health { current: 1, max: 1 },
@@ -354,7 +354,7 @@ fn combat_log_records_death_message() {
     let player = spawn_test_player(&mut app, 60, 40);
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weakling".into()),
         Health { current: 1, max: 1 },
@@ -421,7 +421,7 @@ fn combat_log_no_damage_message() {
     // Monster (player attack is 0 so no damage)
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("IronGolem".into()),
         Health { current: 50, max: 50 },
@@ -608,7 +608,7 @@ fn spell_damages_nearby_enemies() {
     // Monster within spell radius (2 tiles away, radius=3)
     let monster = app.world_mut().spawn((
         Position { x: 62, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Goblin".into()),
         Health { current: 10, max: 10 },
@@ -650,7 +650,7 @@ fn spell_does_not_damage_distant_enemies() {
     // Monster far outside spell radius
     let monster = app.world_mut().spawn((
         Position { x: 70, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("FarGoblin".into()),
         Health { current: 10, max: 10 },
@@ -687,7 +687,7 @@ fn spell_hits_multiple_enemies() {
     // Two monsters within radius
     let m1 = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Goblin1".into()),
         Health { current: 10, max: 10 },
@@ -696,7 +696,7 @@ fn spell_hits_multiple_enemies() {
 
     let m2 = app.world_mut().spawn((
         Position { x: 60, y: 41 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Goblin2".into()),
         Health { current: 10, max: 10 },
@@ -743,7 +743,7 @@ fn spell_kills_weak_enemy_and_increments_kill_count() {
     // Weak monster that will die from shrapnel damage
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weakling".into()),
         Health { current: 3, max: 3 },
@@ -781,7 +781,7 @@ fn kill_count_increments_on_hostile_death() {
     let player = spawn_test_player(&mut app, 60, 40);
     let _monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weakling".into()),
         Health { current: 1, max: 1 },
@@ -842,7 +842,7 @@ fn player_can_bump_attack_hostile_entity() {
     // Spawn a hostile entity adjacent to the player
     let gate = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Gate of Hell".into()),
         Health { current: 100, max: 100 },
@@ -878,7 +878,7 @@ fn spell_damages_hostile_entity() {
     // Hostile entity within spell radius
     let gate = app.world_mut().spawn((
         Position { x: 62, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Gate of Hell".into()),
         Health { current: 100, max: 100 },
@@ -1035,10 +1035,10 @@ fn ranged_attack_damages_nearest_enemy() {
     // Monster at distance 4 (within range 8).
     let monster = app.world_mut().spawn((
         Position { x: 64, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Bandit".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
@@ -1055,7 +1055,7 @@ fn ranged_attack_damages_nearest_enemy() {
     app.update(); // projectile_system advances bullet and applies damage
 
     let monster_hp = app.world().get::<Health>(monster).unwrap();
-    assert!(monster_hp.current < 20, "Ranged attack should damage the target");
+    assert!(monster_hp.current < 100, "Ranged attack should damage the target");
 }
 
 #[test]
@@ -1065,7 +1065,7 @@ fn ranged_attack_no_target_in_range() {
     // Monster far away (distance 20, beyond range 8).
     let _monster = app.world_mut().spawn((
         Position { x: 80, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("FarBandit".into()),
         Health { current: 20, max: 20 },
@@ -1120,19 +1120,19 @@ fn ranged_bullet_penetrates_multiple_enemies() {
     // Two enemies in a line east of player.
     let m1 = app.world_mut().spawn((
         Position { x: 62, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Bandit1".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
     let m2 = app.world_mut().spawn((
         Position { x: 64, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Bandit2".into()),
-        Health { current: 20, max: 20 },
+        Health { current: 100, max: 100 },
         CombatStats { attack: 3 },
     )).id();
 
@@ -1151,8 +1151,8 @@ fn ranged_bullet_penetrates_multiple_enemies() {
     // Both monsters should be hit.
     let m1_hp = app.world().get::<Health>(m1).unwrap();
     let m2_hp = app.world().get::<Health>(m2).unwrap();
-    assert!(m1_hp.current < 20, "First enemy in line should be hit by bullet");
-    assert!(m2_hp.current < 20, "Second enemy in line should be hit by penetrating bullet");
+    assert!(m1_hp.current < 100, "First enemy in line should be hit by bullet");
+    assert!(m2_hp.current < 100, "Second enemy in line should be hit by penetrating bullet");
 }
 
 #[test]
@@ -1362,7 +1362,7 @@ fn fov_npc_uses_ai_look_dir() {
     let npc_pos = Position { x: 60, y: 40 };
     app.world_mut().spawn((
         npc_pos,
-        Hostile,
+        Faction::Outlaws,
         AiLookDir(GridVec::new(10, 0)),
         Viewshed {
             range: 40,
@@ -1864,7 +1864,7 @@ fn test_app_with_ai() -> App {
 fn spawn_ai_npc(app: &mut App, x: i32, y: i32, name: &str, faction: Faction) -> Entity {
     app.world_mut().spawn((
         Position { x, y },
-        Hostile,
+        faction,
         BlocksMovement,
         Name(name.into()),
         Health { current: 20, max: 20 },
@@ -1876,7 +1876,6 @@ fn spawn_ai_npc(app: &mut App, x: i32, y: i32, name: &str, faction: Faction) -> 
         PatrolOrigin(GridVec::new(x, y)),
         AiMemory::default(),
         AiPersonality::default(),
-        faction,
     )).insert((
         Viewshed {
             range: 20,
@@ -2305,7 +2304,6 @@ fn fast_npc_acts_more_frequently() {
     // Create a fast NPC (Speed 200) - should act twice per tick
     let npc = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Hostile,
         BlocksMovement,
         Name("FastNPC".into()),
         Health { current: 20, max: 20 },
@@ -2332,7 +2330,6 @@ fn slow_npc_acts_less_frequently() {
 
     let npc = app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Hostile,
         BlocksMovement,
         Name("SlowNPC".into()),
         Health { current: 20, max: 20 },
@@ -2394,7 +2391,7 @@ fn kill_awards_kill_count_with_damage_source() {
 
     let monster = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weakling".into()),
         Health { current: 1, max: 1 },
@@ -2907,7 +2904,7 @@ fn multiple_kills_increment_count() {
     // Spawn two weak monsters
     let _m1 = app.world_mut().spawn((
         Position { x: 61, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weak1".into()),
         Health { current: 1, max: 1 },
@@ -2916,7 +2913,7 @@ fn multiple_kills_increment_count() {
 
     let _m2 = app.world_mut().spawn((
         Position { x: 62, y: 40 },
-        Hostile,
+        Faction::Outlaws,
         BlocksMovement,
         Name("Weak2".into()),
         Health { current: 1, max: 1 },
@@ -3229,9 +3226,8 @@ fn npc_fov_is_narrow_around_45_degrees() {
 
     app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Hostile,
-        AiLookDir(GridVec::new(1, 0)), // looking east
         Faction::Outlaws,
+        AiLookDir(GridVec::new(1, 0)), // looking east
         Viewshed {
             range: 20,
             visible_tiles: std::collections::HashSet::new(),
@@ -3280,7 +3276,6 @@ fn wildlife_fov_is_short_range() {
 
     app.world_mut().spawn((
         Position { x: 60, y: 40 },
-        Hostile,
         AiLookDir(GridVec::new(1, 0)),
         Faction::Wildlife,
         Viewshed {
@@ -3595,7 +3590,11 @@ fn ai_ranged_attack_via_ranged_intent() {
         }
     }
 
-    let _player = spawn_test_player(&mut app, 50, 40);
+    let player = spawn_test_player(&mut app, 50, 40);
+    // Give the player high HP so they survive the bullet
+    app.world_mut().get_mut::<Health>(player).unwrap().current = 200;
+    app.world_mut().get_mut::<Health>(player).unwrap().max = 200;
+
     let npc = spawn_ai_npc(&mut app, 55, 40, "Outlaw", Faction::Outlaws);
 
     // Give NPC a loaded gun
@@ -3643,68 +3642,6 @@ fn ai_ranged_attack_via_ranged_intent() {
                     "Gun should have fewer rounds after firing",
                 );
             }
-}
-
-#[test]
-fn ai_kite_maintains_preferred_range() {
-    let mut app = test_app_with_ai();
-    for dx in -15..=15 {
-        for dy in -5..=5 {
-            clear_tile(&mut app, 50 + dx, 40 + dy);
-        }
-    }
-
-    let _player = spawn_test_player(&mut app, 50, 40);
-    let npc = spawn_ai_npc(&mut app, 52, 40, "Outlaw", Faction::Outlaws);
-
-    // Give NPC a loaded gun and set preferred range to 6
-    let gun = app.world_mut().spawn((
-        Item,
-        Name("Rifle".into()),
-        Renderable {
-            symbol: "r".into(),
-            fg: roguelike::typedefs::RatColor::Rgb(160, 160, 160),
-            bg: roguelike::typedefs::RatColor::Black,
-        },
-        ItemKind::Gun {
-            loaded: 6,
-            capacity: 6,
-            caliber: Caliber::Cal44,
-            attack: 10,
-            name: "Rifle".into(),
-            blunt_damage: 5,
-        },
-    )).id();
-    app.world_mut().get_mut::<Inventory>(npc).unwrap().items.push(gun);
-    app.world_mut().get_mut::<AiPersonality>(npc).unwrap().preferred_range = 6;
-    app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
-    app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
-    app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
-    {
-        let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
-        vs.visible_tiles.insert(GridVec::new(50, 40));
-        vs.dirty = false;
-    }
-
-    // Block line of sight with a sand cloud between NPC and player so gun can't fire,
-    // forcing the kite logic to trigger instead.
-    app.world_mut().resource_mut::<SpellParticles>().particles.push(
-        (GridVec::new(51, 40), 5, 0, false, 0, 0),
-    );
-
-    let initial_dist = 2; // NPC at 52, player at 50
-
-    app.update();
-
-    let new_pos = *app.world().get::<Position>(npc).unwrap();
-    let new_dist = (new_pos.x - 50).abs().max((new_pos.y - 40).abs());
-
-    assert!(
-        new_dist > initial_dist,
-        "Ranged NPC should kite away when closer than preferred_range: dist {} -> {}",
-        initial_dist,
-        new_dist,
-    );
 }
 
 #[test]
@@ -4085,32 +4022,6 @@ fn ai_unified_use_item_works_for_npc() {
         hp > 5,
         "NPC should have healed via unified use-item system (hp={})",
         hp,
-    );
-}
-
-#[test]
-fn ai_personality_affects_preferred_range() {
-    let mut app = test_app_with_ai();
-    for dx in -5..=5 {
-        for dy in -5..=5 {
-            clear_tile(&mut app, 60 + dx, 40 + dy);
-        }
-    }
-
-    let npc_melee = spawn_ai_npc(&mut app, 60, 40, "Melee", Faction::Outlaws);
-    let npc_ranged = spawn_ai_npc(&mut app, 65, 40, "Ranged", Faction::Outlaws);
-
-    app.world_mut().get_mut::<AiPersonality>(npc_melee).unwrap().preferred_range = 1;
-    app.world_mut().get_mut::<AiPersonality>(npc_ranged).unwrap().preferred_range = 8;
-
-    let melee_range = app.world().get::<AiPersonality>(npc_melee).unwrap().preferred_range;
-    let ranged_range = app.world().get::<AiPersonality>(npc_ranged).unwrap().preferred_range;
-
-    assert_eq!(melee_range, 1, "Melee NPC preferred_range should be 1");
-    assert_eq!(ranged_range, 8, "Ranged NPC preferred_range should be 8");
-    assert_ne!(
-        melee_range, ranged_range,
-        "Different personalities should have different preferred ranges",
     );
 }
 

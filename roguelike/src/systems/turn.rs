@@ -273,7 +273,7 @@ pub fn star_level_system(
     mut commands: Commands,
     mut star_level: ResMut<crate::resources::StarLevel>,
     player_pos: Single<&Position, With<Player>>,
-    hostile_viewsheds: Query<&crate::components::Viewshed, With<crate::components::Hostile>>,
+    hostile_viewsheds: Query<&crate::components::Viewshed, With<crate::components::Faction>>,
     turn_counter: Res<TurnCounter>,
     game_map: Res<GameMapResource>,
     _seed: Res<MapSeed>,
@@ -320,8 +320,7 @@ pub fn star_level_system(
             // Use the sheriff template (index 9)
             let template = &crate::systems::spawn::MONSTER_TEMPLATES[4];
             crate::systems::spawn::spawn_monster(&mut commands, template, spawn_pos.x, spawn_pos.y, 0, 0);
-            // The spawned sheriff starts hostile since the player is wanted
-            // (the combat system will handle this via the existing Hostile mechanism)
+            // The spawned sheriff is hostile to the player via faction-based hostility
         }
     }
 }

@@ -2,7 +2,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::components::{Health, Hostile, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
+use crate::components::{Faction, Health, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, Player, Position, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
@@ -92,7 +92,7 @@ pub fn input_system(
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>), With<Player>>,
     mut player_viewshed: Query<&mut Viewshed, With<Player>>,
     item_kind_query: Query<&ItemKind>,
-    (hostiles_query, health_query): (Query<&Position, With<Hostile>>, Query<Entity, With<Health>>),
+    (hostiles_query, health_query): (Query<&Position, With<Faction>>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,

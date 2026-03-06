@@ -41,27 +41,50 @@ struct Building {
     kind: u32,
 }
 
-impl GameMap {
-    /// Creates a new game map as a giant midwestern town.
-    ///
-    /// The generation pipeline:
-    ///   1. **Desert base** — noise-driven arid terrain (sand, dirt, gravel).
-    ///   2. **Street grid** — multiple horizontal avenues and vertical cross
-    ///      streets forming a dense town grid.
-    ///   3. **Buildings** — deterministically placed houses, saloons, stables
-    ///      with walls and wood-plank interiors filling every city block.
-    ///   4. **Landmarks** — a large Town Hall and oversized Grand Saloon.
-    ///   5. **Street props** — benches, lamp posts, barrels, crates,
-    ///      hitching posts, water troughs, signs placed along streets.
-    ///   6. **Decorative elements** — cacti, dead trees, rocks in open areas.
-    ///   7. **Spawn clearing** — guaranteed open area around the player spawn.
-    pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
-        let mut voxels = Vec::with_capacity(height as usize);
+// ── World generation phase system ────────────────────────────────────────
 
+/// Intermediate data accumulated between world generation phases.
+#[derive(Default)]
+/// Intermediate data accumulated during hierarchical world generation.
+/// Phases produce and consume this data, enabling later phases to reference
+/// layout decisions made by earlier ones (e.g., street positions inform
+/// building placement).
+struct WorldGenData {
+    avenue_ys: Vec<CoordinateUnit>,
+    cross_xs: Vec<CoordinateUnit>,
+    buildings: Vec<Building>,
+    avenue_half_width: CoordinateUnit,
+}
+
+/// A single step in the hierarchical world generation pipeline.
+/// Each phase receives the map and shared data, applying one category of
+/// generation (terrain, water, infrastructure, buildings, etc.).
+/// Phases run in order; later phases may read data produced by earlier ones.
+trait WorldGenPhase {
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    );
+}
+
+/// Phase 1: Desert base terrain + forest on outskirts.
+struct TerrainPhase;
+
+impl TerrainPhase {
+    /// Creates the initial `GameMap` with noise-driven desert terrain.
+    fn create_map(
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) -> GameMap {
         let biome_seed = seed;
         let detail_seed = seed.wrapping_add(12345);
 
-        // ── Step 1: Base desert terrain ─────────────────────────────
+        let mut voxels = Vec::with_capacity(height as usize);
         for y in 0..height {
             let mut row = Vec::with_capacity(width as usize);
             for x in 0..width {
@@ -93,8 +116,8 @@ impl GameMap {
             faction_anchors: Vec::new(),
         };
 
-        // ── Step 1b: Forest on outskirts ────────────────────────────
-        let forest_margin = 30; // tiles from edge where forest is dense
+        // Forest on outskirts
+        let forest_margin = 30;
         let forest_seed = seed.wrapping_add(77700);
         for y in 1..height - 1 {
             for x in 1..width - 1 {
@@ -141,7 +164,23 @@ impl GameMap {
             }
         }
 
-        // ── Step 2: River through center ────────────────────────────
+        map
+    }
+}
+
+/// Phase 2: River generation.
+struct WaterPhase;
+
+impl WorldGenPhase for WaterPhase {
+
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        _data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) {
         let river_seed = seed.wrapping_add(88800);
         let river_cx = width as f64 / 2.0;
         // River flows top to bottom with layered sinusoidal wobble and
@@ -183,8 +222,22 @@ impl GameMap {
                         }
             }
         }
+    }
+}
 
-        // ── Step 3: Curved street grid with sidewalks ────────────────
+/// Phase 3: Street grid (avenues, cross streets, bridges).
+struct InfrastructurePhase;
+
+impl WorldGenPhase for InfrastructurePhase {
+
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) {
         // Horizontal avenues: wide dirt carriage roads flanked by sidewalks
         // Avenue spacing varies per seed for unique city feel.
         // Compute avenue Y positions first so bridges can align to them.
@@ -192,19 +245,19 @@ impl GameMap {
         let avenue_spacing = 32 + (spacing_noise * 12.0) as CoordinateUnit; // 32-44
         let avenue_half_width = 3; // carriage road half-width (7 tiles total)
         let sidewalk_width = 2; // sidewalk on each side of the road
-        let mut avenue_ys: Vec<CoordinateUnit> = Vec::new();
         let curve_seed = seed.wrapping_add(55500);
         {
             let first_avenue = 40; // start inside the forest margin
             let mut ay = first_avenue;
             while ay < height - 40 {
-                avenue_ys.push(ay);
+                data.avenue_ys.push(ay);
                 ay += avenue_spacing;
             }
         }
+        data.avenue_half_width = avenue_half_width;
 
         // Place bridges at avenue Y positions so they connect flush with roads.
-        let bridge_ys: Vec<CoordinateUnit> = avenue_ys.clone();
+        let bridge_ys: Vec<CoordinateUnit> = data.avenue_ys.clone();
         for &by in &bridge_ys {
             for dy in -3..=3i32 {
                 let y = by + dy;
@@ -222,7 +275,7 @@ impl GameMap {
         }
 
         // Lay avenue roads with sidewalks
-        for &ay in &avenue_ys {
+        for &ay in &data.avenue_ys {
             let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
             let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
             for x in 1..width - 1 {
@@ -266,14 +319,13 @@ impl GameMap {
         let cross_spacing = 28 + (cross_noise * 14.0) as CoordinateUnit; // 28-42
         let cross_half_width = 2; // narrower than avenues
         let cross_sidewalk_width = 1;
-        let mut cross_xs: Vec<CoordinateUnit> = Vec::new();
         {
             let mut cx = 40i32;
             let mut ci = 0i32;
             while cx < width - 40 {
                 let jitter = (value_noise(ci, 0, cross_seed) * 10.0) as CoordinateUnit - 5;
                 let actual_cx = (cx + jitter).clamp(2, width - 3);
-                cross_xs.push(actual_cx);
+                data.cross_xs.push(actual_cx);
                 let curve_amp = 2.0 + value_noise(ci, 1, cross_seed) * 3.0;
                 let curve_freq = 0.02 + value_noise(1, ci, cross_seed) * 0.01;
                 for y in 1..height - 1 {
@@ -318,79 +370,164 @@ impl GameMap {
                 ci += 1;
             }
         }
+    }
+}
 
-        // ── Step 4: Generate buildings filling city blocks ───────────
-        let buildings = generate_buildings(width, height, seed, &avenue_ys, avenue_half_width);
+/// Phase 4: Buildings, alleys, faction anchors.
+struct BuildingPhase;
 
-        for b in &buildings {
+impl WorldGenPhase for BuildingPhase {
+
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) {
+        data.buildings = generate_buildings(width, height, seed, &data.avenue_ys, data.avenue_half_width);
+
+        for b in &data.buildings {
             // Don't place buildings on water
             let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
             if let Some(voxel) = map.get_voxel_at(&center)
                 && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                     continue;
                 }
-            place_building(&mut map, b, seed);
+            place_building(map, b, seed);
         }
 
         // Place narrow alleys between adjacent buildings within blocks
-        place_alleys(&mut map, &buildings);
+        place_alleys(map, &data.buildings);
 
-        // ── Step 4b: Assign faction anchors from building kinds ──────
-        assign_faction_anchors(&mut map, &buildings);
+        // Assign faction anchors from building kinds
+        assign_faction_anchors(map, &data.buildings);
+    }
+}
 
-        // ── Step 5: Landmark buildings ──────────────────────────────
-        place_mission(&mut map, width, height, seed);
-        place_town_hall(&mut map, width, height, seed);
-        place_grand_saloon(&mut map, width, height, seed);
-        place_stone_church(&mut map, width, height, seed);
+/// Phase 5: Landmarks, plazas, urban features, rock formations.
+struct LandmarkPhase;
 
-        // ── Step 5b: Town plaza (open killzone) ─────────────────────
-        place_town_plaza(&mut map, width, height, seed);
-        place_cemetery(&mut map, width, height, seed);
-        place_corral(&mut map, width, height, seed);
+impl WorldGenPhase for LandmarkPhase {
 
-        // ── Step 5c: Additional urban features ──────────────────────
-        place_town_well(&mut map, width, height, seed);
-        place_gallows(&mut map, width, height, seed);
-        place_water_tower(&mut map, width, height, seed);
-        place_railroad(&mut map, width, height, seed);
-        place_windmill(&mut map, width, height, seed);
-        place_outposts(&mut map, width, height, seed);
-        place_rock_formations(&mut map, width, height, seed);
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        _data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) {
+        place_mission(map, width, height, seed);
+        place_town_hall(map, width, height, seed);
+        place_grand_saloon(map, width, height, seed);
+        place_stone_church(map, width, height, seed);
 
-        // ── Step 6: Street props along every avenue ──────────────
-        for &ay in &avenue_ys {
-            place_street_props(&mut map, width, ay, avenue_half_width, seed);
+        place_town_plaza(map, width, height, seed);
+        place_cemetery(map, width, height, seed);
+        place_corral(map, width, height, seed);
+
+        place_town_well(map, width, height, seed);
+        place_gallows(map, width, height, seed);
+        place_water_tower(map, width, height, seed);
+        place_railroad(map, width, height, seed);
+        place_windmill(map, width, height, seed);
+        place_outposts(map, width, height, seed);
+        place_rock_formations(map, width, height, seed);
+    }
+}
+
+/// Phase 6: Street props and decorations.
+struct DetailPhase;
+
+impl WorldGenPhase for DetailPhase {
+
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        seed: NoiseSeed,
+    ) {
+        // Street props along every avenue
+        for &ay in &data.avenue_ys {
+            place_street_props(map, width, ay, data.avenue_half_width, seed);
         }
-        // ── Step 6b: Lamp posts along cross streets ─────────────
-        for &cx in &cross_xs {
-            place_lamp_posts(&mut map, height, cx, seed);
+        // Lamp posts along cross streets
+        for &cx in &data.cross_xs {
+            place_lamp_posts(map, height, cx, seed);
         }
 
-        // ── Step 7: Decorative elements in open areas ───────────────
-        place_desert_decorations(&mut map, width, height, seed);
+        // Decorative elements in open areas
+        place_desert_decorations(map, width, height, seed);
 
-        // ── Step 8: Scatter gunpowder barrels around the map ────────
-        place_gunpowder_barrels(&mut map, width, height, seed);
+        // Scatter gunpowder barrels around the map
+        place_gunpowder_barrels(map, width, height, seed);
+    }
+}
 
-        // ── Step 9: Spawn clearing ──────────────────────────────────
+/// Phase 7: Spawn clearing and water cleanup.
+struct FinalizationPhase;
+
+impl WorldGenPhase for FinalizationPhase {
+
+    fn execute(
+        &self,
+        map: &mut GameMap,
+        _data: &mut WorldGenData,
+        width: CoordinateUnit,
+        height: CoordinateUnit,
+        _seed: NoiseSeed,
+    ) {
         // Clear around default spawn point and also around the bridge center
         // so the player always has room to spawn.
-        clear_around(&mut map, SPAWN_POINT, 6);
+        clear_around(map, SPAWN_POINT, 6);
         if let Some(bridge_pos) = map.find_bridge_center() {
-            clear_around(&mut map, bridge_pos, 6);
+            clear_around(map, bridge_pos, 6);
         }
 
-        // ── Final pass: clear props from water/beach tiles ──────────
+        // Final pass: clear props from water, beach, and bridge tiles.
         // Later generation steps may have placed props on river tiles.
         for y in 0..height {
             for x in 0..width {
                 let pos = GridVec::new(x, y);
                 if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach) | Some(Floor::Bridge)) {
                         voxel.props = None;
                     }
             }
+        }
+    }
+}
+
+impl GameMap {
+    /// Creates a new game map as a giant midwestern town.
+    ///
+    /// The generation pipeline runs as a sequence of phases:
+    ///   1. **Terrain** — desert base + forest outskirts (creates the map).
+    ///   2. **Water** — river generation.
+    ///   3. **Infrastructure** — street grid (avenues, cross streets, bridges).
+    ///   4. **Buildings** — houses, saloons, stables, alleys, faction anchors.
+    ///   5. **Landmarks** — Town Hall, Grand Saloon, plazas, urban features.
+    ///   6. **Details** — street props, decorations, gunpowder barrels.
+    ///   7. **Finalization** — spawn clearing, water cleanup.
+    pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
+        let mut map = TerrainPhase::create_map(width, height, seed);
+        let mut data = WorldGenData::default();
+
+        let phases: Vec<Box<dyn WorldGenPhase>> = vec![
+            Box::new(WaterPhase),
+            Box::new(InfrastructurePhase),
+            Box::new(BuildingPhase),
+            Box::new(LandmarkPhase),
+            Box::new(DetailPhase),
+            Box::new(FinalizationPhase),
+        ];
+
+        for phase in &phases {
+            phase.execute(&mut map, &mut data, width, height, seed);
         }
 
         map
@@ -418,13 +555,20 @@ impl GameMap {
         }
     }
 
-    /// Returns `true` if the tile at `point` is passable (no blocking props).
+    /// Returns `true` if the tile at `point` is passable (no blocking props
+    /// and not deep/shallow water).
     #[inline]
     pub fn is_passable(&self, point: &MyPoint) -> bool {
         self.get_voxel_at(point)
-            .is_some_and(|v| match &v.props {
-                Some(f) => !f.blocks_movement(),
-                None => true,
+            .is_some_and(|v| {
+                // Water tiles block movement (no swimming).
+                if matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                    return false;
+                }
+                match &v.props {
+                    Some(f) => !f.blocks_movement(),
+                    None => true,
+                }
             })
     }
 
@@ -1544,6 +1688,10 @@ fn place_desert_decorations(
                 if matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk)) {
                     continue;
                 }
+                // Skip bridge tiles — no decorations on river bridges.
+                if matches!(voxel.floor, Some(Floor::Bridge)) {
+                    continue;
+                }
             } else {
                 continue;
             }
@@ -1967,7 +2115,8 @@ fn place_rock_formations(map: &mut GameMap, width: CoordinateUnit, height: Coord
                 if let Some(voxel) = map.get_voxel_at(&pos) {
                     if voxel.props.is_some() { continue; }
                     if matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)
-                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)) {
+                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)
+                        | Some(Floor::Bridge)) {
                         continue;
                     }
                 }

@@ -1112,7 +1112,7 @@ fn generate_buildings_bsp(
 
     // Keep BSP within the road network. Use the forest margin on large maps,
     // but scale down for smaller maps to preserve buildable area.
-    let margin = (30 as CoordinateUnit).min(width / 8).min(height / 8).max(4);
+    let margin = (30 as CoordinateUnit).min(width / 8).min(height / 8).max(6);
     let build_w = width - margin * 2;
     let build_h = height - margin * 2;
     if build_w < BSP_MIN_LEAF_W || build_h < BSP_MIN_LEAF_H {
@@ -1428,7 +1428,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
     match b.kind {
         0 => {
             // House: dividing wall separates front room from back room
-            if iw >= 4 && ih >= 4 {
+            if iw >= 6 && ih >= 8 {
                 // Dividing wall at the midpoint with a door gap
                 let wall_row = ih / 2;
                 for dx in 0..iw {

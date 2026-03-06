@@ -486,6 +486,39 @@ impl WorldGenPhase for InfrastructurePhase {
             }
         }
 
+        // ── Pass 3c: Fill BeachSand near bridges with road surface ───────
+        // After bridges are placed, convert remaining BeachSand tiles that
+        // are adjacent to a Bridge tile into Dirt, Gravel, or Sidewalk so
+        // roads don't abruptly stop at the beach.
+        {
+            let mut to_fill: Vec<(GridVec, Floor)> = Vec::new();
+            for y in 1..height - 1 {
+                for x in 1..width - 1 {
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at(&pos) {
+                        if !matches!(voxel.floor, Some(Floor::BeachSand)) { continue; }
+                        let near_bridge = pos.cardinal_neighbors().iter().any(|n| {
+                            map.get_voxel_at(n).is_some_and(|v| matches!(v.floor, Some(Floor::Bridge)))
+                        });
+                        if near_bridge {
+                            // Deterministic choice: use value_noise to pick Dirt, Gravel, or Sidewalk
+                            let n = value_noise(x, y, seed.wrapping_add(88888));
+                            let floor = if n < 0.33 { Floor::Dirt }
+                                else if n < 0.66 { Floor::Gravel }
+                                else { Floor::Sidewalk };
+                            to_fill.push((pos, floor));
+                        }
+                    }
+                }
+            }
+            for (pos, floor) in to_fill {
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    voxel.floor = Some(floor);
+                    voxel.props = None;
+                }
+            }
+        }
+
         // ── Collect road-edge tiles for prop placement ───────────────────
         // Road-edge tiles are Sidewalk tiles adjacent to non-road terrain,
         // following the actual curvature of the laid roads.

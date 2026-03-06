@@ -248,6 +248,29 @@ pub fn spawn_monster(
             )).id();
             inv_items.push(molotov);
         }
+
+        // Humanoid NPCs randomly carry alcohol that heals when used.
+        let alcohol_hash = (x.wrapping_mul(47) ^ y.wrapping_mul(83)).unsigned_abs();
+        let alcohol_idx = alcohol_hash % 6;
+        let (alc_name, alc_symbol, alc_kind, alc_fg): (&str, &str, ItemKind, RatColor) = match alcohol_idx {
+            0 => ("Whiskey Bottle", "w", ItemKind::Whiskey { heal: 10, blunt_damage: 4 }, RatColor::Rgb(180, 120, 60)),
+            1 => ("Beer", "b", ItemKind::Beer { heal: 5, blunt_damage: 3 }, RatColor::Rgb(200, 180, 80)),
+            2 => ("Ale", "a", ItemKind::Ale { heal: 7, blunt_damage: 3 }, RatColor::Rgb(190, 150, 70)),
+            3 => ("Stout", "s", ItemKind::Stout { heal: 12, blunt_damage: 4 }, RatColor::Rgb(80, 50, 30)),
+            4 => ("Wine", "w", ItemKind::Wine { heal: 8, blunt_damage: 3 }, RatColor::Rgb(140, 30, 60)),
+            _ => ("Rum", "r", ItemKind::Rum { heal: 15, blunt_damage: 4 }, RatColor::Rgb(160, 100, 40)),
+        };
+        let alcohol = commands.spawn((
+            Item,
+            Name(alc_name.into()),
+            Renderable {
+                symbol: alc_symbol.into(),
+                fg: alc_fg,
+                bg: RatColor::Black,
+            },
+            alc_kind,
+        )).id();
+        inv_items.push(alcohol);
     }
 
     // Humanoid NPCs get procedurally generated cowboy names.

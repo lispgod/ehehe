@@ -521,6 +521,11 @@ pub fn draw_system(
                                 ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
                                 ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius} 🔥"),
                                 ItemKind::Bow { .. } => "Bow".to_string(),
+                                ItemKind::Beer { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Ale { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Stout { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Wine { heal, .. } => format!("Heal {heal} HP"),
+                                ItemKind::Rum { heal, .. } => format!("Heal {heal} HP"),
                             });
                         (name_str, desc)
                     })

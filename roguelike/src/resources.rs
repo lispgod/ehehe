@@ -54,6 +54,7 @@ impl GameMapResource {
                 let pos = origin + GridVec::new(dx, dy);
                 if let Some(voxel) = self.0.get_voxel_at(&pos)
                     && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
+                    && !matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
                 {
                     tiles_to_cloud.push((pos, voxel.floor.clone()));
                 }

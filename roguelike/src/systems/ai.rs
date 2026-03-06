@@ -779,7 +779,12 @@ pub fn ai_system(
         {
             let whiskey_idx = inv.items.iter().position(|&ent| {
                 item_kinds.get(ent).ok().is_some_and(|k|
-                    matches!(*k, ItemKind::Whiskey { .. })
+                    matches!(*k, ItemKind::Whiskey { .. }
+                        | ItemKind::Beer { .. }
+                        | ItemKind::Ale { .. }
+                        | ItemKind::Stout { .. }
+                        | ItemKind::Wine { .. }
+                        | ItemKind::Rum { .. })
                 )
             });
             if let Some(idx) = whiskey_idx {

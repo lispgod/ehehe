@@ -492,6 +492,16 @@ pub enum ItemKind {
     Molotov { damage: i32, radius: i32, blunt_damage: i32 },
     /// A bow. Fires arrows. Used by Indians.
     Bow { attack: i32, blunt_damage: i32 },
+    /// Beer. Restores a small amount of health when consumed.
+    Beer { heal: i32, blunt_damage: i32 },
+    /// Ale. Restores health when consumed.
+    Ale { heal: i32, blunt_damage: i32 },
+    /// Stout. Restores a moderate amount of health when consumed.
+    Stout { heal: i32, blunt_damage: i32 },
+    /// Wine. Restores health when consumed.
+    Wine { heal: i32, blunt_damage: i32 },
+    /// Rum. Restores a large amount of health when consumed.
+    Rum { heal: i32, blunt_damage: i32 },
 }
 
 impl ItemKind {
@@ -505,6 +515,11 @@ impl ItemKind {
             ItemKind::Whiskey { blunt_damage, .. } => *blunt_damage,
             ItemKind::Molotov { blunt_damage, .. } => *blunt_damage,
             ItemKind::Bow { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Beer { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Ale { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Stout { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Wine { blunt_damage, .. } => *blunt_damage,
+            ItemKind::Rum { blunt_damage, .. } => *blunt_damage,
         }
     }
 
@@ -518,6 +533,11 @@ impl ItemKind {
             ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
             ItemKind::Molotov { .. } => "Molotov".into(),
             ItemKind::Bow { .. } => "Bow".into(),
+            ItemKind::Beer { .. } => "Beer".into(),
+            ItemKind::Ale { .. } => "Ale".into(),
+            ItemKind::Stout { .. } => "Stout".into(),
+            ItemKind::Wine { .. } => "Wine".into(),
+            ItemKind::Rum { .. } => "Rum".into(),
         }
     }
 }

@@ -654,7 +654,7 @@ pub fn draw_system(
         // Show it right above the UI panel, not in the center of the screen.
         let player_is_dead = player_hp.is_some_and(|hp| hp.is_dead());
         if *state.get() == GameState::Dead || player_is_dead {
-            let label = " YOU DIED — Press T to continue watching, R to restart ";
+            let label = " YOU DIED — Press R to restart ";
             let label_width = label.len() as u16;
             if render_width >= label_width && game_area.height >= 1 {
                 let cx = game_area.x + (render_width - label_width) / 2;

@@ -15,9 +15,9 @@ pub enum Floor {
     /// Persistent sand/smoke cloud that blocks line of sight.
     /// Placed by sand throws and gun smoke; ticks down per game turn.
     SandCloud,
-    /// Shallow river water — passable but slow.
+    /// Shallow river water — impassable (blocks all movement).
     ShallowWater,
-    /// Deep river water — passable but very slow.
+    /// Deep river water — impassable (blocks all movement).
     DeepWater,
     /// Sandy beach along the river banks.
     Beach,

@@ -383,6 +383,61 @@ impl WorldGenPhase for InfrastructurePhase {
             }
         }
 
+        // ── Pass 3a-gaps: Remove random segments from vertical roads ─────
+        // After each vertical road is generated, randomly remove several
+        // segments, leaving gaps of varying length. This produces roads
+        // that feel organically incomplete and occasionally creates larger
+        // lots where two gaps on adjacent roads align.
+        {
+            let gap_seed = seed.wrapping_add(77777);
+            let mut ci = 0i32;
+            for &road_cx in &data.cross_xs {
+                let curve_amp = 2.0 + value_noise(ci, 1, cross_seed) * 3.0;
+                let curve_freq = 0.02 + value_noise(1, ci, cross_seed) * 0.01;
+                // Determine gap count: 3–6 gaps per road.
+                let gap_count = 3 + (value_noise(ci, 0, gap_seed) * 4.0) as i32;
+                for gi in 0..gap_count {
+                    // Random gap start and length.
+                    let gap_start = 10 + (value_noise(ci, gi * 2 + 1, gap_seed) * (height - 20) as f64) as CoordinateUnit;
+                    let gap_len = 8 + (value_noise(ci, gi * 2 + 2, gap_seed) * 20.0) as CoordinateUnit;
+                    let gap_end = (gap_start + gap_len).min(height - 2);
+
+                    for y in gap_start..gap_end {
+                        // Skip tiles at avenue intersections to preserve connectivity.
+                        let at_avenue = data.avenue_ys.iter().any(|&ay| (y - ay).abs() <= avenue_half_width + 2);
+                        if at_avenue { continue; }
+
+                        let curve_offset = (y as f64 * curve_freq).sin() * curve_amp;
+                        // Revert carriage road tiles.
+                        for hw in -cross_half_width..=cross_half_width {
+                            let x = road_cx + hw + curve_offset as CoordinateUnit;
+                            if x <= 0 || x >= width - 1 { continue; }
+                            let pos = GridVec::new(x, y);
+                            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                                if matches!(voxel.floor, Some(Floor::DirtRoad)) {
+                                    voxel.floor = Some(Floor::Dirt);
+                                }
+                            }
+                        }
+                        // Revert sidewalk tiles.
+                        for sw in 1..=cross_sidewalk_width {
+                            for sign in [-1i32, 1] {
+                                let x = road_cx + sign * (cross_half_width + sw) + curve_offset as CoordinateUnit;
+                                if x <= 0 || x >= width - 1 { continue; }
+                                let pos = GridVec::new(x, y);
+                                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                                    if matches!(voxel.floor, Some(Floor::Sidewalk)) {
+                                        voxel.floor = Some(Floor::Dirt);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ci += 1;
+            }
+        }
+
         // ── Pass 3b: Bridges where horizontal roads cross the river ──────
         // Only bridge at the specific coordinates where a horizontal avenue
         // road band crosses water. Bridge tiles replace ShallowWater,
@@ -739,10 +794,7 @@ impl GameMap {
             match verify_world(&map, &data.buildings, &data.avenue_ys, &data.cross_xs, width, height) {
                 Ok(()) => return map,
                 Err(reason) => {
-                    eprintln!(
-                        "World gen verification failed (seed={}, attempt {}): {}",
-                        current_seed, attempt, reason
-                    );
+                    // Silently retry — no diagnostic text should ever reach the renderer.
                     last_reason = reason;
                     last_map = Some(map);
                 }
@@ -1677,25 +1729,27 @@ fn generate_buildings_bsp(
     for yi in 0..y_bounds.len().saturating_sub(1) {
         for xi in 0..x_bounds.len().saturating_sub(1) {
             // Lot inner boundaries: for road-bounded edges, skip road + 1-tile
-            // sidewalk. For map-edge boundaries (no adjacent road), use a
-            // minimal 1-tile buffer so edge lots aren't unnecessarily shrunk.
+            // sidewalk + 3-tile buffer to account for road curvature. For
+            // map-edge boundaries (no adjacent road), use a minimal 1-tile
+            // buffer so edge lots aren't unnecessarily shrunk.
+            let road_curve_buffer: CoordinateUnit = 3;
             let lot_top = if avenue_set.contains(&y_bounds[yi]) {
-                y_bounds[yi] + avenue_half_width + sidewalk_width + 1
+                y_bounds[yi] + avenue_half_width + sidewalk_width + 1 + road_curve_buffer
             } else {
                 y_bounds[yi] + 1
             };
             let lot_bot = if avenue_set.contains(&y_bounds[yi + 1]) {
-                y_bounds[yi + 1] - avenue_half_width - sidewalk_width - 1
+                y_bounds[yi + 1] - avenue_half_width - sidewalk_width - 1 - road_curve_buffer
             } else {
                 y_bounds[yi + 1] - 1
             };
             let lot_left = if cross_set.contains(&x_bounds[xi]) {
-                x_bounds[xi] + cross_half_width + cross_sidewalk_width + 1
+                x_bounds[xi] + cross_half_width + cross_sidewalk_width + 1 + road_curve_buffer
             } else {
                 x_bounds[xi] + 1
             };
             let lot_right = if cross_set.contains(&x_bounds[xi + 1]) {
-                x_bounds[xi + 1] - cross_half_width - cross_sidewalk_width - 1
+                x_bounds[xi + 1] - cross_half_width - cross_sidewalk_width - 1 - road_curve_buffer
             } else {
                 x_bounds[xi + 1] - 1
             };

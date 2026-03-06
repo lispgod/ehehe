@@ -44,16 +44,15 @@ enum BulletHitResult {
 /// Returns the outcome so callers can handle damage events and logging.
 fn resolve_bullet_hit(
     tile: GridVec,
-    aim_point: GridVec,
+    _aim_point: GridVec,
     path_index: usize,
     target_max_hp: i32,
     penetration: i32,
 ) -> BulletHitResult {
-    let dx = (aim_point.x - tile.x) as f64;
-    let dy = (aim_point.y - tile.y) as f64;
-    let distance = (dx * dx + dy * dy).sqrt();
+    // Accuracy degrades with distance traveled from the shooter.
+    let distance = path_index as f64;
     let hit_chance = (0.98 - distance * 0.02).clamp(0.35, 0.98);
-    let headshot_chance = 0.02 + if distance < 0.5 { 0.08 } else { 0.0 };
+    let headshot_chance = 0.02 + if distance < 2.0 { 0.08 } else { 0.0 };
 
     let roll_seed = 7919_u64.wrapping_add(path_index as u64);
     let roll = value_noise(tile.x, tile.y + path_index as i32, roll_seed);

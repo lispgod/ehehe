@@ -266,7 +266,7 @@ pub fn death_system(
         // treatment as NPC deaths. The player entity itself is NOT despawned
         // so the UI can continue reading stats (HP, inventory, etc.).
         if is_player.is_some() {
-            combat_log.push("You have fallen... Press T to continue watching, or R to restart.".into());
+            combat_log.push("You have fallen... Press R to restart.".into());
             next_game_state.set(GameState::Dead);
             commands.entity(entity).insert(Dead);
             if let Some(p) = pos {
@@ -458,8 +458,10 @@ pub fn ranged_attack_system(
         let spread_roll = dynamic_rng.roll(seed.0, (origin.x as u64).wrapping_mul(7) ^ (origin.y as u64) ^ 0x5BAD);
         let (spread_dx, spread_dy) = apply_gun_spread(dx, dy, spread_roll);
 
-        // Compute the bullet endpoint.
-        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, intent.range);
+        // Compute the bullet endpoint — bullets travel until they hit a wall,
+        // entity, or reach the map boundary. No maximum range cap.
+        let map_range = game_map.0.width.max(game_map.0.height);
+        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, map_range);
 
         combat_log.push(format!("{c_name} fires!"));
         sound_events.add(origin);
@@ -537,8 +539,9 @@ pub fn ai_ranged_attack_system(
         let spread_roll = crate::noise::value_noise(origin.x, origin.y, spread_seed);
         let (spread_dx, spread_dy) = apply_gun_spread(dx, dy, spread_roll);
 
-        // Compute bullet endpoint.
-        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, intent.range);
+        // Compute bullet endpoint — bullets travel until impact or map boundary.
+        let map_range = game_map.0.width.max(game_map.0.height);
+        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, map_range);
 
         combat_log.push_at(format!("{a_name} fires!"), origin);
         sound_events.add(origin);

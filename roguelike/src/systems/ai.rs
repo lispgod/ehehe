@@ -40,8 +40,12 @@ mod cost {
     /// Penalty for sand / smoke cloud tiles (blocks vision, chokes).
     pub const SAND_CLOUD: i32 = 20;
     /// Penalty for shallow water (movement slow-down).
+    /// NOTE: water is blocked outright by `is_passable`; this cost is
+    /// kept as infrastructure for potential future changes but is currently
+    /// unreachable.
     pub const SHALLOW_WATER: i32 = 8;
     /// Penalty for deep water (severe slow-down, drowning risk).
+    /// NOTE: same as SHALLOW_WATER — unreachable while is_passable blocks water.
     pub const DEEP_WATER: i32 = 15;
     /// Per-wall bonus subtracted from cost when adjacent to blocking props
     /// (cover). Capped so cost never drops below 1.
@@ -847,6 +851,60 @@ pub fn ai_system(
             }
         }
 
+        // ── Fire proximity flee: highest priority override ───────────
+        // If any immediately adjacent tile is on fire, flee away from the
+        // fire source. This overrides all other behavior including combat
+        // and patrol.
+        {
+            let mut fire_center = GridVec::ZERO;
+            let mut fire_count = 0i32;
+            for neighbor in my_pos.all_neighbors() {
+                if let Some(voxel) = game_map.0.get_voxel_at(&neighbor) {
+                    if matches!(voxel.floor, Some(crate::typeenums::Floor::Fire)) {
+                        fire_center = fire_center + neighbor;
+                        fire_count += 1;
+                    }
+                }
+            }
+            if fire_count > 0 {
+                // Average fire position, then flee away from it.
+                let avg_fire = GridVec::new(fire_center.x / fire_count, fire_center.y / fire_count);
+                let away = (my_pos - avg_fire).king_step();
+                if !away.is_zero() {
+                    // Pick the best passable tile away from fire.
+                    let target = my_pos + away;
+                    if game_map.0.is_passable(&target)
+                        && !spatial.entities_at(&target).iter().any(|&e| e != entity && blockers.contains(e))
+                    {
+                        move_intents.write(MoveIntent { entity, dx: away.x, dy: away.y });
+                        update_look_dir(away, &mut ai_look_dir, &mut viewshed);
+                        energy.spend_action();
+                        continue;
+                    }
+                    // If direct flee is blocked, try adjacent tiles away from fire.
+                    let mut best_dir = None;
+                    let mut best_dist = i32::MIN;
+                    for dir in GridVec::DIRECTIONS_8 {
+                        let candidate = my_pos + dir;
+                        if tile_cost_for_ai(candidate, entity, &game_map, &spatial, &blockers).is_none() {
+                            continue;
+                        }
+                        let dist = candidate.chebyshev_distance(avg_fire);
+                        if dist > best_dist {
+                            best_dist = dist;
+                            best_dir = Some(dir);
+                        }
+                    }
+                    if let Some(dir) = best_dir {
+                        move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
+                        update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
+                        energy.spend_action();
+                        continue;
+                    }
+                }
+            }
+        }
+
         // Check if NPC should flee
         if should_flee(&health) {
             if !matches!(*ai, AiState::Fleeing) {
@@ -1147,7 +1205,10 @@ pub fn ai_system(
                             let step = a_star_first_step(my_pos, remembered_pos, |pos| {
                                 tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
                             })
-                            .unwrap_or_else(|| (remembered_pos - my_pos).king_step());
+                            .unwrap_or_else(|| {
+                                let ks = (remembered_pos - my_pos).king_step();
+                                if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
+                            });
 
                             if !step.is_zero() {
                                 move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
@@ -1161,7 +1222,10 @@ pub fn ai_system(
                             if my_pos.chebyshev_distance(ai_tgt.last_pos) > 0 {
                                 let step = a_star_first_step(my_pos, ai_tgt.last_pos, |pos| {
                                     tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
-                                }).unwrap_or_else(|| (ai_tgt.last_pos - my_pos).king_step());
+                                }).unwrap_or_else(|| {
+                                    let ks = (ai_tgt.last_pos - my_pos).king_step();
+                                    if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
+                                });
                                 if !step.is_zero() {
                                     move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
                                     update_look_dir(step, &mut ai_look_dir, &mut viewshed);
@@ -1452,7 +1516,10 @@ pub fn ai_system(
                 let step = a_star_first_step(my_pos, flank_goal, |pos| {
                     tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
                 })
-                .unwrap_or_else(|| (target_vec - my_pos).king_step());
+                .unwrap_or_else(|| {
+                    let ks = (target_vec - my_pos).king_step();
+                    if game_map.0.is_passable(&(my_pos + ks)) { ks } else { GridVec::ZERO }
+                });
 
                 if !step.is_zero() {
                     move_intents.write(MoveIntent {

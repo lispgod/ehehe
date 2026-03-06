@@ -101,22 +101,14 @@ pub fn input_system(
     mut input_state: ResMut<InputState>,
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
-    (mut extra_world_ticks, mut spectating, dynamic_rng, seed, spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
+    (mut extra_world_ticks, _spectating, dynamic_rng, seed, spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
     mut god_mode: ResMut<crate::resources::GodMode>,
 ) {
-    // Handle Dead and Victory states: R to restart, T to spectate.
+    // Handle Dead and Victory states: R to restart only.
     if *game_state.get() == GameState::Dead || *game_state.get() == GameState::Victory {
         for message in messages.read() {
-            match message.code {
-                KeyCode::Char('r') => {
-                    restart_requested.0 = true;
-                }
-                // Allow watching the game continue after death by pressing wait key (T).
-                KeyCode::Char('t') if *game_state.get() == GameState::Dead => {
-                    spectating.0 = true;
-                    next_game_state.set(GameState::Playing);
-                }
-                _ => {}
+            if let KeyCode::Char('r') = message.code {
+                restart_requested.0 = true;
             }
         }
         return;
@@ -132,19 +124,7 @@ pub fn input_system(
         .as_ref()
         .is_some_and(|s| *s.get() == TurnState::AwaitingInput);
 
-    // When spectating after death, automatically advance to WorldTurn
-    // without waiting for player input. Allow R to restart.
-    if spectating.0 && awaiting_input {
-        for message in messages.read() {
-            if let KeyCode::Char('r') = message.code {
-                restart_requested.0 = true;
-                spectating.0 = false;
-                return;
-            }
-        }
-        advance_turn(&mut next_turn_state);
-        return;
-    }
+    // Spectating mode removed — death screen only offers restart.
 
     // ── ESC menu input mode ─────────────────────────────────────
     if input_state.mode == InputMode::EscMenu {

@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Hostile, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, Player, Position, Speed, Stamina, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
@@ -423,33 +423,6 @@ const MEMORY_DURATION: u32 = 40;
 
 // ─────────────────────── AI Decision Helpers ───────────────────────
 
-/// Returns `true` if the NPC has a loaded gun in inventory.
-fn has_loaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
-    inventory.as_ref().is_some_and(|inv| {
-        inv.items.iter().any(|&ent| {
-            item_kinds.get(ent).ok().is_some_and(|k|
-                matches!(*k, ItemKind::Gun { loaded, .. } if loaded > 0)
-            )
-        })
-    })
-}
-
-/// Returns `true` if the NPC has a bow in inventory.
-fn has_bow(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
-    inventory.as_ref().is_some_and(|inv| {
-        inv.items.iter().any(|&ent| {
-            item_kinds.get(ent).ok().is_some_and(|k|
-                matches!(*k, ItemKind::Bow { .. })
-            )
-        })
-    })
-}
-
-/// Returns `true` if the NPC has a ranged weapon (loaded gun or bow).
-fn has_ranged_weapon(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
-    has_loaded_gun(inventory, item_kinds) || has_bow(inventory, item_kinds)
-}
-
 /// Returns `true` if the NPC has an unloaded (but reloadable) gun.
 fn has_unloaded_gun(inventory: &Option<Mut<Inventory>>, item_kinds: &Query<&mut ItemKind>) -> bool {
     inventory.as_ref().is_some_and(|inv| {
@@ -514,38 +487,6 @@ fn flee_direction(
     best_dir
 }
 
-/// Find the best direction to maintain preferred range from a target.
-/// Uses the influence map for approach (weighted A*) and Dijkstra-aware
-/// flee when too close.
-fn kite_direction(
-    my_pos: GridVec,
-    target_pos: GridVec,
-    preferred_range: i32,
-    entity: Entity,
-    game_map: &GameMapResource,
-    spatial: &SpatialIndex,
-    blockers: &Query<(), With<BlocksMovement>>,
-) -> Option<GridVec> {
-    let dist = my_pos.chebyshev_distance(target_pos);
-    if dist == preferred_range {
-        return None;
-    }
-    if dist < preferred_range {
-        flee_direction(my_pos, target_pos, entity, game_map, spatial, blockers)
-    } else {
-        let toward = (target_pos - my_pos).king_step();
-        if !toward.is_zero() {
-            let target = my_pos + toward;
-            if tile_cost_for_ai(target, entity, game_map, spatial, blockers).is_some() {
-                return Some(toward);
-            }
-        }
-        a_star_first_step(my_pos, target_pos, |p| {
-            tile_cost_for_ai(p, entity, game_map, spatial, blockers)
-        })
-    }
-}
-
 /// AI system: runs during `WorldTurn` for every entity with an `AiState`.
 ///
 /// **Architecture**: NPC AI is a decision layer on top of player capabilities.
@@ -570,13 +511,12 @@ fn kite_direction(
 pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, (Option<&Faction>, Option<&Hostile>), Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
+        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
         Without<Player>,
     >,
     player_query: Query<(Entity, &Position, &Health), With<Player>>,
     npc_positions: Query<(Entity, &Position, Option<&Faction>), Without<Player>>,
     floor_items: Query<(Entity, &Position), With<Item>>,
-    hostile_positions: Query<(Entity, &Position), With<Hostile>>,
     game_map: Res<GameMapResource>,
     spatial: Res<SpatialIndex>,
     turn_counter: Res<TurnCounter>,
@@ -600,7 +540,7 @@ pub fn ai_system(
     // When the player is dead, clear all NPC memory so they stop
     // pathfinding toward the player's last known position.
     if !player_alive {
-        for (_, _, mut ai_state, _, _, (_, _), _, _, _, _, _, _, mut mem_opt, _) in &mut ai_query {
+        for (_, _, mut ai_state, _, _, _, _, _, _, _, _, _, mut mem_opt, _) in &mut ai_query {
             if let Some(ref mut mem) = mem_opt {
                 mem.last_known_pos = None;
             }
@@ -622,7 +562,7 @@ pub fn ai_system(
     // faction response (e.g., lawmen converging on a shooter).
     const ALLY_SHARE_RANGE: i32 = 20;
     let mut faction_alerts: HashMap<Faction, Vec<GridVec>> = HashMap::new();
-    for (_, _pos_ref, ai_state, _, _, (faction_opt, _), _, _, _, _, _, _, mem_opt, _) in &ai_query {
+    for (_, _pos_ref, ai_state, _, _, faction_opt, _, _, _, _, _, _, mem_opt, _) in &ai_query {
         if !matches!(*ai_state, AiState::Chasing) { continue; }
         let Some(&f) = faction_opt else { continue; };
         if let Some(mem) = mem_opt
@@ -634,17 +574,16 @@ pub fn ai_system(
             }
     }
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, (faction, is_hostile), mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, personality) in &mut ai_query {
+    for (entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
 
         let my_pos = pos.as_grid_vec();
         let my_faction = faction.copied();
-        let npc_is_hostile = is_hostile.is_some();
 
         // Find the nearest hostile faction entity visible to this NPC.
-        // This includes the player if they are hostile (which they always are to Hostile entities).
+        // Hostility is purely faction-based: entities of different factions are enemies.
         let faction_target: Option<(Entity, GridVec)> = if let Some(my_f) = my_faction {
             let mut best_dist = i32::MAX;
             let mut best = None;
@@ -667,15 +606,16 @@ pub fn ai_system(
             None
         };
 
-        let player_visible = npc_is_hostile && player_vec.is_some_and(|pv|
+        // Player is always visible as a target if in the NPC's viewshed.
+        // Hostility is purely faction-based — all NPCs with a faction target
+        // the player (who has no faction).
+        let player_visible = player_vec.is_some_and(|pv|
             viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&pv))
         );
 
         // Target the closest hostile entity — not always the player.
-        // Chase if:
-        //   1. NPC has the Hostile marker (aggroed by combat), OR
-        //   2. NPC sees a visible faction enemy (factions_are_hostile returns true).
-        let chase_target: Option<(Entity, GridVec)> = if npc_is_hostile {
+        // Chase any visible entity of a different faction (including the player).
+        let chase_target: Option<(Entity, GridVec)> = {
             let player_option = if player_visible {
                 player_info.map(|(e, p, _)| (e, p.as_grid_vec()))
             } else {
@@ -691,11 +631,6 @@ pub fn ai_system(
                 (None, Some(ft)) => Some(ft),
                 (None, None) => None,
             }
-        } else if faction_target.is_some() {
-            // Not yet aggroed, but sees a faction enemy — engage
-            faction_target
-        } else {
-            None
         };
 
         // Update memory when target is visible
@@ -779,8 +714,13 @@ pub fn ai_system(
             let mut count = 0;
             for dir in GridVec::DIRECTIONS_8 {
                 let neighbor = my_pos + dir;
+                // Count entities of different factions as enemies
                 let has_enemy = spatial.entities_at(&neighbor).iter().any(|&e| {
-                    e != entity && hostile_positions.contains(e)
+                    if e == entity { return false; }
+                    npc_positions.get(e).ok().is_some_and(|(_, _, f)| {
+                        f.and_then(|nf| my_faction.map(|mf| factions_are_hostile(mf, *nf)))
+                            .unwrap_or(false)
+                    })
                 });
                 let has_player = player_vec.is_some_and(|pv| pv == neighbor);
                 if has_enemy || has_player {
@@ -1154,10 +1094,11 @@ pub fn ai_system(
                 let dist = my_pos.chebyshev_distance(target_vec);
 
                 // ── PRIORITY 1: Ranged attack — fire guns when enemy is in sights ──
-                // NPCs prioritize shooting at enemies when they have a loaded gun
-                // and clear line of sight. This is the highest combat priority.
+                // NPCs shoot at enemies whenever they have a loaded gun and
+                // clear line of sight — no range limit. If they can see you,
+                // they shoot at you.
                 let mut used_gun = false;
-                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                if dist > 1
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
                     && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
                     && let Some(ref mut inv) = inventory {
@@ -1171,7 +1112,7 @@ pub fn ai_system(
                             let dy = target_vec.y - my_pos.y;
                             ranged_intents.write(RangedAttackIntent {
                                 attacker: entity,
-                                range: AI_RANGED_ATTACK_RANGE,
+                                range: dist.max(AI_RANGED_ATTACK_RANGE),
                                 dx,
                                 dy,
                                 gun_item: Some(gun_entity),
@@ -1199,7 +1140,7 @@ pub fn ai_system(
 
                 // ── PRIORITY 2: Bow attack (unlimited ammo) ──
                 let mut used_bow = false;
-                if dist > 1 && dist <= AI_RANGED_ATTACK_RANGE
+                if dist > 1
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
                     && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
                     && let Some(ref inv) = inventory {
@@ -1214,7 +1155,8 @@ pub fn ai_system(
                                     let dx = target_vec.x - my_pos.x;
                                     let dy = target_vec.y - my_pos.y;
                                     let max_comp = dx.abs().max(dy.abs()).max(1);
-                                    let scale = AI_RANGED_ATTACK_RANGE.div_euclid(max_comp).max(1);
+                                    let range = dist.max(AI_RANGED_ATTACK_RANGE);
+                                    let scale = range.div_euclid(max_comp).max(1);
                                     let endpoint = my_pos + GridVec::new(dx * scale, dy * scale);
                                     crate::systems::projectile::spawn_arrow(
                                         &mut commands,
@@ -1353,18 +1295,6 @@ pub fn ai_system(
                         continue;
                     }
                 }
-
-                // Tactical range management (kiting) for ranged NPCs
-                let pref_range = personality.map(|p| p.preferred_range).unwrap_or(1);
-                let is_ranged_npc = pref_range > 1 && has_ranged_weapon(&inventory, &item_kinds);
-
-                if is_ranged_npc && dist < pref_range
-                    && let Some(dir) = kite_direction(my_pos, target_vec, pref_range, entity, &game_map, &spatial, &blockers) {
-                        move_intents.write(MoveIntent { entity, dx: dir.x, dy: dir.y });
-                        update_look_dir(dir, &mut ai_look_dir, &mut viewshed);
-                        energy.spend_action();
-                        continue;
-                    }
 
                 // Weighted A* pathfinding toward target.
                 // The influence map naturally routes the NPC through cover

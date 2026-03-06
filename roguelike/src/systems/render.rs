@@ -7,7 +7,7 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 
-use crate::components::{AiLookDir, Faction, Health, Hostile, Inventory, ItemKind, Projectile, ProjectileVisual, Stamina, Name, Player, Position, Renderable, Viewshed, display_name, item_display_name};
+use crate::components::{AiLookDir, Faction, Health, Inventory, ItemKind, Projectile, ProjectileVisual, Stamina, Name, Player, Position, Renderable, Viewshed, display_name, item_display_name};
 use crate::grid_vec::GridVec;
 use crate::resources::{
     BloodMap, CameraPosition, Collectibles, CombatLog, CursorPosition, GameMapResource, GameState, InputMode,
@@ -80,8 +80,8 @@ pub fn draw_system(
         With<Player>,
     >,
     item_query: Query<(Option<&Name>, Option<&ItemKind>), With<crate::components::Item>>,
-    npc_viewsheds: Query<(&Viewshed, Option<&Faction>, &Position, Option<&AiLookDir>, Option<&Hostile>)>,
-    npc_info_query: Query<(&Position, Option<&Name>, Option<&Faction>, Option<&Inventory>, Option<&Health>, Option<&Hostile>), Without<Player>>,
+    npc_viewsheds: Query<(&Viewshed, Option<&Faction>, &Position, Option<&AiLookDir>)>,
+    npc_info_query: Query<(&Position, Option<&Name>, Option<&Faction>, Option<&Inventory>, Option<&Health>), Without<Player>>,
     projectiles: Query<(&Position, &Renderable, &Projectile)>,
     state: Res<State<GameState>>,
     combat_log: Res<CombatLog>,
@@ -212,15 +212,15 @@ pub fn draw_system(
         }
 
         // Tint NPC field-of-view with colored hues.
-        // Hostile NPCs: tint their FULL visible FOV with red.
-        // Non-hostile NPCs: tint only a small arc in their facing direction (direction indicator).
+        // All NPCs (hostile or not): tint only a small arc in their facing direction.
+        // This shows just enough of their FOV to indicate where they're looking.
         // Animals (Wildlife) and Civilians are excluded from FOV highlighting.
         {
-            /// Maximum Chebyshev distance from a non-hostile NPC for direction tint.
-            const FOV_TINT_ARC_RADIUS: i32 = 5;
+            /// Maximum Chebyshev distance from an NPC for direction tint.
+            const FOV_TINT_ARC_RADIUS: i32 = 8;
 
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
-            for (vs, faction, npc_pos, ai_look, hostile) in &npc_viewsheds {
+            for (vs, faction, npc_pos, ai_look) in &npc_viewsheds {
                 if faction.is_some_and(|f| matches!(f, Faction::Wildlife | Faction::Civilians)) {
                     continue;
                 }
@@ -233,27 +233,19 @@ pub fn draw_system(
                     continue;
                 }
 
-                let is_hostile = hostile.is_some();
-
-                if is_hostile {
-                    // Hostile: tint full visible FOV
-                    for &tile in &vs.visible_tiles {
-                        enemy_visible.insert(tile);
-                    }
-                } else {
-                    // Non-hostile: only tint small arc in facing direction
-                    for &tile in &vs.visible_tiles {
-                        let diff = tile - npc_gv;
-                        if diff.x.abs().max(diff.y.abs()) <= FOV_TINT_ARC_RADIUS {
-                            if let Some(look) = ai_look {
-                                let dot = diff.x as i64 * look.0.x as i64
-                                        + diff.y as i64 * look.0.y as i64;
-                                if dot <= 0 && diff != GridVec::ZERO {
-                                    continue;
-                                }
+                // Tint only a small arc in facing direction — just enough to
+                // see where people are looking.
+                for &tile in &vs.visible_tiles {
+                    let diff = tile - npc_gv;
+                    if diff.x.abs().max(diff.y.abs()) <= FOV_TINT_ARC_RADIUS {
+                        if let Some(look) = ai_look {
+                            let dot = diff.x as i64 * look.0.x as i64
+                                    + diff.y as i64 * look.0.y as i64;
+                            if dot <= 0 && diff != GridVec::ZERO {
+                                continue;
                             }
-                            enemy_visible.insert(tile);
                         }
+                        enemy_visible.insert(tile);
                     }
                 }
             }
@@ -570,12 +562,13 @@ pub fn draw_system(
         }
 
         // NPCs and ground items at cursor
-        for (npc_pos, npc_name, npc_fac, npc_inv, npc_hp, npc_hostile) in &npc_info_query {
+        for (npc_pos, npc_name, npc_fac, npc_inv, npc_hp) in &npc_info_query {
             if npc_pos.as_grid_vec() == cursor_world
                 && cursor_npc_name.is_empty() {
                     cursor_npc_name = display_name(npc_name).to_string();
                     cursor_npc_faction = npc_fac.map_or("".into(), |f| format!("{f:?}"));
-                    cursor_npc_hostile = npc_hostile.is_some();
+                    // Hostility is faction-based: all NPCs with a faction are hostile to the player.
+                    cursor_npc_hostile = npc_fac.is_some();
                     if let Some(hp) = npc_hp {
                         cursor_npc_hp = format!("{}/{}", hp.current, hp.max);
                     }

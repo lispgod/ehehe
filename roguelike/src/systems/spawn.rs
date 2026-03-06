@@ -300,7 +300,6 @@ pub fn spawn_monster(
 
     // Compute personality based on faction and position hash.
     // AI is highly aggressive — all factions are combat-ready.
-    let is_ranged = template.has_gun || matches!(template.faction, Faction::Indians);
     let personality_hash = item_hash.wrapping_mul(7) ^ (x.wrapping_add(y)).unsigned_abs();
     let aggression = 0.7 + (personality_hash % 4) as f64 * 0.075; // 0.7 – 0.925
     let courage = if matches!(template.faction, Faction::Wildlife) {
@@ -308,7 +307,6 @@ pub fn spawn_monster(
     } else {
         0.7 + (personality_hash % 4) as f64 * 0.075 // 0.7 – 0.925
     };
-    let preferred_range = if is_ranged { 3 + (personality_hash % 4) as i32 } else { 1 };
 
     // Humanoid NPCs get a small stamina pool for special actions.
     let npc_stamina = if matches!(template.faction, Faction::Wildlife) {
@@ -344,7 +342,6 @@ pub fn spawn_monster(
         AiPersonality {
             aggression,
             courage,
-            preferred_range,
         },
         LootTable,
         Viewshed {

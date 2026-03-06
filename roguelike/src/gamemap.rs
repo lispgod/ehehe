@@ -387,7 +387,7 @@ impl GameMap {
             for x in 0..width {
                 let pos = GridVec::new(x, y);
                 if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach) | Some(Floor::Bridge)) {
                         voxel.props = None;
                     }
             }
@@ -418,13 +418,20 @@ impl GameMap {
         }
     }
 
-    /// Returns `true` if the tile at `point` is passable (no blocking props).
+    /// Returns `true` if the tile at `point` is passable (no blocking props
+    /// and not deep/shallow water).
     #[inline]
     pub fn is_passable(&self, point: &MyPoint) -> bool {
         self.get_voxel_at(point)
-            .is_some_and(|v| match &v.props {
-                Some(f) => !f.blocks_movement(),
-                None => true,
+            .is_some_and(|v| {
+                // Water tiles block movement (no swimming).
+                if matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
+                    return false;
+                }
+                match &v.props {
+                    Some(f) => !f.blocks_movement(),
+                    None => true,
+                }
             })
     }
 
@@ -1544,6 +1551,10 @@ fn place_desert_decorations(
                 if matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk)) {
                     continue;
                 }
+                // Skip bridge tiles — no decorations on river bridges.
+                if matches!(voxel.floor, Some(Floor::Bridge)) {
+                    continue;
+                }
             } else {
                 continue;
             }
@@ -1967,7 +1978,8 @@ fn place_rock_formations(map: &mut GameMap, width: CoordinateUnit, height: Coord
                 if let Some(voxel) = map.get_voxel_at(&pos) {
                     if voxel.props.is_some() { continue; }
                     if matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)
-                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)) {
+                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)
+                        | Some(Floor::Bridge)) {
                         continue;
                     }
                 }

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{AiState, Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Hostile, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
+use crate::components::{AiState, Caliber, CollectibleKind, CombatStats, Dead, Faction, Health, Inventory, Item, ItemKind, LastDamageSource, LootTable, Name, Player, Position, Renderable, display_name};
 use crate::events::{AiRangedAttackIntent, AttackIntent, DamageEvent, MeleeWideIntent, RangedAttackIntent};
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, DynamicRng, GameMapResource, GameState, KillCount, MapSeed, SoundEvents, TurnCounter};
@@ -25,6 +25,36 @@ const SMOKE_BASE_RADIUS: f64 = 0.8;
 /// Additional radius in the firing direction (directional plume stretch).
 const SMOKE_DIRECTIONAL_SCALE: f64 = 2.0;
 
+/// Maximum spread angle in radians (~1.5°). Very small — just enough to
+/// occasionally shift a bullet by one tile at long range.
+const GUN_SPREAD_ANGLE: f64 = 0.026;
+
+/// Applies a small angular spread to a direction vector.
+/// `roll` is a `[0, 1)` noise value that drives the random offset.
+/// Returns the adjusted `(dx, dy)` direction, guaranteed non-zero when
+/// the input was non-zero.
+fn apply_gun_spread(dx: CoordinateUnit, dy: CoordinateUnit, roll: f64) -> (CoordinateUnit, CoordinateUnit) {
+    let fdx = dx as f64;
+    let fdy = dy as f64;
+    let len = (fdx * fdx + fdy * fdy).sqrt();
+    if len < 0.01 {
+        return (dx, dy);
+    }
+    // Map roll [0,1) to angle offset [-SPREAD, +SPREAD].
+    let angle_offset = (roll * 2.0 - 1.0) * GUN_SPREAD_ANGLE;
+    let cos_a = angle_offset.cos();
+    let sin_a = angle_offset.sin();
+    let new_dx = fdx * cos_a - fdy * sin_a;
+    let new_dy = fdx * sin_a + fdy * cos_a;
+    // Scale back to integer, preserving magnitude so Bresenham line length stays correct.
+    let new_len = (new_dx * new_dx + new_dy * new_dy).sqrt();
+    let scale = len / new_len;
+    let rdx = (new_dx * scale).round() as CoordinateUnit;
+    let rdy = (new_dy * scale).round() as CoordinateUnit;
+    // Ensure we don't collapse the direction to zero.
+    if rdx == 0 && rdy == 0 { (dx, dy) } else { (rdx, rdy) }
+}
+
 /// Spawns a small cloud of gun smoke at the firing position.
 /// Places persistent SandCloud floor tiles on the map that block sight.
 /// Saves the previous floor type for restoration when smoke dissipates.
@@ -48,7 +78,7 @@ fn spawn_gun_smoke(game_map: &mut GameMapResource, origin: GridVec, turn: u32, f
 /// Uses `CombatStats::damage_against` for the base damage model.
 /// Emits a `DamageEvent` for each successful hit and logs combat messages.
 ///
-/// After dealing damage, adds `Hostile` to both attacker and target.
+/// After dealing damage, nearby same-faction NPCs within 8 tiles become alert;
 /// Nearby same-faction NPCs within 8 tiles also become hostile;
 /// other-faction NPCs within 8 tiles start fleeing.
 pub fn combat_system(
@@ -127,12 +157,10 @@ pub fn combat_system(
         aggro_targets.push((intent.attacker, intent.target, target_pos));
     }
 
-    // Apply aggro: make attacker and target Hostile, propagate to nearby NPCs
+    // Apply aggro: propagate alert to nearby NPCs.
+    // Hostility is purely faction-based — no Hostile component needed.
     let player_entity = player_query.single().ok();
     for (attacker, target, target_pos) in aggro_targets {
-        commands.entity(target).insert(Hostile);
-        commands.entity(attacker).insert(Hostile);
-
         // Increase star level when the player attacks someone
         if player_entity == Some(attacker) {
             star_level.level = (star_level.level + 1).min(5);
@@ -150,10 +178,7 @@ pub fn combat_system(
                 if nv.chebyshev_distance(t_pos) > AGGRO_RADIUS { continue; }
 
                 if let Some(&nf) = nearby_fac {
-                    if target_faction.is_some_and(|tf| tf == nf) {
-                        // Same faction as target: become hostile too
-                        commands.entity(nearby_ent).insert(Hostile);
-                    } else {
+                    if !target_faction.is_some_and(|tf| tf == nf) {
                         // Different faction: start fleeing
                         commands.entity(nearby_ent).insert(AiState::Fleeing);
                     }
@@ -197,7 +222,7 @@ pub fn apply_damage_system(
 /// If the player dies, transitions to the Dead state.
 pub fn death_system(
     mut commands: Commands,
-    query: Query<(Entity, &Health, Option<&Name>, Option<&Hostile>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
+    query: Query<(Entity, &Health, Option<&Name>, Option<&Position>, Option<&LootTable>, Option<&Player>, Option<&LastDamageSource>, Option<&Inventory>, Option<&Faction>)>,
     player_entities: Query<Entity, With<Player>>,
     item_query: Query<&ItemKind>,
     mut combat_log: ResMut<CombatLog>,
@@ -208,7 +233,7 @@ pub fn death_system(
 ) {
     let player_entity = player_entities.single().ok();
 
-    for (entity, health, name, hostile, pos, loot_table, is_player, last_damage_source, inventory, faction) in &query {
+    for (entity, health, name, pos, loot_table, is_player, last_damage_source, inventory, faction) in &query {
         if !health.is_dead() {
             continue;
         }
@@ -244,7 +269,8 @@ pub fn death_system(
             continue; // don't despawn the player (UI reads stats from it)
         }
 
-        if hostile.is_some() {
+        // Count kills for any entity with a faction (hostility is faction-based).
+        if faction.is_some() {
             let player_killed = player_entity.is_some_and(|pe|
                 last_damage_source.is_some_and(|lds| lds.0 == pe)
             );
@@ -376,16 +402,17 @@ pub fn ranged_attack_system(
         let c_name = display_name(caster_name);
 
         // Determine damage and consume a loaded round from the gun item.
+        // Damage is strictly based on caliber: .31 cal = 31 damage, etc.
         let damage;
         if let Some(gun_entity) = intent.gun_item {
             if let Ok(mut kind) = item_kind_query.get_mut(gun_entity) {
-                if let ItemKind::Gun { loaded, attack, .. } = kind.as_mut() {
+                if let ItemKind::Gun { loaded, caliber, .. } = kind.as_mut() {
                     if *loaded <= 0 {
                         combat_log.push("Gun is empty!".into());
                         continue;
                     }
                     *loaded -= 1;
-                    damage = *attack;
+                    damage = caliber.damage();
                 } else {
                     continue;
                 }
@@ -413,8 +440,12 @@ pub fn ranged_attack_system(
             continue;
         }
 
+        // Apply gun spread: slight random angular offset to the trajectory.
+        let spread_roll = dynamic_rng.roll(seed.0, (origin.x as u64).wrapping_mul(7) ^ (origin.y as u64) ^ 0x5BAD);
+        let (spread_dx, spread_dy) = apply_gun_spread(dx, dy, spread_roll);
+
         // Compute the bullet endpoint.
-        let endpoint = bullet_endpoint(origin, dx, dy, intent.range);
+        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, intent.range);
 
         combat_log.push(format!("{c_name} fires!"));
         sound_events.add(origin);
@@ -467,15 +498,16 @@ pub fn ai_ranged_attack_system(
         }
 
         // NPC consumes a loaded round from their gun, just like the player.
+        // Damage is strictly based on caliber: .31 cal = 31 damage, etc.
         let mut damage = attacker_stats.attack;
         if let Some(inv) = inventory {
             let mut fired = false;
             for &item_ent in &inv.items {
                 if let Ok(mut kind) = item_kind_query.get_mut(item_ent)
-                    && let ItemKind::Gun { ref mut loaded, attack, .. } = *kind
+                    && let ItemKind::Gun { ref mut loaded, caliber, .. } = *kind
                         && *loaded > 0 {
                             *loaded -= 1;
-                            damage = attack;
+                            damage = caliber.damage();
                             fired = true;
                             break;
                         }
@@ -486,8 +518,13 @@ pub fn ai_ranged_attack_system(
             }
         }
 
+        // Apply gun spread: slight random angular offset to the trajectory.
+        let spread_seed = (origin.x as u64).wrapping_mul(13) ^ (origin.y as u64) ^ intent.attacker.to_bits();
+        let spread_roll = crate::noise::value_noise(origin.x, origin.y, spread_seed);
+        let (spread_dx, spread_dy) = apply_gun_spread(dx, dy, spread_roll);
+
         // Compute bullet endpoint.
-        let endpoint = bullet_endpoint(origin, dx, dy, intent.range);
+        let endpoint = bullet_endpoint(origin, spread_dx, spread_dy, intent.range);
 
         combat_log.push_at(format!("{a_name} fires!"), origin);
         sound_events.add(origin);
@@ -515,7 +552,7 @@ pub fn ai_ranged_attack_system(
 /// Minimum prop damage per kick to ensure weak kicks still damage props.
 const MIN_PROP_DAMAGE: i32 = 5;
 pub fn melee_wide_system(
-    mut commands: Commands,
+    _commands: Commands,
     mut intents: MessageReader<MeleeWideIntent>,
     mut damage_events: MessageWriter<DamageEvent>,
     attacker_query: Query<(&Position, &CombatStats, Option<&Name>), With<Player>>,
@@ -558,9 +595,6 @@ pub fn melee_wide_system(
                 combat_log.push(format!("{a_name} kicks {t_name} for {damage} damage!"));
                 hit_count += 1;
             }
-
-            // Aggro the target
-            commands.entity(target_entity).insert(Hostile);
 
             // Calculate push direction (away from attacker)
             let push_dir = (tv - origin).king_step();

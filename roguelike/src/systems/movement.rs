@@ -4,7 +4,7 @@ use crate::components::{BlocksMovement, Dead, Health, Player, Position, Stamina,
 use crate::events::MoveIntent;
 use crate::grid_vec::GridVec;
 use crate::resources::{BloodMap, CombatLog, CursorPosition, GameMapResource, GameState, InputState, SpatialIndex, TurnCounter, TurnState};
-use crate::typeenums::{Floor, Props};
+use crate::typeenums::Props;
 
 /// Health threshold below which entities leave blood trails when moving.
 const BLOOD_DRIP_THRESHOLD: i32 = 40;
@@ -128,36 +128,17 @@ pub fn victory_check_system(
     }
 }
 
-/// Logs a swimming message and applies extra world ticks when the player
-/// moves through water tiles, making water movement extra slow.
-///
-/// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
-/// automatically skipped when the player entity doesn't exist.
+/// Water tiles now block movement entirely (no swimming), so there is
+/// nothing to slow down. This system is kept as a no-op stub so the
+/// plugin's system registration doesn't need to change.
 pub fn water_slowdown_system(
-    player_pos: Single<&Position, With<Player>>,
-    game_map: Res<GameMapResource>,
-    mut extra_ticks: ResMut<crate::resources::ExtraWorldTicks>,
-    mut combat_log: ResMut<CombatLog>,
-    turn_state: Option<Res<State<TurnState>>>,
+    _player_pos: Single<&Position, With<Player>>,
+    _game_map: Res<GameMapResource>,
+    _extra_ticks: ResMut<crate::resources::ExtraWorldTicks>,
+    _combat_log: ResMut<CombatLog>,
+    _turn_state: Option<Res<State<TurnState>>>,
 ) {
-    let is_player_turn = turn_state.as_ref().is_some_and(|ts| *ts.get() == TurnState::PlayerTurn);
-    if !is_player_turn {
-        return;
-    }
-    let gv = player_pos.as_grid_vec();
-    if let Some(voxel) = game_map.0.get_voxel_at(&gv) {
-        match &voxel.floor {
-            Some(Floor::ShallowWater) => {
-                combat_log.push("You are swimming through shallow water...".into());
-                extra_ticks.0 = extra_ticks.0.max(3);
-            }
-            Some(Floor::DeepWater) => {
-                combat_log.push("You are swimming through deep water! Very slow!".into());
-                extra_ticks.0 = extra_ticks.0.max(6);
-            }
-            _ => {}
-        }
-    }
+    // Water is impassable; this system is intentionally a no-op.
 }
 
 /// Damage dealt by walking into a cactus (adjacent tile).

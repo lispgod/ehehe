@@ -265,8 +265,6 @@ pub struct AiPersonality {
     pub aggression: f64,
     /// How willing the NPC is to stay in fights when wounded (0.0 = coward, 1.0 = fearless).
     pub courage: f64,
-    /// Preferred engagement distance. Ranged NPCs prefer > 3, melee prefer 1.
-    pub preferred_range: i32,
 }
 
 impl Default for AiPersonality {
@@ -274,13 +272,13 @@ impl Default for AiPersonality {
         Self {
             aggression: 0.5,
             courage: 0.5,
-            preferred_range: 1,
         }
     }
 }
 
-/// Marker component: tags entities hostile to the player.
-/// Used by bump-to-attack: moving into a hostile entity's tile triggers combat.
+/// Deprecated: Hostility is now determined purely by faction.
+/// This marker component is kept for backward compatibility with tests
+/// but is no longer inserted by any game system.
 #[derive(Component, Debug)]
 pub struct Hostile;
 

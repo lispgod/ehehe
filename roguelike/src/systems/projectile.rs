@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 
-use crate::components::{Health, Hostile, Name, Player, Position, Projectile, ProjectileVisual, Renderable, ThrownItemProjectile, display_name};
+use crate::components::{Faction, Health, Name, Player, Position, Projectile, ProjectileVisual, Renderable, ThrownItemProjectile, display_name};
 use crate::events::DamageEvent;
 use crate::grid_vec::GridVec;
 use crate::noise::value_noise;
 use crate::resources::{CombatLog, GameMapResource, SoundEvents};
+use crate::systems::ai::factions_are_hostile;
 use crate::typedefs::RatColor;
 
 /// Bullet travel speed in tiles per game turn.
@@ -235,23 +236,25 @@ pub fn projectile_system(
     mut commands: Commands,
     mut projectiles: Query<(Entity, &mut Position, &mut Projectile, &mut Renderable, Option<&ThrownItemProjectile>), Without<crate::components::ThrownExplosive>>,
     mut damage_events: MessageWriter<DamageEvent>,
-    targets: Query<(Entity, &Position, &Health, Option<&Name>), (With<Hostile>, Without<Projectile>)>,
+    targets: Query<(Entity, &Position, &Health, Option<&Name>, Option<&Faction>), (Without<Player>, Without<Projectile>)>,
     player_query: Query<(Entity, &Position, &Health, Option<&Name>), (With<Player>, Without<Projectile>)>,
+    source_factions: Query<Option<&Faction>>,
     source_names: Query<Option<&Name>>,
     game_map: Res<GameMapResource>,
     mut combat_log: ResMut<CombatLog>,
     mut sound_events: ResMut<SoundEvents>,
     time: Option<Res<Time>>,
 ) {
-    // Build a lookup of hostile entities by position for O(1) hit detection.
-    let mut target_by_pos: std::collections::HashMap<GridVec, Vec<(Entity, String, i32)>> =
+    // Build a lookup of damageable entities by position for O(1) hit detection.
+    // Hostility is purely faction-based: entities of different factions are hostile.
+    let mut target_by_pos: std::collections::HashMap<GridVec, Vec<(Entity, String, i32, Option<Faction>)>> =
         std::collections::HashMap::new();
-    for (target_entity, target_pos, target_health, target_name) in &targets {
+    for (target_entity, target_pos, target_health, target_name, target_faction) in &targets {
         let t_name = display_name(target_name).to_string();
         target_by_pos
             .entry(target_pos.as_grid_vec())
             .or_default()
-            .push((target_entity, t_name, target_health.max));
+            .push((target_entity, t_name, target_health.max, target_faction.copied()));
     }
 
     // Player position for NPC bullet hits and shrapnel self-damage.
@@ -273,8 +276,9 @@ pub fn projectile_system(
 
         let mut despawn = false;
 
-        // Look up the name of the entity that fired this projectile.
+        // Look up the name and faction of the entity that fired this projectile.
         let source_name = display_name(source_names.get(proj.source).ok().flatten());
+        let source_faction = source_factions.get(proj.source).ok().flatten().copied();
 
         // Label for combat log messages based on projectile type.
         let proj_label = match proj.visual {
@@ -294,13 +298,19 @@ pub fn projectile_system(
                 break;
             }
 
-            // Check for hostile entities at this tile.
+            // Check for entities at this tile.
+            // Hostility is faction-based: only hit entities of different factions.
             // Penetration model: the first hit deals full penetration damage.
-            // Penetration is not reduced on hit.
             if let Some(entities_here) = target_by_pos.get(&tile) {
-                for (target_entity, t_name, t_max_hp) in entities_here {
+                for (target_entity, t_name, t_max_hp, target_faction) in entities_here {
                     if proj.penetration <= 0 {
                         break;
+                    }
+                    // Skip same-faction targets (friendly fire protection).
+                    if let (Some(sf), Some(tf)) = (source_faction, target_faction) {
+                        if !factions_are_hostile(sf, *tf) {
+                            continue;
+                        }
                     }
 
                     // Chance-to-hit for bullets (shrapnel/thrown always hits).
@@ -346,6 +356,11 @@ pub fn projectile_system(
                         tile,
                     );
                     sound_events.add(tile);
+                    // Thrown weapons (knives/tomahawks) stop on first hit.
+                    if proj.visual == ProjectileVisual::SpinningBlade {
+                        proj.penetration = 0;
+                        break;
+                    }
                 }
                 if proj.penetration <= 0 {
                     despawn = true;

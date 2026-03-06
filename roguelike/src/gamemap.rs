@@ -1141,21 +1141,22 @@ fn generate_buildings_bsp(
         }
 
         // AABB overlap check against all already-placed footprints
-        let margin_pad = 1;
+        let overlap_margin = 1;
         let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
             rects_overlap(
-                bx - margin_pad,
-                by - margin_pad,
-                bw + margin_pad * 2,
-                bh + margin_pad * 2,
+                bx - overlap_margin,
+                by - overlap_margin,
+                bw + overlap_margin * 2,
+                bh + overlap_margin * 2,
                 px, py, pw, ph,
             )
         });
 
         if overlaps {
             // Constraint propagation: try a smaller structure
-            let sbw = bw - 2;
-            let sbh = bh - 2;
+            let fallback_shrink = 2;
+            let sbw = bw - fallback_shrink;
+            let sbh = bh - fallback_shrink;
             if sbw >= 6 && sbh >= 5 {
                 let still_overlaps = placed.iter().any(|&(px, py, pw, ph)| {
                     rects_overlap(bx, by, sbw, sbh, px, py, pw, ph)
@@ -1184,13 +1185,13 @@ fn generate_buildings_bsp(
 fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
     // BSP padding creates wider gaps than the old row-band layout.
     // Detect gaps up to 6 tiles (BSP_PADDING + 2 × building pad).
-    let max_gap: i64 = 6;
+    let alley_gap_threshold: i64 = 6;
     for (i, a) in buildings.iter().enumerate() {
         for b in &buildings[i + 1..] {
             // Only horizontal adjacency with overlapping Y ranges
             if a.y < b.y + b.h && b.y < a.y + a.h {
                 let gap = b.x as i64 - (a.x + a.w) as i64;
-                if (1..=max_gap).contains(&gap) {
+                if (1..=alley_gap_threshold).contains(&gap) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -1205,7 +1206,7 @@ fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
                 }
                 // Check reverse direction
                 let gap_rev = a.x as i64 - (b.x + b.w) as i64;
-                if (1..=max_gap).contains(&gap_rev) {
+                if (1..=alley_gap_threshold).contains(&gap_rev) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -1674,7 +1675,8 @@ fn place_exterior_props(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
         }
         2 => {
             // Stable: corral fence attached to rear, hay and water
-            for dx in 0..b.w.min(6) {
+            let corral_max_width: CoordinateUnit = 6;
+            for dx in 0..b.w.min(corral_max_width) {
                 set_prop(map, b.x + dx, b.y - 1, Props::Fence);
             }
             set_prop(map, b.x + 2, b.y - 2, Props::HayBale);

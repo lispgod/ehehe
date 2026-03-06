@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, PlayerControlled, Position, Speed, Stamina, Viewshed};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiState, AiTarget, AimingStyle, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, PlayerControlled, Position, Speed, Stamina, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
@@ -306,6 +306,31 @@ fn dijkstra_map(
 /// AI range for soldier ranged attacks.
 const AI_RANGED_ATTACK_RANGE: i32 = 15;
 
+/// Knuth multiplicative hash constant (golden-ratio-derived prime) for aiming style selection.
+const HASH_KNUTH: u64 = 2654435761;
+/// LCG multiplier (from PCG family) for pseudo-random spread calculations.
+const HASH_LCG: u64 = 6364136223846793005;
+
+/// Assigns a random [`AimingStyle`] and sets [`AiTarget`] on an entity
+/// transitioning to [`AiState::Chasing`].
+fn assign_aiming_style(
+    commands: &mut Commands,
+    entity: Entity,
+    turn: u32,
+    chase_target: Option<(Entity, GridVec)>,
+) {
+    let aim_hash = (entity.to_bits() ^ turn as u64).wrapping_mul(HASH_KNUTH);
+    let style = match aim_hash % 3 {
+        0 => AimingStyle::CarefulAim,
+        1 => AimingStyle::SnapShot,
+        _ => AimingStyle::Suppression,
+    };
+    commands.entity(entity).insert(style);
+    if let Some((te, tv)) = chase_target {
+        commands.entity(entity).insert(AiTarget { entity: te, last_pos: tv, last_seen: turn });
+    }
+}
+
 /// Updates the NPC's look direction and marks the viewshed dirty.
 /// Used after movement or rotation to ensure FOV is recalculated.
 fn update_look_dir(
@@ -511,7 +536,7 @@ fn flee_direction(
 pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
-        (Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>, Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>),
+        ((Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>), (Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>, Option<&AiTarget>, Option<&AimingStyle>)),
         Without<PlayerControlled>,
     >,
     player_query: Query<(Entity, &Position, &Health), With<PlayerControlled>>,
@@ -540,7 +565,7 @@ pub fn ai_system(
     // When the player is dead, clear all NPC memory so they stop
     // pathfinding toward the player's last known position.
     if !player_alive {
-        for (_, _, mut ai_state, _, _, _, _, _, _, _, _, _, mut mem_opt, _) in &mut ai_query {
+        for ((_, _, mut ai_state, _, _, _, _, _), (_, _, _, _, mut mem_opt, _, _, _)) in &mut ai_query {
             if let Some(ref mut mem) = mem_opt {
                 mem.last_known_pos = None;
             }
@@ -562,7 +587,7 @@ pub fn ai_system(
     // faction response (e.g., lawmen converging on a shooter).
     const ALLY_SHARE_RANGE: i32 = 20;
     let mut faction_alerts: HashMap<Faction, Vec<GridVec>> = HashMap::new();
-    for (_, _pos_ref, ai_state, _, _, faction_opt, _, _, _, _, _, _, mem_opt, _) in &ai_query {
+    for ((_, _pos_ref, ai_state, _, _, faction_opt, _, _), (_, _, _, _, mem_opt, _, _, _)) in &ai_query {
         if !matches!(*ai_state, AiState::Chasing) { continue; }
         let Some(&f) = faction_opt else { continue; };
         if let Some(mem) = mem_opt
@@ -574,7 +599,7 @@ pub fn ai_system(
             }
     }
 
-    for (entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin, mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality) in &mut ai_query {
+    for ((entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin), (mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality, ai_target, aiming_style)) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
@@ -633,12 +658,43 @@ pub fn ai_system(
             }
         };
 
+        // Persistent target tracking via AiTarget
+        let chase_target: Option<(Entity, GridVec)> = if chase_target.is_some() {
+            chase_target
+        } else if let Some(ai_tgt) = ai_target {
+            let viewshed_range = viewshed.as_ref().map(|vs| vs.range).unwrap_or(8) as i32;
+            // Check if the target entity is still alive
+            let target_alive = player_query.get(ai_tgt.entity).is_ok()
+                || npc_positions.get(ai_tgt.entity).is_ok();
+            if !target_alive || my_pos.chebyshev_distance(ai_tgt.last_pos) > viewshed_range + 10 {
+                // Target dead or escaped awareness range — clear AiTarget
+                commands.entity(entity).remove::<AiTarget>();
+                None
+            } else if viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ai_tgt.last_pos)) {
+                // Target visible at last known pos — use it
+                Some((ai_tgt.entity, ai_tgt.last_pos))
+            } else if my_pos.chebyshev_distance(ai_tgt.last_pos) <= viewshed_range + 5 {
+                // Not visible but within awareness range — pursue last known position
+                Some((ai_tgt.entity, ai_tgt.last_pos))
+            } else {
+                commands.entity(entity).remove::<AiTarget>();
+                None
+            }
+        } else {
+            None
+        };
+
         // Update memory when target is visible
         if let Some((_, tv)) = chase_target
             && let Some(ref mut mem) = ai_memory {
                 mem.last_known_pos = Some(tv);
                 mem.last_seen_turn = turn_counter.0;
             }
+
+        // Update AiTarget when target is visible
+        if let Some((te, tv)) = chase_target {
+            commands.entity(entity).insert(AiTarget { entity: te, last_pos: tv, last_seen: turn_counter.0 });
+        }
 
         // Allied target sharing: if this NPC has no direct target but a
         // nearby ally of the same faction is chasing something, adopt
@@ -778,6 +834,7 @@ pub fn ai_system(
             AiState::Idle => {
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
+                    assign_aiming_style(&mut commands, entity, turn_counter.0, chase_target);
                     if let Some((_, tv)) = chase_target {
                         let toward = (tv - my_pos).king_step();
                         if !toward.is_zero() {
@@ -854,6 +911,7 @@ pub fn ai_system(
             AiState::Patrolling => {
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
+                    assign_aiming_style(&mut commands, entity, turn_counter.0, chase_target);
                     continue;
                 }
 
@@ -1059,14 +1117,30 @@ pub fn ai_system(
                             }
                             energy.spend_action();
                             continue;
-                        } else {
-                            *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
-                            if let Some(ref mut mem) = ai_memory {
-                                mem.last_known_pos = None;
-                            }
-                            energy.spend_action();
-                            continue;
                         }
+                        // Check if we have a persistent AiTarget to pursue
+                        if let Some(ai_tgt) = ai_target {
+                            if my_pos.chebyshev_distance(ai_tgt.last_pos) > 0 {
+                                let step = a_star_first_step(my_pos, ai_tgt.last_pos, |pos| {
+                                    tile_cost_for_ai(pos, entity, &game_map, &spatial, &blockers)
+                                }).unwrap_or_else(|| (ai_tgt.last_pos - my_pos).king_step());
+                                if !step.is_zero() {
+                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                                    update_look_dir(step, &mut ai_look_dir, &mut viewshed);
+                                }
+                                energy.spend_action();
+                                continue;
+                            }
+                        }
+                        // Only now fall back to patrolling
+                        *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
+                        if let Some(ref mut mem) = ai_memory {
+                            mem.last_known_pos = None;
+                        }
+                        commands.entity(entity).remove::<AiTarget>();
+                        commands.entity(entity).remove::<AimingStyle>();
+                        energy.spend_action();
+                        continue;
                     }
                 };
 
@@ -1091,6 +1165,15 @@ pub fn ai_system(
                     continue;
                 }
 
+                // CarefulAim: spend an extra turn aiming before firing (every other turn)
+                if matches!(aiming_style, Some(&AimingStyle::CarefulAim)) {
+                    let aim_turn = (entity.to_bits() ^ turn_counter.0 as u64) % 2;
+                    if aim_turn == 0 {
+                        energy.spend_action();
+                        continue;
+                    }
+                }
+
                 let dist = my_pos.chebyshev_distance(target_vec);
 
                 // ── PRIORITY 1: Ranged attack — fire guns when enemy is in sights ──
@@ -1108,8 +1191,27 @@ pub fn ai_system(
                             )
                         });
                         if let Some(gun_entity) = gun_ent {
-                            let dx = target_vec.x - my_pos.x;
-                            let dy = target_vec.y - my_pos.y;
+                            let mut dx = target_vec.x - my_pos.x;
+                            let mut dy = target_vec.y - my_pos.y;
+                            // Apply aiming style modifiers to ranged fire
+                            match aiming_style {
+                                Some(&AimingStyle::SnapShot) => {
+                                    // Wider spread: offset endpoint by a small pseudo-random amount
+                                    let spread_hash = (entity.to_bits() ^ turn_counter.0 as u64).wrapping_mul(HASH_LCG);
+                                    let spread_x = ((spread_hash % 3) as i32) - 1;
+                                    let spread_y = (((spread_hash >> 16) % 3) as i32) - 1;
+                                    dx += spread_x;
+                                    dy += spread_y;
+                                }
+                                Some(&AimingStyle::Suppression) => {
+                                    // Approximate direction only: use king_step scaled up
+                                    let dir = (target_vec - my_pos).king_step();
+                                    let range = dist.max(AI_RANGED_ATTACK_RANGE);
+                                    dx = dir.x * range;
+                                    dy = dir.y * range;
+                                }
+                                _ => {}
+                            }
                             ranged_intents.write(RangedAttackIntent {
                                 attacker: entity,
                                 range: dist.max(AI_RANGED_ATTACK_RANGE),

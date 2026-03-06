@@ -191,12 +191,16 @@ pub fn combat_system(
 /// Applies damage events to entity health pools using `Health::apply_damage`.
 /// Also records the damage source on the target for kill attribution.
 /// When god mode is active, damage to the player is ignored.
+///
+/// A 1d3 variance is applied to all damage: final = base ± rand(1..=3).
 pub fn apply_damage_system(
     mut commands: Commands,
     mut events: MessageReader<DamageEvent>,
     mut health_query: Query<&mut Health>,
     player_query: Query<Entity, With<PlayerControlled>>,
     god_mode: Res<crate::resources::GodMode>,
+    dynamic_rng: Res<crate::resources::DynamicRng>,
+    seed: Res<crate::resources::MapSeed>,
 ) {
     let player_entity = player_query.single().ok();
     for event in events.read() {
@@ -205,7 +209,17 @@ pub fn apply_damage_system(
             continue;
         }
         if let Ok(mut health) = health_query.get_mut(event.target) {
-            health.apply_damage(event.amount);
+            // 1d3 variance: roll [0.0, 1.0), map to {-3,-2,-1,+1,+2,+3}
+            let roll = dynamic_rng.roll(seed.0, event.target.to_bits() ^ event.amount as u64 ^ 0xDA3);
+            let variance = if roll < 0.5 {
+                // Negative: map [0, 0.5) → {-3, -2, -1}
+                -((roll * 6.0) as i32 + 1).min(3)
+            } else {
+                // Positive: map [0.5, 1.0) → {1, 2, 3}
+                (((roll - 0.5) * 6.0) as i32 + 1).min(3)
+            };
+            let final_damage = (event.amount + variance).max(0);
+            health.apply_damage(final_damage);
             if let Some(source) = event.source {
                 commands.entity(event.target).insert(LastDamageSource(source));
             }

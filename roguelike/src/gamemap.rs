@@ -1725,7 +1725,7 @@ fn generate_buildings_bsp(
                     lot_left + lot_w - cur_x
                 } else {
                     let jn = value_noise(c, yi as i32, lot_seed.wrapping_add(111));
-                    let jitter = (jn * 3.0) as CoordinateUnit - 1; // -1, 0, or +1
+                    let jitter = (jn.clamp(0.0, 0.999) * 3.0) as CoordinateUnit - 1;
                     (base_col_w + jitter).max(PLOT_MIN_DIM)
                 };
                 col_ws.push(w);
@@ -1743,7 +1743,7 @@ fn generate_buildings_bsp(
                     lot_top + lot_h - cur_y
                 } else {
                     let jn = value_noise(r, xi as i32, lot_seed.wrapping_add(222));
-                    let jitter = (jn * 3.0) as CoordinateUnit - 1;
+                    let jitter = (jn.clamp(0.0, 0.999) * 3.0) as CoordinateUnit - 1;
                     (base_row_h + jitter).max(PLOT_MIN_DIM)
                 };
                 row_hs.push(h);
@@ -1759,8 +1759,8 @@ fn generate_buildings_bsp(
                     let plot_h = row_hs[r];
 
                     // 1-tile gap between adjacent buildings within the lot
-                    let gap_r: CoordinateUnit = if (c as CoordinateUnit) < cols - 1 { 1 } else { 0 };
-                    let gap_b: CoordinateUnit = if (r as CoordinateUnit) < rows - 1 { 1 } else { 0 };
+                    let gap_r: CoordinateUnit = if c < (cols - 1) as usize { 1 } else { 0 };
+                    let gap_b: CoordinateUnit = if r < (rows - 1) as usize { 1 } else { 0 };
                     let bx = plot_x;
                     let by = plot_y;
                     let bw = plot_w - gap_r;
@@ -2784,12 +2784,15 @@ fn verify_world(
         return Ok(()); // Skip validation on maps without a proper road network
     }
 
-    // 1. No two building footprints overlap (including 1-tile padding margin)
+    // 1. No two building footprints overlap (including 1-tile gap margin).
+    //    Expand one building by 1 tile on each side and check against the
+    //    exact footprint of the other — this enforces a 1-tile minimum gap
+    //    which matches the grid-based lot partitioning gap.
     for (i, a) in buildings.iter().enumerate() {
         for b in &buildings[i + 1..] {
             let overlaps = rects_overlap(
                 a.x - 1, a.y - 1, a.w + 2, a.h + 2,
-                b.x - 1, b.y - 1, b.w + 2, b.h + 2,
+                b.x, b.y, b.w, b.h,
             );
             if overlaps {
                 return Err(format!(
@@ -2934,35 +2937,10 @@ fn verify_world(
     // 7. Bridges now override BeachSand tiles within the road band so
     //    bridge surfaces are clean. No separate verification needed.
 
-    // 8. Every building has a complete wall perimeter (no gaps).
-    //    Spot-check a sample of buildings to keep verification fast.
-    let check_count = buildings.len().min(20);
-    for b in &buildings[..check_count] {
-        for y in b.y..b.y + b.h {
-            for x in b.x..b.x + b.w {
-                let is_edge = x == b.x || x == b.x + b.w - 1 || y == b.y || y == b.y + b.h - 1;
-                if !is_edge { continue; }
-                // Door positions are expected gaps
-                let is_door = (y == b.y + b.h - 1 && x == b.x + b.w / 2)
-                    || (y == b.y && x == b.x + b.w / 2);
-                if is_door { continue; }
-                let is_side_door = if b.w >= 9 || b.h >= 9 {
-                    (x == b.x && y == b.y + b.h / 2)
-                    || (x == b.x + b.w - 1 && y == b.y + b.h / 2)
-                } else { false };
-                if is_side_door { continue; }
-                let pos = GridVec::new(x, y);
-                if let Some(v) = map.get_voxel_at(&pos) {
-                    if !v.props.as_ref().is_some_and(|p| p.is_wall()) {
-                        // Allow rounded-corner and L-shape gaps
-                        if matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)) {
-                            // Wall missing on a building edge — tolerate shape variants
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 8. Wall perimeter integrity is enforced by validate_building_walls()
+    //    during placement. Shape variants (L-shape, rounded corners) have
+    //    intentional wall gaps that make a generic perimeter check fragile,
+    //    so verification trusts the placement-time repair pass.
 
     Ok(())
 }
@@ -4286,6 +4264,33 @@ mod tests {
             pos.x, pos.y,
             map.get_voxel_at(&pos).map(|v| &v.floor),
             map.get_voxel_at(&pos).and_then(|v| v.props.as_ref())
+        );
+    }
+
+    #[test]
+    fn lot_grid_partitioning_produces_multiple_buildings() {
+        // The grid-based lot partitioning should produce more buildings
+        // than the old single-building-per-lot approach. On a map with
+        // multiple road grid cells, empty lots are subdivided into plots.
+        let (buildings, _, _) = generate_buildings_bsp(
+            400, 280, 42, &[60, 100, 140, 180], &[80, 160, 240, 320], 3, 2,
+        );
+        // With 4 avenues and 4 cross streets, there are many lots.
+        // Each lot is partitioned into a grid of plots.
+        assert!(
+            buildings.len() >= 20,
+            "Grid partitioning should produce dense building placement, found {} buildings",
+            buildings.len()
+        );
+        // Verify building type variety — at least 4 distinct kinds
+        let mut kinds: HashSet<u32> = HashSet::new();
+        for b in &buildings {
+            kinds.insert(b.kind);
+        }
+        assert!(
+            kinds.len() >= 4,
+            "Lots should have building variety, found only {} distinct kinds",
+            kinds.len()
         );
     }
 }

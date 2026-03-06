@@ -316,8 +316,8 @@ pub enum Faction {
     Civilians,
     /// Native American faction. No allies.
     Indians,
-    /// Sheriff and deputies. No allies.
-    Sheriff,
+    /// Police officers and deputies. No allies.
+    Police,
 }
 
 /// Bullet caliber for period-accurate cap-and-ball revolvers and rifles.

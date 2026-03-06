@@ -412,7 +412,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
     for (anchor_pos, faction, _name) in &map.0.faction_anchors {
         let (templates, seed_offset): (&[usize], u64) = match faction {
             crate::components::Faction::Civilians => (&[1], 44444),
-            crate::components::Faction::Sheriff => (&[4, 5], 66666),
+            crate::components::Faction::Police => (&[4, 5], 66666),
             crate::components::Faction::Outlaws => (&[6, 7], 77700),
             crate::components::Faction::Lawmen => (&[8, 9], 77800),
             crate::components::Faction::Indians => (&[2, 3], 77900),
@@ -451,7 +451,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
         (&[2, 3], 10, 5),   // Indians: 5 groups
         (&[0], 20, 5),      // Vaqueros: 5 groups
         (&[1], 30, 4),      // Civilians: 4 groups
-        (&[4, 5], 40, 4),   // Sheriff: 4 groups
+        (&[4, 5], 40, 4),   // Police: 4 groups
         (&[6, 7], 50, 6),   // Outlaws: 6 groups
         (&[8, 9], 60, 4),   // Lawmen: 4 groups
     ];

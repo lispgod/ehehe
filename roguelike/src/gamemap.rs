@@ -923,21 +923,25 @@ impl GameMap {
         false
     }
 
-    /// Returns `true` if the tile at `point` is passable (no blocking props
-    /// and not deep/shallow water).
+    /// Returns `true` if the tile at `point` is passable (no blocking props).
+    /// Water tiles are NOT blocked here — bullets, projectiles, and thrown
+    /// items fly over water. Use `is_water()` for NPC/player movement checks.
     #[inline]
     pub fn is_passable(&self, point: &MyPoint) -> bool {
         self.get_voxel_at(point)
             .is_some_and(|v| {
-                // Water tiles block movement (no swimming).
-                if matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
-                    return false;
-                }
                 match &v.props {
                     Some(f) => !f.blocks_movement(),
                     None => true,
                 }
             })
+    }
+
+    /// Returns `true` if the tile at `point` is shallow or deep water.
+    #[inline]
+    pub fn is_water(&self, point: &MyPoint) -> bool {
+        self.get_voxel_at(point)
+            .is_some_and(|v| matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)))
     }
 
     /// Returns `true` if the tile is suitable for spawning an entity:
@@ -1129,7 +1133,7 @@ fn select_desert_floor(biome: f64, detail: f64) -> Floor {
 }
 
 /// Number of distinct building types used during town generation.
-/// Types 0-11: House, Saloon, Stable, General Store, Sheriff's Office,
+/// Types 0-11: House, Saloon, Stable, General Store, Police Station,
 /// Post Office, Church, Bank, Hotel, Jail, Undertaker, Blacksmith.
 const BUILDING_TYPE_COUNT: u32 = 12;
 
@@ -1344,7 +1348,7 @@ fn zone_building_kind(zone: u32, noise: f64) -> u32 {
             if noise < 0.20 { 1 }       // Saloon
             else if noise < 0.40 { 3 }   // General Store
             else if noise < 0.55 { 7 }   // Bank
-            else if noise < 0.70 { 4 }   // Sheriff's Office
+            else if noise < 0.70 { 4 }   // Police Station
             else if noise < 0.85 { 5 }   // Post Office
             else { 9 }                    // Jail
         }
@@ -1390,7 +1394,7 @@ fn pre_place_landmark_anchors(
     let center_x = width / 2;
     let center_y = height / 2;
 
-    // Sheriff's office near the town center
+    // Police station near the town center
     let sx = (center_x - 8 + (value_noise(1, 1, anchor_seed) * 10.0) as CoordinateUnit)
         .clamp(8, width - 20);
     let sy = (center_y - 4 + (value_noise(2, 2, anchor_seed) * 6.0) as CoordinateUnit)
@@ -2045,7 +2049,7 @@ fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: C
 /// defensible building type rather than spawning randomly.
 fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
     // Map building kinds to factions:
-    // 1=Saloon → Outlaws, 2=Stable → Vaqueros, 4=Sheriff → Sheriff,
+    // 1=Saloon → Outlaws, 2=Stable → Vaqueros, 4=Police Station → Police,
     // 7=Bank → Lawmen, 8=Hotel → Civilians, 0=House → Indians (outskirts)
     let mut used_kinds: HashSet<u32> = HashSet::new();
     let mut indians_anchor_assigned = false;
@@ -2063,7 +2067,7 @@ fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
             }
             4 if !used_kinds.contains(&4) => {
                 used_kinds.insert(4);
-                (Faction::Sheriff, "Marshal's Office".to_string())
+                (Faction::Police, "Marshal's Office".to_string())
             }
             7 if !used_kinds.contains(&7) => {
                 used_kinds.insert(7);
@@ -2339,7 +2343,7 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             }
         }
         4 => {
-            // Sheriff's office: desk area in front, rear cell block
+            // Police station: desk area in front, rear cell block
             if iw >= 5 && ih >= 4 {
                 // Wanted posters on front wall
                 set_prop(map, interior_x, interior_y + ih - 1, Props::Sign);
@@ -2626,7 +2630,7 @@ fn place_exterior_props(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
             set_prop(map, b.x + b.w / 2 + 1, b.y + b.h, Props::Barrel);
         }
         4 => {
-            // Sheriff's office: hitching post and wanted poster
+            // Police station: hitching post and wanted poster
             set_prop(map, b.x + b.w / 2, b.y + b.h, Props::HitchingPost);
             set_prop(map, b.x - 1, b.y + b.h / 2, Props::Sign);
         }
@@ -4372,11 +4376,11 @@ mod tests {
         assert!(buildings.len() >= 3,
             "Large map should have at least 3 landmark anchor buildings, found {}",
             buildings.len());
-        // Sheriff (kind=4), Saloon (kind=1), Church (kind=6) should appear
-        let has_sheriff = buildings.iter().any(|b| b.kind == 4);
+        // Police Station (kind=4), Saloon (kind=1), Church (kind=6) should appear
+        let has_police = buildings.iter().any(|b| b.kind == 4);
         let has_saloon = buildings.iter().any(|b| b.kind == 1);
         let has_church = buildings.iter().any(|b| b.kind == 6);
-        assert!(has_sheriff, "Landmark anchors should include sheriff's office");
+        assert!(has_police, "Landmark anchors should include police station");
         assert!(has_saloon, "Landmark anchors should include saloon");
         assert!(has_church, "Landmark anchors should include church");
     }

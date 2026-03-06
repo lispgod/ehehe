@@ -44,6 +44,9 @@ pub fn movement_system(
         // 1. Check map tile walkability (no blocking props).
         let tile_passable = game_map.0.is_passable(&target);
 
+        // 1b. Water blocks NPC/player movement (but not projectiles).
+        let water_blocked = game_map.0.is_water(&target);
+
         // 2. Check spatial index for blocking entities at the target.
         let entity_blocked = spatial.entities_at(&target).iter().any(|&e| {
             e != intent.entity && blockers.contains(e)
@@ -51,7 +54,7 @@ pub fn movement_system(
 
         let is_player = players.contains(intent.entity);
 
-        if tile_passable && !entity_blocked {
+        if tile_passable && !water_blocked && !entity_blocked {
             let old_pos = pos.as_grid_vec();
 
             // ── Blood trail: wounded entities leave blood below 40 HP ─

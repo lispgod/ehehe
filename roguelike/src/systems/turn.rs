@@ -286,13 +286,13 @@ pub fn fire_system(
     }
 }
 
-/// Star level decay and sheriff spawning system.
+/// Star level decay and police spawning system.
 /// Runs every world turn. If the player is not in the vision of any hostile
-/// or sheriff NPC, the unseen counter increments. After enough unseen turns,
-/// star level decays. When star level > 0, sheriffs spawn near the player.
+/// or police NPC, the unseen counter increments. After enough unseen turns,
+/// star level decays. When star level > 0, police spawn near the player.
 ///
 /// Decay: 30 turns unseen = -1 star level.
-/// Sheriff spawn: every 50 turns while star level > 0, spawn a sheriff nearby.
+/// Police spawn: every 50 turns while star level > 0, spawn a police officer nearby.
 ///
 /// Uses `Single` (see `examples/ecs/fallible_params.rs`): the system is
 /// automatically skipped when the player entity doesn't exist.
@@ -312,7 +312,7 @@ pub fn star_level_system(
 
     let player_gv = player_pos.as_grid_vec();
 
-    // Check if the player is in any hostile/sheriff vision
+    // Check if the player is in any hostile/police vision
     let mut player_seen = false;
     for vs in &hostile_viewsheds {
         if vs.visible_tiles.contains(&player_gv) {
@@ -334,9 +334,9 @@ pub fn star_level_system(
         star_level.unseen_turns = 0;
     }
 
-    // Spawn sheriff near player every 50 turns while wanted
-    const SHERIFF_SPAWN_INTERVAL: u32 = 50;
-    if star_level.level > 0 && turn_counter.0 > 0 && turn_counter.0.is_multiple_of(SHERIFF_SPAWN_INTERVAL) {
+    // Spawn police officer near player every 50 turns while wanted
+    const POLICE_SPAWN_INTERVAL: u32 = 50;
+    if star_level.level > 0 && turn_counter.0 > 0 && turn_counter.0.is_multiple_of(POLICE_SPAWN_INTERVAL) {
         // Find a spawnable tile near the player (10-15 tiles away)
         let spawn_hash = (turn_counter.0.wrapping_mul(7919) ^ star_level.level.wrapping_mul(6271)) as i32;
         let dir_idx = (spawn_hash.unsigned_abs() as usize) % 8;
@@ -344,10 +344,10 @@ pub fn star_level_system(
         let dist = 10 + (spawn_hash.unsigned_abs() % 6) as i32;
         let spawn_pos = player_gv + dirs[dir_idx] * dist;
         if game_map.0.is_spawnable(&spawn_pos) {
-            // Use the sheriff template (index 9)
+            // Use the police officer template (index 4)
             let template = &crate::systems::spawn::MONSTER_TEMPLATES[4];
             crate::systems::spawn::spawn_monster(&mut commands, template, spawn_pos.x, spawn_pos.y, 0, 0);
-            // The spawned sheriff is hostile to the player via faction-based hostility
+            // The spawned officer is hostile to the player via faction-based hostility
         }
     }
 }

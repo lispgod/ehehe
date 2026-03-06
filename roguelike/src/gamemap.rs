@@ -386,7 +386,11 @@ impl WorldGenPhase for BuildingPhase {
         height: CoordinateUnit,
         seed: NoiseSeed,
     ) {
-        data.buildings = generate_buildings(width, height, seed, &data.avenue_ys, data.avenue_half_width);
+        let (buildings, open_lots) = generate_buildings_bsp(
+            width, height, seed,
+            &data.avenue_ys, &data.cross_xs, data.avenue_half_width,
+        );
+        data.buildings = buildings;
 
         for b in &data.buildings {
             // Don't place buildings on water
@@ -396,13 +400,21 @@ impl WorldGenPhase for BuildingPhase {
                     continue;
                 }
             place_building(map, b, seed);
+            // Hierarchical placement: exterior props based on building type
+            place_exterior_props(map, b, seed);
         }
+
+        // Fill open lots with contextually appropriate scatter
+        place_open_lot_scatter(map, &open_lots, seed);
 
         // Place narrow alleys between adjacent buildings within blocks
         place_alleys(map, &data.buildings);
 
         // Assign faction anchors from building kinds
         assign_faction_anchors(map, &data.buildings);
+
+        // Transition zone scatter around town perimeter
+        place_transition_zones(map, width, height, seed, &data.buildings);
     }
 }
 
@@ -476,11 +488,14 @@ impl WorldGenPhase for FinalizationPhase {
     fn execute(
         &self,
         map: &mut GameMap,
-        _data: &mut WorldGenData,
+        data: &mut WorldGenData,
         width: CoordinateUnit,
         height: CoordinateUnit,
         _seed: NoiseSeed,
     ) {
+        // Post-pass coherence: verify every building can reach the main street
+        check_connectivity(map, &data.buildings, &data.avenue_ys, width, height);
+
         // Clear around default spawn point and also around the bridge center
         // so the player always has room to spawn.
         clear_around(map, SPAWN_POINT, 6);
@@ -748,175 +763,434 @@ fn select_desert_floor(biome: f64, detail: f64) -> Floor {
 /// Post Office, Church, Bank, Hotel, Jail, Undertaker, Blacksmith.
 const BUILDING_TYPE_COUNT: u32 = 12;
 
-/// District types that influence which building kinds appear in each area.
-/// Derived from Voronoi-style partitioning of the town into themed zones.
-const DISTRICT_RESIDENTIAL: u32 = 0;
-const DISTRICT_COMMERCIAL: u32 = 1;
-const DISTRICT_LIVERY: u32 = 2;
+// ── BSP spatial partitioning ─────────────────────────────────────────────
 
-/// Number of distinct district types.
-/// District 3 is the cantina row (saloons, hotels, entertainment)
-/// and is handled by the catch-all arm of `district_building_kind`.
-const DISTRICT_COUNT: u32 = 4;
+/// Minimum width for a BSP leaf node. Leaves narrower than this cannot
+/// contain a building and are treated as open lots.
+const BSP_MIN_LEAF_W: CoordinateUnit = 14;
+/// Minimum height for a BSP leaf node.
+const BSP_MIN_LEAF_H: CoordinateUnit = 12;
+/// Padding between building footprint and leaf boundary. Creates natural
+/// alleyways and breathing room between adjacent structures.
+const BSP_PADDING: CoordinateUnit = 2;
+/// Maximum BSP recursion depth.
+const BSP_MAX_DEPTH: u32 = 7;
 
-/// Assigns a district type based on position using Voronoi-style partitioning.
-/// Deterministic based on position and seed.
-fn get_district(x: CoordinateUnit, y: CoordinateUnit, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> u32 {
-    let district_seed = seed.wrapping_add(222333);
-    // Place ~8 Voronoi sites across the town
-    let num_sites = 8;
-    let mut min_dist = i64::MAX;
-    let mut best_district = DISTRICT_RESIDENTIAL;
-    for i in 0..num_sites {
-        let sx = (value_noise(i, 0, district_seed) * (width - 80) as f64) as CoordinateUnit + 40;
-        let sy = (value_noise(0, i, district_seed) * (height - 80) as f64) as CoordinateUnit + 40;
-        let dx = (x - sx) as i64;
-        let dy = (y - sy) as i64;
-        let dist = dx * dx + dy * dy;
-        if dist < min_dist {
-            min_dist = dist;
-            // Assign district type based on site index
-            best_district = (value_noise(i, i, district_seed.wrapping_add(444)) * DISTRICT_COUNT as f64) as u32;
-            best_district = best_district.min(DISTRICT_COUNT - 1);
-        }
-    }
-    best_district
+/// Semantic zone types assigned to BSP regions.
+const ZONE_COMMERCIAL: u32 = 0;
+const ZONE_RESIDENTIAL: u32 = 1;
+const ZONE_INDUSTRIAL: u32 = 2;
+
+/// A node in the binary space partition tree. Each node owns an exclusive
+/// rectangular region of the map. Leaf nodes are allocated one building;
+/// internal nodes define the split.
+struct BspNode {
+    x: CoordinateUnit,
+    y: CoordinateUnit,
+    w: CoordinateUnit,
+    h: CoordinateUnit,
+    left: Option<Box<BspNode>>,
+    right: Option<Box<BspNode>>,
 }
 
-/// Selects a building kind based on district type, using weighted random tables.
-fn district_building_kind(district: u32, noise: f64) -> u32 {
-    match district {
-        DISTRICT_RESIDENTIAL => {
-            // Mostly houses, some churches, hotels
-            if noise < 0.55 { 0 }       // House
+impl BspNode {
+    fn new(x: CoordinateUnit, y: CoordinateUnit, w: CoordinateUnit, h: CoordinateUnit) -> Self {
+        Self { x, y, w, h, left: None, right: None }
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.left.is_none() && self.right.is_none()
+    }
+
+    /// Recursively subdivide this node. Splits are biased to align with the
+    /// street network (avenue Y-positions and cross-street X-positions) so
+    /// buildings naturally face roads rather than spawning at arbitrary
+    /// angles to them.
+    fn subdivide(
+        &mut self,
+        seed: NoiseSeed,
+        depth: u32,
+        avenue_ys: &[CoordinateUnit],
+        cross_xs: &[CoordinateUnit],
+    ) {
+        if depth >= BSP_MAX_DEPTH {
+            return;
+        }
+
+        let can_split_h = self.h >= BSP_MIN_LEAF_H * 2 + BSP_PADDING;
+        let can_split_v = self.w >= BSP_MIN_LEAF_W * 2 + BSP_PADDING;
+        if !can_split_h && !can_split_v {
+            return;
+        }
+
+        // Bias: split along the longer axis with randomization so plots
+        // feel organic rather than grid-stamped.
+        let noise = value_noise(
+            self.x + depth as i32,
+            self.y + depth as i32,
+            seed.wrapping_add(depth as u64 * 7919),
+        );
+        let split_horizontal = if can_split_h && can_split_v {
+            if self.h > self.w { noise < 0.7 } else { noise < 0.3 }
+        } else {
+            can_split_h
+        };
+
+        if split_horizontal {
+            let min_y = self.y + BSP_MIN_LEAF_H;
+            let max_y = self.y + self.h - BSP_MIN_LEAF_H - BSP_PADDING;
+            if min_y > max_y {
+                return;
+            }
+            let mid_y = self.y + self.h / 2;
+            let mut split_y = mid_y;
+            // Bias toward nearest avenue so buildings face roads.
+            for &ay in avenue_ys {
+                if ay >= min_y && ay <= max_y
+                    && (ay - mid_y).abs() < (split_y - mid_y).abs() + 8
+                {
+                    split_y = ay;
+                }
+            }
+            let jitter = ((value_noise(
+                self.x,
+                self.y,
+                seed.wrapping_add(33333 + depth as u64),
+            ) - 0.5)
+                * 6.0) as CoordinateUnit;
+            split_y = (split_y + jitter).clamp(min_y, max_y);
+
+            let top_h = split_y - self.y;
+            let bot_y = split_y + BSP_PADDING;
+            let bot_h = (self.y + self.h) - bot_y;
+            if top_h >= BSP_MIN_LEAF_H && bot_h >= BSP_MIN_LEAF_H {
+                self.left = Some(Box::new(BspNode::new(self.x, self.y, self.w, top_h)));
+                self.right = Some(Box::new(BspNode::new(self.x, bot_y, self.w, bot_h)));
+            }
+        } else {
+            let min_x = self.x + BSP_MIN_LEAF_W;
+            let max_x = self.x + self.w - BSP_MIN_LEAF_W - BSP_PADDING;
+            if min_x > max_x {
+                return;
+            }
+            let mid_x = self.x + self.w / 2;
+            let mut split_x = mid_x;
+            for &cx in cross_xs {
+                if cx >= min_x && cx <= max_x
+                    && (cx - mid_x).abs() < (split_x - mid_x).abs() + 8
+                {
+                    split_x = cx;
+                }
+            }
+            let jitter = ((value_noise(
+                self.y,
+                self.x,
+                seed.wrapping_add(44444 + depth as u64),
+            ) - 0.5)
+                * 6.0) as CoordinateUnit;
+            split_x = (split_x + jitter).clamp(min_x, max_x);
+
+            let left_w = split_x - self.x;
+            let right_x = split_x + BSP_PADDING;
+            let right_w = (self.x + self.w) - right_x;
+            if left_w >= BSP_MIN_LEAF_W && right_w >= BSP_MIN_LEAF_W {
+                self.left = Some(Box::new(BspNode::new(self.x, self.y, left_w, self.h)));
+                self.right =
+                    Some(Box::new(BspNode::new(right_x, self.y, right_w, self.h)));
+            }
+        }
+
+        if let Some(ref mut left) = self.left {
+            left.subdivide(seed.wrapping_add(1), depth + 1, avenue_ys, cross_xs);
+        }
+        if let Some(ref mut right) = self.right {
+            right.subdivide(seed.wrapping_add(2), depth + 1, avenue_ys, cross_xs);
+        }
+    }
+
+    /// Collect all leaf rectangles into a flat vector.
+    fn collect_leaves(
+        &self,
+        out: &mut Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>,
+    ) {
+        if self.is_leaf() {
+            out.push((self.x, self.y, self.w, self.h));
+        } else {
+            if let Some(ref left) = self.left {
+                left.collect_leaves(out);
+            }
+            if let Some(ref right) = self.right {
+                right.collect_leaves(out);
+            }
+        }
+    }
+}
+
+// ── Semantic zone assignment ─────────────────────────────────────────────
+
+/// Assigns a semantic zone type to a BSP leaf based on its position
+/// relative to streets, the railroad area, and the town center.
+/// Commercial zones line the main streets, industrial zones cluster near
+/// the southern edge (where the railroad runs), and residential fills
+/// the outskirts.
+fn assign_zone(
+    cx: CoordinateUnit,
+    cy: CoordinateUnit,
+    _width: CoordinateUnit,
+    height: CoordinateUnit,
+    avenue_ys: &[CoordinateUnit],
+    seed: NoiseSeed,
+) -> u32 {
+    let dist_to_avenue = avenue_ys
+        .iter()
+        .map(|&ay| (cy - ay).abs())
+        .min()
+        .unwrap_or(height);
+
+    // Commercial: near main streets (saloons, general stores, banks)
+    if dist_to_avenue < 20 {
+        return ZONE_COMMERCIAL;
+    }
+
+    // Industrial: near southern edge (railroad area) or river
+    if cy > height * 2 / 3 {
+        let noise = value_noise(cx, cy, seed.wrapping_add(55555));
+        if noise < 0.5 {
+            return ZONE_INDUSTRIAL;
+        }
+    }
+
+    // Residential: default for outskirts
+    ZONE_RESIDENTIAL
+}
+
+/// Selects a building kind based on semantic zone type.
+/// Commercial: saloons, general stores, banks, sheriff's office.
+/// Residential: houses, churches, hotels.
+/// Industrial: stables, blacksmiths, undertakers.
+fn zone_building_kind(zone: u32, noise: f64) -> u32 {
+    match zone {
+        ZONE_COMMERCIAL => {
+            if noise < 0.20 { 1 }       // Saloon
+            else if noise < 0.40 { 3 }   // General Store
+            else if noise < 0.55 { 7 }   // Bank
+            else if noise < 0.70 { 4 }   // Sheriff's Office
+            else if noise < 0.85 { 5 }   // Post Office
+            else { 9 }                    // Jail
+        }
+        ZONE_RESIDENTIAL => {
+            if noise < 0.50 { 0 }        // House
             else if noise < 0.70 { 6 }   // Church
             else if noise < 0.85 { 8 }   // Hotel
             else { 5 }                    // Post Office
         }
-        DISTRICT_COMMERCIAL => {
-            // General stores, banks, post offices, sheriff
-            if noise < 0.30 { 3 }        // General Store
-            else if noise < 0.50 { 7 }   // Bank
-            else if noise < 0.65 { 4 }   // Sheriff's Office
-            else if noise < 0.80 { 9 }   // Jail
-            else { 5 }                    // Post Office
-        }
-        DISTRICT_LIVERY => {
-            // Stables, blacksmiths, general stores
-            if noise < 0.35 { 2 }        // Stable
-            else if noise < 0.60 { 11 }  // Blacksmith
-            else if noise < 0.80 { 3 }   // General Store
+        ZONE_INDUSTRIAL => {
+            if noise < 0.30 { 2 }        // Stable
+            else if noise < 0.55 { 11 }  // Blacksmith
+            else if noise < 0.75 { 3 }   // General Store
             else { 10 }                   // Undertaker
         }
-        // Cantina row (district 3) / catch-all: saloons, hotels.
+        // Mixed / catch-all: saloons, hotels.
         _ => {
-            if noise < 0.40 { 1 }        // Saloon
-            else if noise < 0.65 { 8 }   // Hotel
+            if noise < 0.35 { 1 }        // Saloon
+            else if noise < 0.60 { 8 }   // Hotel
             else if noise < 0.80 { 0 }   // House
             else { 1 }                    // Saloon
         }
     }
 }
 
-/// Generates deterministic building footprints for the western town.
-///
-/// Buildings are placed in rows between every pair of adjacent avenues,
-/// filling the entire map with dense city blocks. Buildings are larger
-/// (10-18 wide, 8-16 tall) so interiors feel like actual rooms.
-/// Uses Voronoi-based districts for themed building type selection.
-fn generate_buildings(
+// ── Landmark anchoring ───────────────────────────────────────────────────
+
+/// Pre-places a small number of landmark anchor buildings at fixed or
+/// strongly-biased positions. These anchors are immovable constraints
+/// that the BSP partition works around rather than over, giving every
+/// generated town a consistent skeleton.
+fn pre_place_landmark_anchors(
     width: CoordinateUnit,
     height: CoordinateUnit,
     seed: NoiseSeed,
     avenue_ys: &[CoordinateUnit],
-    avenue_half_width: CoordinateUnit,
 ) -> Vec<Building> {
-    let mut buildings = Vec::new();
-    let bldg_seed = seed.wrapping_add(11111);
+    let mut anchors = Vec::new();
+    if width < 60 || height < 40 {
+        return anchors;
+    }
+    let anchor_seed = seed.wrapping_add(777888);
+    let center_x = width / 2;
+    let center_y = height / 2;
 
-    // Build rows between every pair of adjacent avenues.
-    // Also add rows above the first avenue and below the last.
-    let mut row_bands: Vec<(CoordinateUnit, CoordinateUnit)> = Vec::new();
+    // Sheriff's office near the town center
+    let sx = (center_x - 8 + (value_noise(1, 1, anchor_seed) * 10.0) as CoordinateUnit)
+        .clamp(8, width - 20);
+    let sy = (center_y - 4 + (value_noise(2, 2, anchor_seed) * 6.0) as CoordinateUnit)
+        .clamp(8, height - 16);
+    anchors.push(Building { x: sx, y: sy, w: 12, h: 10, kind: 4 });
 
-    // Band above the first avenue
-    if let Some(&first) = avenue_ys.first() {
-        let top = 4;
-        let bot = first - avenue_half_width - 4;
-        if bot - top >= 8 {
-            row_bands.push((top, bot));
-        }
+    // Saloon on the main street corner
+    if let Some(&first_avenue) = avenue_ys.first() {
+        let sal_x = (center_x + 20 + (value_noise(3, 3, anchor_seed) * 10.0) as CoordinateUnit)
+            .clamp(8, width - 22);
+        let sal_y = (first_avenue + 6).clamp(8, height - 14);
+        anchors.push(Building { x: sal_x, y: sal_y, w: 14, h: 10, kind: 1 });
     }
 
-    // Bands between each pair of avenues
-    for pair in avenue_ys.windows(2) {
-        let top = pair[0] + avenue_half_width + 4;
-        let bot = pair[1] - avenue_half_width - 4;
-        if bot - top >= 8 {
-            row_bands.push((top, bot));
-        }
-    }
+    // Church toward the outskirts
+    let cx = (width / 4 + (value_noise(5, 5, anchor_seed) * 15.0) as CoordinateUnit)
+        .clamp(8, width - 16);
+    let cy = (height / 4 + (value_noise(6, 6, anchor_seed) * 10.0) as CoordinateUnit)
+        .clamp(8, height - 14);
+    anchors.push(Building { x: cx, y: cy, w: 12, h: 10, kind: 6 });
 
-    // Band below the last avenue
-    if let Some(&last) = avenue_ys.last() {
-        let top = last + avenue_half_width + 4;
-        let bot = height - 4;
-        if bot - top >= 8 {
-            row_bands.push((top, bot));
-        }
-    }
-
-    for (row_idx, &(row_min_y, row_max_y)) in row_bands.iter().enumerate() {
-        // Vary the starting offset per row for less grid-like placement
-        let row_offset_noise = value_noise(row_idx as i32, row_min_y, bldg_seed.wrapping_add(6666));
-        let mut cx = 4 + (row_offset_noise * 6.0) as CoordinateUnit;
-        let mut bldg_index = 0u32;
-        let band_height = row_max_y - row_min_y;
-        while cx < width - 10 {
-            let noise = value_noise(cx, bldg_index as i32 + row_idx as i32, bldg_seed);
-            let kind_noise = value_noise(bldg_index as i32, cx + row_idx as i32, bldg_seed.wrapping_add(2222));
-
-            // Larger buildings: 10-18 wide, 8-16 tall
-            let bw = 10 + (noise * 9.0) as CoordinateUnit; // width 10–18
-            let max_h = band_height.min(16);
-            let bh = 8.max(max_h - (noise * 4.0) as CoordinateUnit); // height 8–max_h
-            let by_jitter = (value_noise(cx, row_min_y, bldg_seed.wrapping_add(3333)) * 2.0) as CoordinateUnit;
-            let by = row_min_y + by_jitter;
-
-            // Don't exceed row bounds or map bounds
-            if by + bh <= row_max_y && by > 0 && by + bh < height - 1 && cx + bw < width - 1 {
-                // District-based building type
-                let district = get_district(cx + bw / 2, by + bh / 2, width, height, seed);
-                let kind = district_building_kind(district, kind_noise);
-                let kind = kind.min(BUILDING_TYPE_COUNT - 1);
-                buildings.push(Building {
-                    x: cx,
-                    y: by,
-                    w: bw,
-                    h: bh,
-                    kind,
-                });
-            }
-
-            // Gap between buildings: wider gaps (2-6 tiles) to create open
-            // spaces and breathing room between structures.
-            let gap_noise = value_noise(cx + 1, bldg_index as i32, bldg_seed.wrapping_add(4444));
-            cx += bw + 2 + (gap_noise * 5.0) as CoordinateUnit;
-            bldg_index += 1;
-        }
-    }
-
-    buildings
+    anchors
 }
 
-/// Places narrow alley floor tiles in the gaps between adjacent buildings
-/// within the same block. Alleys are shadowed ambush terrain.
+/// AABB overlap test between two rectangles.
+fn rects_overlap(
+    ax: CoordinateUnit, ay: CoordinateUnit, aw: CoordinateUnit, ah: CoordinateUnit,
+    bx: CoordinateUnit, by: CoordinateUnit, bw: CoordinateUnit, bh: CoordinateUnit,
+) -> bool {
+    ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+}
+
+// ── BSP-based building generation ────────────────────────────────────────
+
+/// Generates building footprints using BSP spatial partitioning.
+///
+/// The algorithm:
+///  1. Pre-places landmark anchor buildings at biased positions.
+///  2. Builds a BSP tree over the buildable area, biasing splits to align
+///     with the street network.
+///  3. Assigns a semantic zone to each leaf based on position.
+///  4. Places one building per leaf, selecting the type from the zone palette.
+///  5. Validates each placement with an AABB overlap check against all
+///     already-placed footprints including their padding margins.
+///  6. Records unoccupied leaves as open lots for later scatter.
+fn generate_buildings_bsp(
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+    avenue_ys: &[CoordinateUnit],
+    cross_xs: &[CoordinateUnit],
+    avenue_half_width: CoordinateUnit,
+) -> (Vec<Building>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>) {
+    let mut buildings = Vec::new();
+    let mut open_lots = Vec::new();
+    let bsp_seed = seed.wrapping_add(11111);
+
+    let margin = 4;
+    let build_w = width - margin * 2;
+    let build_h = height - margin * 2;
+    if build_w < BSP_MIN_LEAF_W || build_h < BSP_MIN_LEAF_H {
+        return (buildings, open_lots);
+    }
+
+    // Step 1: Pre-place landmark anchors as immovable constraints
+    let anchors = pre_place_landmark_anchors(width, height, seed, avenue_ys);
+    let mut placed: Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)> =
+        Vec::new();
+    for a in &anchors {
+        placed.push((a.x, a.y, a.w, a.h));
+        buildings.push(Building { x: a.x, y: a.y, w: a.w, h: a.h, kind: a.kind });
+    }
+
+    // Step 2: Build BSP tree biased to align with streets
+    let mut root = BspNode::new(margin, margin, build_w, build_h);
+    root.subdivide(bsp_seed, 0, avenue_ys, cross_xs);
+
+    // Step 3: Collect leaves and place buildings
+    let mut leaves = Vec::new();
+    root.collect_leaves(&mut leaves);
+
+    for (i, &(lx, ly, lw, lh)) in leaves.iter().enumerate() {
+        let leaf_cx = lx + lw / 2;
+        let leaf_cy = ly + lh / 2;
+
+        // Skip leaves that overlap with streets
+        let on_street = avenue_ys.iter().any(|&ay| {
+            ly < ay + avenue_half_width + 1 && ly + lh > ay - avenue_half_width - 1
+        });
+        if on_street {
+            continue;
+        }
+
+        // Skip leaves that overlap with pre-placed landmark anchors
+        let overlaps_anchor = anchors.iter().any(|a| {
+            rects_overlap(lx, ly, lw, lh, a.x, a.y, a.w, a.h)
+        });
+        if overlaps_anchor {
+            continue;
+        }
+
+        // Semantic zone assignment
+        let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
+        let kind_noise =
+            value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
+        let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
+
+        // Building footprint with padding inside the leaf
+        let pad = BSP_PADDING;
+        let bx = lx + pad;
+        let by = ly + pad;
+        let bw = (lw - pad * 2).min(18);
+        let bh = (lh - pad * 2).min(16);
+
+        if bw < 6 || bh < 5 {
+            open_lots.push((lx, ly, lw, lh));
+            continue;
+        }
+
+        // AABB overlap check against all already-placed footprints
+        let margin_pad = 1;
+        let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
+            rects_overlap(
+                bx - margin_pad,
+                by - margin_pad,
+                bw + margin_pad * 2,
+                bh + margin_pad * 2,
+                px, py, pw, ph,
+            )
+        });
+
+        if overlaps {
+            // Constraint propagation: try a smaller structure
+            let sbw = bw - 2;
+            let sbh = bh - 2;
+            if sbw >= 6 && sbh >= 5 {
+                let still_overlaps = placed.iter().any(|&(px, py, pw, ph)| {
+                    rects_overlap(bx, by, sbw, sbh, px, py, pw, ph)
+                });
+                if !still_overlaps {
+                    placed.push((bx, by, sbw, sbh));
+                    buildings.push(Building { x: bx, y: by, w: sbw, h: sbh, kind });
+                    continue;
+                }
+            }
+            // Fall back to open lot
+            open_lots.push((lx, ly, lw, lh));
+            continue;
+        }
+
+        placed.push((bx, by, bw, bh));
+        buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
+    }
+
+    (buildings, open_lots)
+}
+
+/// Places alley floor tiles in the gaps between adjacent buildings.
+/// BSP partitioning naturally creates gaps via inter-node padding; alleys
+/// fill those gaps with shadowed ambush terrain.
 fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
+    // BSP padding creates wider gaps than the old row-band layout.
+    // Detect gaps up to 6 tiles (BSP_PADDING + 2 × building pad).
+    let max_gap: i64 = 6;
     for (i, a) in buildings.iter().enumerate() {
         for b in &buildings[i + 1..] {
-            // Only horizontal adjacency with 1-2 tile gap
+            // Only horizontal adjacency with overlapping Y ranges
             if a.y < b.y + b.h && b.y < a.y + a.h {
                 let gap = b.x as i64 - (a.x + a.w) as i64;
-                if (1..=2).contains(&gap) {
+                if (1..=max_gap).contains(&gap) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -931,7 +1205,7 @@ fn place_alleys(map: &mut GameMap, buildings: &[Building]) {
                 }
                 // Check reverse direction
                 let gap_rev = a.x as i64 - (b.x + b.w) as i64;
-                if (1..=2).contains(&gap_rev) {
+                if (1..=max_gap).contains(&gap_rev) {
                     let overlap_y_min = a.y.max(b.y);
                     let overlap_y_max = (a.y + a.h).min(b.y + b.h);
                     for y in overlap_y_min..overlap_y_max {
@@ -1366,6 +1640,291 @@ fn set_prop(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, prop: Props
         && !matches!(voxel.floor, Some(Floor::Dirt)) {
             voxel.props = Some(prop);
         }
+}
+
+// ── Hierarchical placement: exterior props ───────────────────────────────
+
+/// Places contextually appropriate exterior props around a building based
+/// on its type and which edge faces the street. A house gets a fence
+/// perimeter and a garden; a saloon gets hitching posts out front and
+/// barrels along the side; a stable gets a corral attached to its rear.
+fn place_exterior_props(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
+    let ext_seed = seed.wrapping_add(b.x as u64 * 31 + b.y as u64 * 37);
+    match b.kind {
+        0 => {
+            // House: fence perimeter along the south edge, small garden/well
+            for dx in -1..=b.w {
+                set_prop(map, b.x + dx, b.y + b.h, Props::Fence);
+            }
+            let pick = value_noise(b.x, b.y, ext_seed);
+            if pick < 0.5 {
+                set_prop(map, b.x + b.w / 2, b.y - 1, Props::Well);
+            } else {
+                set_prop(map, b.x + 1, b.y - 1, Props::Bush);
+                set_prop(map, b.x + 2, b.y - 1, Props::Bush);
+            }
+        }
+        1 => {
+            // Saloon: hitching posts out front, barrels along the side
+            set_prop(map, b.x + b.w / 3, b.y + b.h, Props::HitchingPost);
+            set_prop(map, b.x + b.w * 2 / 3, b.y + b.h, Props::HitchingPost);
+            for dy in (0..b.h).step_by(3) {
+                set_prop(map, b.x - 1, b.y + dy, Props::Barrel);
+            }
+        }
+        2 => {
+            // Stable: corral fence attached to rear, hay and water
+            for dx in 0..b.w.min(6) {
+                set_prop(map, b.x + dx, b.y - 1, Props::Fence);
+            }
+            set_prop(map, b.x + 2, b.y - 2, Props::HayBale);
+            set_prop(map, b.x + 4, b.y - 2, Props::WaterTrough);
+        }
+        3 => {
+            // General store: crates and barrels near entrance
+            set_prop(map, b.x + b.w / 2 - 1, b.y + b.h, Props::Crate);
+            set_prop(map, b.x + b.w / 2 + 1, b.y + b.h, Props::Barrel);
+        }
+        4 => {
+            // Sheriff's office: hitching post and wanted poster
+            set_prop(map, b.x + b.w / 2, b.y + b.h, Props::HitchingPost);
+            set_prop(map, b.x - 1, b.y + b.h / 2, Props::Sign);
+        }
+        _ => {}
+    }
+}
+
+// ── Open lot scatter ─────────────────────────────────────────────────────
+
+/// Fills open lots (BSP leaves that couldn't hold a building) with
+/// contextually appropriate scatter: dead trees, broken wagons, campfire
+/// rings, patches of scrub.
+fn place_open_lot_scatter(
+    map: &mut GameMap,
+    open_lots: &[(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)],
+    seed: NoiseSeed,
+) {
+    let scatter_seed = seed.wrapping_add(151515);
+    for (i, &(lx, ly, lw, lh)) in open_lots.iter().enumerate() {
+        let cx = lx + lw / 2;
+        let cy = ly + lh / 2;
+        let pick = value_noise(cx, cy, scatter_seed.wrapping_add(i as u64));
+
+        if pick < 0.25 {
+            set_prop(map, cx, cy, Props::DeadTree);
+        } else if pick < 0.50 {
+            // Broken wagon
+            set_prop(map, cx, cy, Props::Crate);
+            set_prop(map, cx + 1, cy, Props::Crate);
+        } else if pick < 0.75 {
+            // Campfire ring
+            set_prop(map, cx - 1, cy, Props::Rock);
+            set_prop(map, cx + 1, cy, Props::Rock);
+            set_prop(map, cx, cy - 1, Props::Rock);
+            set_prop(map, cx, cy + 1, Props::Rock);
+        } else {
+            // Scrub patch
+            set_prop(map, cx, cy, Props::Bush);
+            set_prop(map, cx + 1, cy, Props::Bush);
+            set_prop(map, cx - 1, cy + 1, Props::Bush);
+        }
+    }
+}
+
+// ── Transition zones ─────────────────────────────────────────────────────
+
+/// Places transitional scatter around the town perimeter — isolated shacks,
+/// ruined structures, old fence lines, abandoned campsites — that gradually
+/// thin out into open terrain. This makes the town feel like it grew
+/// organically rather than being stamped onto the map.
+fn place_transition_zones(
+    map: &mut GameMap,
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+    seed: NoiseSeed,
+    buildings: &[Building],
+) {
+    if width < 60 || height < 40 || buildings.is_empty() {
+        return;
+    }
+    let trans_seed = seed.wrapping_add(121212);
+
+    // Find the bounding box of the town
+    let town_min_x = buildings.iter().map(|b| b.x).min().unwrap();
+    let town_min_y = buildings.iter().map(|b| b.y).min().unwrap();
+    let town_max_x = buildings.iter().map(|b| b.x + b.w).max().unwrap();
+    let town_max_y = buildings.iter().map(|b| b.y + b.h).max().unwrap();
+
+    let num_scatter = 12 + (value_noise(0, 0, trans_seed) * 8.0) as i32;
+    for i in 0..num_scatter {
+        let nx = value_noise(i, 0, trans_seed);
+        let ny = value_noise(0, i, trans_seed);
+        let x = (nx * width as f64).clamp(4.0, (width - 6) as f64) as CoordinateUnit;
+        let y = (ny * height as f64).clamp(4.0, (height - 6) as f64) as CoordinateUnit;
+
+        // Only place in the transition zone (outside town boundaries)
+        if x >= town_min_x - 5 && x <= town_max_x + 5
+            && y >= town_min_y - 5 && y <= town_max_y + 5
+        {
+            continue;
+        }
+
+        let pos = GridVec::new(x, y);
+        if let Some(voxel) = map.get_voxel_at(&pos) {
+            if voxel.props.is_some() {
+                continue;
+            }
+            if matches!(
+                voxel.floor,
+                Some(Floor::ShallowWater)
+                    | Some(Floor::DeepWater)
+                    | Some(Floor::Bridge)
+            ) {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        let pick = value_noise(i, i, trans_seed.wrapping_add(111));
+        if pick < 0.25 {
+            set_prop(map, x, y, Props::DeadTree);
+        } else if pick < 0.45 {
+            // Old fence line
+            for dx in 0..4 {
+                set_prop(map, x + dx, y, Props::Fence);
+            }
+        } else if pick < 0.65 {
+            // Abandoned campsite
+            set_prop(map, x, y, Props::Rock);
+            set_prop(map, x + 1, y, Props::Rock);
+            set_prop(map, x, y + 1, Props::Barrel);
+        } else if pick < 0.80 {
+            // Broken wagon
+            set_prop(map, x, y, Props::Crate);
+            set_prop(map, x + 1, y, Props::Crate);
+        } else {
+            // Scrub
+            set_prop(map, x, y, Props::Bush);
+            set_prop(map, x + 1, y + 1, Props::Bush);
+        }
+    }
+}
+
+// ── Post-pass connectivity check ─────────────────────────────────────────
+
+/// Verifies every building has at least one navigable path to the main
+/// street using BFS. If a building is unreachable, opens a gap in the
+/// nearest blocking structure. No structure should be an island.
+fn check_connectivity(
+    map: &mut GameMap,
+    buildings: &[Building],
+    avenue_ys: &[CoordinateUnit],
+    width: CoordinateUnit,
+    height: CoordinateUnit,
+) {
+    if buildings.is_empty() || avenue_ys.is_empty() {
+        return;
+    }
+    if width < 30 || height < 30 {
+        return;
+    }
+
+    let w = width as usize;
+    let h = height as usize;
+    let mut reachable = vec![false; w * h];
+    let mut queue = std::collections::VecDeque::new();
+
+    // Seed BFS from all passable tiles on every avenue
+    for &ay in avenue_ys {
+        if ay < 0 || ay >= height {
+            continue;
+        }
+        for x in 0..width {
+            let pos = GridVec::new(x, ay);
+            if map.is_passable(&pos) {
+                let idx = ay as usize * w + x as usize;
+                if !reachable[idx] {
+                    reachable[idx] = true;
+                    queue.push_back(pos);
+                }
+            }
+        }
+    }
+
+    while let Some(pos) = queue.pop_front() {
+        for neighbor in pos.cardinal_neighbors() {
+            if neighbor.x >= 0
+                && neighbor.x < width
+                && neighbor.y >= 0
+                && neighbor.y < height
+            {
+                let idx = neighbor.y as usize * w + neighbor.x as usize;
+                if !reachable[idx] && map.is_passable(&neighbor) {
+                    reachable[idx] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+
+    // Check each building's door area
+    for b in buildings {
+        let door_x = b.x + b.w / 2;
+        let door_y = b.y + b.h; // Tile just outside south door
+        if door_x < 0 || door_x >= width || door_y < 0 || door_y >= height {
+            continue;
+        }
+        let idx = door_y as usize * w + door_x as usize;
+        if reachable[idx] {
+            continue;
+        }
+
+        // Building unreachable — clear blocking props to open a path
+        for r in 1..=4i32 {
+            let mut cleared = false;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let cx = door_x + dx;
+                    let cy = door_y + dy;
+                    if cx < 0 || cx >= width || cy < 0 || cy >= height {
+                        continue;
+                    }
+                    let cidx = cy as usize * w + cx as usize;
+                    if reachable[cidx] {
+                        // Clear a line from door to this reachable tile
+                        let from = GridVec::new(door_x, door_y);
+                        let to = GridVec::new(cx, cy);
+                        for step in from.bresenham_line(to) {
+                            if step.x >= 0
+                                && step.x < width
+                                && step.y >= 0
+                                && step.y < height
+                            {
+                                if let Some(voxel) = map.get_voxel_at_mut(&step) {
+                                    if voxel
+                                        .props
+                                        .as_ref()
+                                        .is_some_and(|p| p.blocks_movement() && !p.is_wall())
+                                    {
+                                        voxel.props = None;
+                                    }
+                                }
+                            }
+                        }
+                        cleared = true;
+                        break;
+                    }
+                }
+                if cleared {
+                    break;
+                }
+            }
+            if cleared {
+                break;
+            }
+        }
+    }
 }
 
 /// Places the focal mission/church building near the center of the map.
@@ -2436,5 +2995,92 @@ mod tests {
         let map2 = GameMap::new(200, 140, 42);
         assert_eq!(map1.faction_anchors.len(), map2.faction_anchors.len(),
             "Faction anchor count should be deterministic");
+    }
+
+    #[test]
+    fn bsp_buildings_do_not_overlap() {
+        // BSP guarantees non-overlapping plots — verify no building footprints
+        // intersect.
+        let (buildings, _) = generate_buildings_bsp(400, 280, 42, &[60, 100, 140], &[80, 160, 240], 3);
+        for (i, a) in buildings.iter().enumerate() {
+            for b in &buildings[i + 1..] {
+                let overlaps = a.x < b.x + b.w && a.x + a.w > b.x
+                    && a.y < b.y + b.h && a.y + a.h > b.y;
+                assert!(!overlaps,
+                    "Buildings at ({},{}) {}x{} and ({},{}) {}x{} overlap",
+                    a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h);
+            }
+        }
+    }
+
+    #[test]
+    fn bsp_zone_commercial_near_streets() {
+        let avenue_ys = vec![50, 90];
+        // Near avenue → commercial zone
+        let zone = assign_zone(100, 52, 400, 280, &avenue_ys, 42);
+        assert_eq!(zone, ZONE_COMMERCIAL,
+            "Tiles near avenues should be commercial zones");
+        // Far from avenue → not commercial
+        let zone_far = assign_zone(100, 200, 400, 280, &avenue_ys, 42);
+        assert_ne!(zone_far, ZONE_COMMERCIAL,
+            "Tiles far from avenues should not be commercial zones");
+    }
+
+    #[test]
+    fn bsp_small_map_no_panic() {
+        // Small maps should be handled gracefully (no building placement)
+        let _ = GameMap::new(10, 10, 42);
+        let _ = GameMap::new(20, 15, 42);
+        let _ = GameMap::new(30, 20, 42);
+    }
+
+    #[test]
+    fn bsp_landmark_anchors_placed_first() {
+        // On sufficiently large maps, landmark anchors (sheriff, saloon,
+        // church) should be placed before BSP subdivision.
+        let (buildings, _) = generate_buildings_bsp(200, 140, 42, &[60], &[80], 3);
+        // Expect at least the 3 anchors
+        assert!(buildings.len() >= 3,
+            "Large map should have at least 3 landmark anchor buildings, found {}",
+            buildings.len());
+        // Sheriff (kind=4), Saloon (kind=1), Church (kind=6) should appear
+        let has_sheriff = buildings.iter().any(|b| b.kind == 4);
+        let has_saloon = buildings.iter().any(|b| b.kind == 1);
+        let has_church = buildings.iter().any(|b| b.kind == 6);
+        assert!(has_sheriff, "Landmark anchors should include sheriff's office");
+        assert!(has_saloon, "Landmark anchors should include saloon");
+        assert!(has_church, "Landmark anchors should include church");
+    }
+
+    #[test]
+    fn large_map_has_transition_scatter() {
+        let map = GameMap::new(400, 280, 42);
+        // Transition zones should add scattered props around the town
+        // perimeter — check for props in the first and last 20 rows.
+        let mut scatter_count = 0;
+        for y in 0..20 {
+            for x in 0..400 {
+                if map.voxels[y][x].props.is_some()
+                    && matches!(map.voxels[y][x].props,
+                        Some(Props::Fence) | Some(Props::DeadTree) | Some(Props::Rock)
+                        | Some(Props::Barrel) | Some(Props::Crate) | Some(Props::Bush))
+                {
+                    scatter_count += 1;
+                }
+            }
+        }
+        for y in 260..280 {
+            for x in 0..400 {
+                if map.voxels[y][x].props.is_some()
+                    && matches!(map.voxels[y][x].props,
+                        Some(Props::Fence) | Some(Props::DeadTree) | Some(Props::Rock)
+                        | Some(Props::Barrel) | Some(Props::Crate) | Some(Props::Bush))
+                {
+                    scatter_count += 1;
+                }
+            }
+        }
+        assert!(scatter_count > 0,
+            "Town perimeter should have transition zone scatter");
     }
 }

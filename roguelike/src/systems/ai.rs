@@ -1591,7 +1591,7 @@ pub fn ai_system(
                     lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range
+                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range ──
                 let mut used_throwable = false;
                 if (3..=6).contains(&dist)
                     && let Some(ref mut inv) = inventory {

@@ -1682,6 +1682,8 @@ fn generate_buildings_bsp(
 
             let mut lot_root = BspNode::new(lot_left, lot_top, lot_w, lot_h);
             if max_depth > 0 {
+                // Start at BSP_MAX_DEPTH - max_depth so exactly max_depth
+                // levels of recursion remain before the depth cap.
                 lot_root.subdivide(lot_seed, BSP_MAX_DEPTH - max_depth, avenue_ys, cross_xs);
             }
             let mut lot_leaves = Vec::new();

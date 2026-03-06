@@ -1911,12 +1911,12 @@ fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: C
     if alley_tiles.is_empty() { return; }
 
     // Flood-fill connected regions of alley tiles
-    let w = width as usize;
-    let mut visited = vec![false; w * height as usize];
+    let map_w = width as usize;
+    let mut visited = vec![false; map_w * height as usize];
     let mut regions: Vec<Vec<GridVec>> = Vec::new();
 
     for &start in &alley_tiles {
-        let idx = start.y as usize * w + start.x as usize;
+        let idx = start.y as usize * map_w + start.x as usize;
         if visited[idx] { continue; }
         let mut region = Vec::new();
         let mut queue = std::collections::VecDeque::new();
@@ -1926,7 +1926,7 @@ fn ensure_alley_connectivity(map: &mut GameMap, width: CoordinateUnit, height: C
             region.push(pos);
             for nb in pos.cardinal_neighbors() {
                 if nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height {
-                    let ni = nb.y as usize * w + nb.x as usize;
+                    let ni = nb.y as usize * map_w + nb.x as usize;
                     if !visited[ni] {
                         if let Some(v) = map.get_voxel_at(&nb) {
                             if matches!(v.floor, Some(Floor::Alley)) {

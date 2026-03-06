@@ -629,9 +629,9 @@ impl WorldGenPhase for LandmarkPhase {
         place_grand_saloon(map, width, height, seed, &data.buildings);
         place_stone_church(map, width, height, seed, &data.buildings);
 
-        place_town_plaza(map, width, height, seed);
-        place_cemetery(map, width, height, seed);
-        place_corral(map, width, height, seed);
+        place_town_plaza(map, width, height, seed, &data.buildings);
+        place_cemetery(map, width, height, seed, &data.buildings);
+        place_corral(map, width, height, seed, &data.buildings);
 
         place_town_well(map, width, height, seed);
         place_gallows(map, width, height, seed);
@@ -1440,23 +1440,52 @@ fn generate_buildings_bsp(
         let bw = (lw - pad * 2).min(22);
         let bh = (lh - pad * 2).min(18);
 
-        if bw < 6 || bh < 5 {
+        if bw < 4 || bh < 4 {
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
 
-        // Check building footprint (not leaf) against cross streets
+        // Check building footprint (not leaf) against cross streets.
+        // If it overlaps, try shrinking the building to fit beside the street.
         let building_on_cross = cross_xs.iter().any(|&cx| {
             bx < cx + cross_half_width + 1 && bx + bw > cx - cross_half_width - 1
         });
-        if building_on_cross {
-            open_lots.push((lx, ly, lw, lh));
-            continue;
-        }
+        let (bx, bw) = if building_on_cross {
+            // Try to fit on either side of the cross street
+            let mut fit_x = bx;
+            let mut fit_w = bw;
+            let mut found = false;
+            for &cx in cross_xs {
+                // Try placing to the left of the cross street
+                let left_w = (cx - cross_half_width - 1 - bx).min(bw);
+                if left_w >= 4 {
+                    fit_x = bx;
+                    fit_w = left_w;
+                    found = true;
+                    break;
+                }
+                // Try placing to the right of the cross street
+                let right_x = cx + cross_half_width + 1;
+                let right_w = (bx + bw - right_x).min(bw);
+                if right_x >= lx && right_w >= 4 {
+                    fit_x = right_x;
+                    fit_w = right_w;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                open_lots.push((lx, ly, lw, lh));
+                continue;
+            }
+            (fit_x, fit_w)
+        } else {
+            (bx, bw)
+        };
 
         // Park allocation: ~10% of eligible leaves become parks
         let park_noise = value_noise(leaf_cx, leaf_cy, bsp_seed.wrapping_add(8888));
-        if park_noise < 0.10 && bw >= 6 && bh >= 5 {
+        if park_noise < 0.10 && bw >= 4 && bh >= 4 {
             parks.push((bx, by, bw, bh));
             placed.push((bx, by, bw, bh));
             continue;
@@ -1468,40 +1497,41 @@ fn generate_buildings_bsp(
             value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
         let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
 
-        // AABB overlap check against all already-placed footprints
+        // AABB overlap check against all already-placed footprints.
+        // Try progressively smaller sizes if the full building doesn't fit.
         let overlap_margin = 1;
-        let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-            rects_overlap(
-                bx - overlap_margin,
-                by - overlap_margin,
-                bw + overlap_margin * 2,
-                bh + overlap_margin * 2,
-                px, py, pw, ph,
-            )
-        });
+        let mut final_w = bw;
+        let mut final_h = bh;
+        let mut fits = false;
 
-        if overlaps {
-            // Constraint propagation: try a smaller structure
-            let fallback_shrink = 2;
-            let sbw = bw - fallback_shrink;
-            let sbh = bh - fallback_shrink;
-            if sbw >= 6 && sbh >= 5 {
-                let still_overlaps = placed.iter().any(|&(px, py, pw, ph)| {
-                    rects_overlap(bx, by, sbw, sbh, px, py, pw, ph)
-                });
-                if !still_overlaps {
-                    placed.push((bx, by, sbw, sbh));
-                    buildings.push(Building { x: bx, y: by, w: sbw, h: sbh, kind });
-                    continue;
-                }
+        for shrink in 0..4 {
+            let sw = bw - shrink * 2;
+            let sh = bh - shrink * 2;
+            if sw < 4 || sh < 4 { break; }
+            let overlaps = placed.iter().any(|&(px, py, pw, ph)| {
+                rects_overlap(
+                    bx - overlap_margin,
+                    by - overlap_margin,
+                    sw + overlap_margin * 2,
+                    sh + overlap_margin * 2,
+                    px, py, pw, ph,
+                )
+            });
+            if !overlaps {
+                final_w = sw;
+                final_h = sh;
+                fits = true;
+                break;
             }
-            // Fall back to open lot
+        }
+
+        if !fits {
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
 
-        placed.push((bx, by, bw, bh));
-        buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
+        placed.push((bx, by, final_w, final_h));
+        buildings.push(Building { x: bx, y: by, w: final_w, h: final_h, kind });
     }
 
     (buildings, parks, open_lots)
@@ -2623,7 +2653,7 @@ fn place_mission(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUni
 
 /// Places a town plaza — an open killzone at the heart of the map.
 /// The plaza is flanked by buildings with window-facing tiles overlooking it.
-fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let pw: CoordinateUnit = 16;
     let ph: CoordinateUnit = 12;
     if width < pw + 20 || height < ph + 20 {
@@ -2635,6 +2665,10 @@ fn place_town_plaza(map: &mut GameMap, width: CoordinateUnit, height: Coordinate
     let cy = height / 2 + 10 + (value_noise(6, 6, p_seed) * 10.0) as CoordinateUnit;
     let px = (cx - pw / 2).clamp(2, width - pw - 2);
     let py = (cy - ph / 2).clamp(2, height - ph - 2);
+
+    // Skip if overlaps existing buildings or water
+    if overlaps_any_building(px, py, pw, ph, buildings) { return; }
+    if map.is_water_occupied(px, py, pw, ph) { return; }
 
     // Clear the plaza area — open exposed killzone
     for y in py..py + ph {
@@ -2872,7 +2906,7 @@ fn place_desert_decorations(
 }
 
 /// Places a small cemetery on the outskirts of the town.
-fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let cw: CoordinateUnit = 14;
     let ch: CoordinateUnit = 10;
     if width < cw + 20 || height < ch + 20 {
@@ -2884,6 +2918,9 @@ fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
     let cy = height * 3 / 4 + (value_noise(8, 8, c_seed) * 10.0) as CoordinateUnit;
     let px = (cx - cw / 2).clamp(2, width - cw - 2);
     let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    if overlaps_any_building(px, py, cw, ch, buildings) { return; }
+    if map.is_water_occupied(px, py, cw, ch) { return; }
 
     // Fence perimeter with gate
     for y in py..py + ch {
@@ -2912,7 +2949,7 @@ fn place_cemetery(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUn
 }
 
 /// Places a livestock corral with fenced area and hay bales.
-fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
+fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed, buildings: &[Building]) {
     let cw: CoordinateUnit = 12;
     let ch: CoordinateUnit = 8;
     if width < cw + 20 || height < ch + 20 {
@@ -2923,6 +2960,9 @@ fn place_corral(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit
     let cy = height * 3 / 4 + (value_noise(10, 10, c_seed) * 10.0) as CoordinateUnit;
     let px = (cx - cw / 2).clamp(2, width - cw - 2);
     let py = (cy - ch / 2).clamp(2, height - ch - 2);
+
+    if overlaps_any_building(px, py, cw, ch, buildings) { return; }
+    if map.is_water_occupied(px, py, cw, ch) { return; }
 
     // Fence perimeter with gate
     for y in py..py + ch {
@@ -3700,8 +3740,10 @@ mod tests {
 
     #[test]
     fn stress_test_20_seeds() {
-        // Part 7: Run the generator across 20 different seeds and verify
-        // all validation checks pass for each one.
+        // Run the generator across 20 different seeds and verify
+        // all structural verification checks pass for each one.
+        // GameMap::new() runs verify_world internally and retries on
+        // failure, panicking in debug builds if exhausted.
         for seed in 0..20u64 {
             let map = GameMap::new(400, 280, seed);
             // Basic structural checks
@@ -3731,6 +3773,22 @@ mod tests {
             // Spawn area must be clear
             let spawn_passable = map.is_passable(&SPAWN_POINT);
             assert!(spawn_passable, "Seed {seed}: spawn point must be passable");
+
+            // Confirm no building tiles sit on river tiles (post-verification)
+            let mut building_on_water = false;
+            for y in 0..280 {
+                for x in 0..400 {
+                    // If it has a wall and water floor, it's a violation
+                    if let Some(voxel) = map.get_voxel_at(&GridVec::new(x as i32, y as i32)) {
+                        if voxel.props.as_ref().is_some_and(|p| p.is_wall())
+                            && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
+                        {
+                            building_on_water = true;
+                        }
+                    }
+                }
+            }
+            assert!(!building_on_water, "Seed {seed}: no building walls should be on river tiles");
         }
     }
 

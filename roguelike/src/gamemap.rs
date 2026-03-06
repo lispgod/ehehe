@@ -55,6 +55,10 @@ struct WorldGenData {
     buildings: Vec<Building>,
     avenue_half_width: CoordinateUnit,
     cross_half_width: CoordinateUnit,
+    /// Tiles along road edges (sidewalk or dirt tiles adjacent to non-road terrain).
+    /// Collected after the infrastructure pass so prop placement can follow
+    /// actual road curvature rather than straight-line approximations.
+    road_edge_tiles: Vec<(CoordinateUnit, CoordinateUnit)>,
 }
 
 /// A single step in the hierarchical world generation pipeline.
@@ -199,7 +203,7 @@ impl WorldGenPhase for WaterPhase {
             let base_width = 14.0 + value_noise(y, 0, river_seed.wrapping_add(111)) * 10.0;
             let width_pulse = (fy * 0.012).sin() * 6.0; // gentle widening/narrowing
             let river_width = (base_width + width_pulse).max(8.0);
-            let beach_width = 2.0;
+            let beach_width = 5.0;
 
             for x in 1..width - 1 {
                 let fx = x as f64;
@@ -239,9 +243,9 @@ impl WorldGenPhase for InfrastructurePhase {
         height: CoordinateUnit,
         seed: NoiseSeed,
     ) {
-        // Horizontal avenues: wide dirt carriage roads flanked by sidewalks
+        // ── Pass 3a: Roads and streets ───────────────────────────────────
+        // Horizontal avenues: wide dirt carriage roads flanked by sidewalks.
         // Avenue spacing varies per seed for unique city feel.
-        // Compute avenue Y positions first so bridges can align to them.
         let spacing_noise = value_noise(0, 0, seed.wrapping_add(99900));
         let avenue_spacing = 32 + (spacing_noise * 12.0) as CoordinateUnit; // 32-44
         let avenue_half_width = 3; // carriage road half-width (7 tiles total)
@@ -257,25 +261,7 @@ impl WorldGenPhase for InfrastructurePhase {
         }
         data.avenue_half_width = avenue_half_width;
 
-        // Place bridges at avenue Y positions so they connect flush with roads.
-        let bridge_ys: Vec<CoordinateUnit> = data.avenue_ys.clone();
-        for &by in &bridge_ys {
-            for dy in -3..=3i32 {
-                let y = by + dy;
-                if y <= 0 || y >= height - 1 { continue; }
-                for x in 1..width - 1 {
-                    let pos = GridVec::new(x, y);
-                    if let Some(voxel) = map.get_voxel_at(&pos)
-                        && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
-                            && let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                                voxel.floor = Some(Floor::Bridge);
-                                voxel.props = None;
-                            }
-                }
-            }
-        }
-
-        // Lay avenue roads with sidewalks
+        // Lay avenue roads with sidewalks — roads skip water and beach (buffer exclusion zone).
         for &ay in &data.avenue_ys {
             let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
             let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
@@ -288,7 +274,7 @@ impl WorldGenPhase for InfrastructurePhase {
                         if y <= 0 || y >= height - 1 { continue; }
                         let pos = GridVec::new(x, y);
                         if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                                 continue;
                             }
                             voxel.floor = Some(Floor::Sidewalk);
@@ -302,8 +288,7 @@ impl WorldGenPhase for InfrastructurePhase {
                     if y <= 0 || y >= height - 1 { continue; }
                     let pos = GridVec::new(x, y);
                     if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                        // Don't pave over river
-                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
                             continue;
                         }
                         voxel.floor = Some(Floor::Dirt);
@@ -313,9 +298,9 @@ impl WorldGenPhase for InfrastructurePhase {
             }
         }
 
-        // Vertical cross streets with sinusoidal curvature and sidewalks
+        // Vertical cross streets with sinusoidal curvature and sidewalks.
+        // Roads skip water, beach, and bridge tiles.
         let cross_seed = seed.wrapping_add(66666);
-        // Cross street spacing varies per seed.
         let cross_noise = value_noise(1, 1, seed.wrapping_add(99901));
         let cross_spacing = 28 + (cross_noise * 14.0) as CoordinateUnit; // 28-42
         let cross_half_width = 2; // narrower than avenues
@@ -332,15 +317,14 @@ impl WorldGenPhase for InfrastructurePhase {
                 let curve_freq = 0.02 + value_noise(1, ci, cross_seed) * 0.01;
                 for y in 1..height - 1 {
                     let curve_offset = (y as f64 * curve_freq).sin() * curve_amp;
-                    // Sidewalk — cross streets are laid after avenues, so we
-                    // must not overwrite existing avenue dirt roads or building walls.
+                    // Sidewalk — must not overwrite avenue dirt roads or walls.
                     for sw in 1..=cross_sidewalk_width {
                         for sign in [-1i32, 1] {
                             let x = actual_cx + sign * (cross_half_width + sw) + curve_offset as CoordinateUnit;
                             if x <= 0 || x >= width - 1 { continue; }
                             let pos = GridVec::new(x, y);
                             if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach) | Some(Floor::Bridge)) {
                                     continue;
                                 }
                                 if !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
@@ -358,7 +342,7 @@ impl WorldGenPhase for InfrastructurePhase {
                         if x <= 0 || x >= width - 1 { continue; }
                         let pos = GridVec::new(x, y);
                         if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
+                            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach) | Some(Floor::Bridge)) {
                                 continue;
                             }
                             if !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) {
@@ -370,6 +354,52 @@ impl WorldGenPhase for InfrastructurePhase {
                 }
                 cx += cross_spacing;
                 ci += 1;
+            }
+        }
+
+        // ── Pass 3b: Bridges where roads cross the river ─────────────────
+        // Scan each avenue band for water/beach interruptions and span them
+        // with bridge tiles, connecting flush with the road on both banks.
+        for &ay in &data.avenue_ys {
+            let curve_amp = 3.0 + value_noise(ay, 0, curve_seed) * 4.0;
+            let curve_freq = 0.015 + value_noise(0, ay, curve_seed) * 0.01;
+            for x in 1..width - 1 {
+                let curve_offset = (x as f64 * curve_freq).sin() * curve_amp;
+                let band = avenue_half_width + sidewalk_width;
+                for hw in -band..=band {
+                    let y = ay + hw + curve_offset as CoordinateUnit;
+                    if y <= 0 || y >= height - 1 { continue; }
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                            voxel.floor = Some(Floor::Bridge);
+                            voxel.props = None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Collect road-edge tiles for prop placement ───────────────────
+        // Road-edge tiles are Sidewalk tiles adjacent to non-road terrain,
+        // following the actual curvature of the laid roads.
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                let pos = GridVec::new(x, y);
+                if let Some(voxel) = map.get_voxel_at(&pos) {
+                    if !matches!(voxel.floor, Some(Floor::Sidewalk)) {
+                        continue;
+                    }
+                    // Check if adjacent to a non-road tile
+                    let adjacent_non_road = pos.cardinal_neighbors().iter().any(|n| {
+                        map.get_voxel_at(n).is_some_and(|v| {
+                            !matches!(v.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk) | Some(Floor::Bridge))
+                        })
+                    });
+                    if adjacent_non_road {
+                        data.road_edge_tiles.push((x, y));
+                    }
+                }
             }
         }
     }
@@ -388,17 +418,17 @@ impl WorldGenPhase for BuildingPhase {
         height: CoordinateUnit,
         seed: NoiseSeed,
     ) {
-        let (buildings, open_lots) = generate_buildings_bsp(
+        let (buildings, parks, open_lots) = generate_buildings_bsp(
             width, height, seed,
             &data.avenue_ys, &data.cross_xs, data.avenue_half_width,
             data.cross_half_width,
         );
         data.buildings = buildings;
 
-        // Track which buildings were actually placed (not skipped due to water)
+        // Track which buildings were actually placed (not skipped due to water/beach)
         let mut placed_buildings: Vec<usize> = Vec::new();
         for (idx, b) in data.buildings.iter().enumerate() {
-            // Don't place buildings on water — check footprint corners and entrance
+            // Check footprint corners, center, and entrance tile
             let check_points = [
                 GridVec::new(b.x, b.y),
                 GridVec::new(b.x + b.w - 1, b.y),
@@ -407,12 +437,15 @@ impl WorldGenPhase for BuildingPhase {
                 GridVec::new(b.x + b.w / 2, b.y + b.h / 2),
                 GridVec::new(b.x + b.w / 2, b.y + b.h), // entrance tile
             ];
-            let on_water = check_points.iter().any(|p| {
+            // Skip buildings on water or beach (buffer exclusion zone).
+            // Road avoidance is handled by the BSP parametric checks
+            // (on_avenue and building_on_cross in generate_buildings_bsp).
+            let on_excluded = check_points.iter().any(|p| {
                 map.get_voxel_at(p).is_some_and(|v| {
-                    matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater))
+                    matches!(v.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach))
                 })
             });
-            if on_water {
+            if on_excluded {
                 continue;
             }
             place_building(map, b, seed);
@@ -430,6 +463,47 @@ impl WorldGenPhase for BuildingPhase {
             })
             .collect();
         data.buildings = new_buildings;
+
+        // Place parks in BSP-allocated nodes.  Parks occupy a node and
+        // register in the spatial index just like buildings.
+        for &(px, py, pw, ph) in &parks {
+            // Skip if any tile in the park footprint is a road
+            let park_on_road = (px..px + pw).any(|rx| {
+                (py..py + ph).any(|ry| {
+                    let p = GridVec::new(rx, ry);
+                    map.get_voxel_at(&p).is_some_and(|v| {
+                        matches!(v.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk) | Some(Floor::Bridge)
+                            | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach))
+                    })
+                })
+            });
+            if park_on_road {
+                continue;
+            }
+            // Lay park: grass floor with benches and bushes
+            for y in py..py + ph {
+                for x in px..px + pw {
+                    let pos = GridVec::new(x, y);
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        voxel.floor = Some(Floor::Grass);
+                        voxel.props = None;
+                    }
+                }
+            }
+            // Benches and bushes inside the park
+            let park_seed = seed.wrapping_add(px as u64 * 31 + py as u64 * 37);
+            if pw >= 4 && ph >= 4 {
+                set_prop(map, px + 1, py + 1, Props::Bench);
+                set_prop(map, px + pw - 2, py + 1, Props::Bench);
+                set_prop(map, px + pw / 2, py + ph / 2, Props::Bush);
+                if value_noise(px, py, park_seed) < 0.5 {
+                    set_prop(map, px + pw / 2 - 1, py + ph - 2, Props::Bush);
+                    set_prop(map, px + pw / 2 + 1, py + ph - 2, Props::Bush);
+                } else {
+                    set_prop(map, px + 1, py + ph - 2, Props::Well);
+                }
+            }
+        }
 
         // Fill open lots with contextually appropriate scatter
         place_open_lot_scatter(map, &open_lots, seed);
@@ -490,10 +564,10 @@ impl WorldGenPhase for DetailPhase {
         height: CoordinateUnit,
         seed: NoiseSeed,
     ) {
-        // Street props along every avenue
-        for &ay in &data.avenue_ys {
-            place_street_props(map, width, ay, data.avenue_half_width, seed);
-        }
+        // Street props placed on actual road-edge tiles so they follow
+        // road curvature rather than straight-line approximations.
+        place_street_props_curved(map, &data.road_edge_tiles, seed);
+
         // Lamp posts along cross streets
         for &cx in &data.cross_xs {
             place_lamp_posts(map, height, cx, seed);
@@ -523,22 +597,33 @@ impl WorldGenPhase for FinalizationPhase {
         // Post-pass coherence: verify every building can reach the main street
         check_connectivity(map, &data.buildings, &data.avenue_ys, &data.cross_xs, width, height);
 
-        // Clear around default spawn point and also around the bridge center
-        // so the player always has room to spawn.
-        clear_around(map, SPAWN_POINT, 6);
+        // Clear around default spawn point. If SPAWN_POINT is outside the map
+        // (common on smaller maps), fall back to the map center so the
+        // central area is always walkable.
+        let local_spawn = if SPAWN_POINT.x >= 0 && SPAWN_POINT.x < width
+            && SPAWN_POINT.y >= 0 && SPAWN_POINT.y < height
+        {
+            SPAWN_POINT
+        } else {
+            GridVec::new(width / 2, height / 2)
+        };
+        clear_around(map, local_spawn, 6);
         if let Some(bridge_pos) = map.find_bridge_center() {
             clear_around(map, bridge_pos, 6);
         }
 
         // Final pass: clear props from water, beach, and bridge tiles.
         // Later generation steps may have placed props on river tiles.
+        // Also clear gravel/rail tiles that ended up on main roads.
         for y in 0..height {
             for x in 0..width {
                 let pos = GridVec::new(x, y);
-                if let Some(voxel) = map.get_voxel_at_mut(&pos)
-                    && matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach) | Some(Floor::Bridge)) {
+                if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                    if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                        // Keep RailTrack on bridge tiles (rail bridge), clear all others
                         voxel.props = None;
                     }
+                }
             }
         }
 
@@ -1094,9 +1179,12 @@ fn rects_overlap(
 ///     with the street network.
 ///  3. Assigns a semantic zone to each leaf based on position.
 ///  4. Places one building per leaf, selecting the type from the zone palette.
+///     A small fraction of leaves become parks instead of buildings.
 ///  5. Validates each placement with an AABB overlap check against all
 ///     already-placed footprints including their padding margins.
 ///  6. Records unoccupied leaves as open lots for later scatter.
+///
+/// Returns (buildings, parks, open_lots).
 fn generate_buildings_bsp(
     width: CoordinateUnit,
     height: CoordinateUnit,
@@ -1105,8 +1193,9 @@ fn generate_buildings_bsp(
     cross_xs: &[CoordinateUnit],
     avenue_half_width: CoordinateUnit,
     cross_half_width: CoordinateUnit,
-) -> (Vec<Building>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>) {
+) -> (Vec<Building>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>, Vec<(CoordinateUnit, CoordinateUnit, CoordinateUnit, CoordinateUnit)>) {
     let mut buildings = Vec::new();
+    let mut parks = Vec::new();
     let mut open_lots = Vec::new();
     let bsp_seed = seed.wrapping_add(11111);
 
@@ -1116,7 +1205,7 @@ fn generate_buildings_bsp(
     let build_w = width - margin * 2;
     let build_h = height - margin * 2;
     if build_w < BSP_MIN_LEAF_W || build_h < BSP_MIN_LEAF_H {
-        return (buildings, open_lots);
+        return (buildings, parks, open_lots);
     }
 
     // Step 1: Pre-place landmark anchors as immovable constraints
@@ -1132,7 +1221,7 @@ fn generate_buildings_bsp(
     let mut root = BspNode::new(margin, margin, build_w, build_h);
     root.subdivide(bsp_seed, 0, avenue_ys, cross_xs);
 
-    // Step 3: Collect leaves and place buildings
+    // Step 3: Collect leaves and place buildings or parks
     let mut leaves = Vec::new();
     root.collect_leaves(&mut leaves);
 
@@ -1156,18 +1245,14 @@ fn generate_buildings_bsp(
             continue;
         }
 
-        // Semantic zone assignment
-        let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
-        let kind_noise =
-            value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
-        let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
-
-        // Building footprint with padding inside the leaf
+        // Building footprint with padding inside the leaf.
+        // Scale building to fill the available node (up to a generous max)
+        // so every leaf above the minimum threshold attempts placement.
         let pad = BSP_PADDING;
         let bx = lx + pad;
         let by = ly + pad;
-        let bw = (lw - pad * 2).min(18);
-        let bh = (lh - pad * 2).min(16);
+        let bw = (lw - pad * 2).min(22);
+        let bh = (lh - pad * 2).min(18);
 
         if bw < 6 || bh < 5 {
             open_lots.push((lx, ly, lw, lh));
@@ -1182,6 +1267,20 @@ fn generate_buildings_bsp(
             open_lots.push((lx, ly, lw, lh));
             continue;
         }
+
+        // Park allocation: ~10% of eligible leaves become parks
+        let park_noise = value_noise(leaf_cx, leaf_cy, bsp_seed.wrapping_add(8888));
+        if park_noise < 0.10 && bw >= 6 && bh >= 5 {
+            parks.push((bx, by, bw, bh));
+            placed.push((bx, by, bw, bh));
+            continue;
+        }
+
+        // Semantic zone assignment
+        let zone = assign_zone(leaf_cx, leaf_cy, width, height, avenue_ys, seed);
+        let kind_noise =
+            value_noise(i as i32, leaf_cx + leaf_cy, bsp_seed.wrapping_add(2222));
+        let kind = zone_building_kind(zone, kind_noise).min(BUILDING_TYPE_COUNT - 1);
 
         // AABB overlap check against all already-placed footprints
         let overlap_margin = 1;
@@ -1219,7 +1318,7 @@ fn generate_buildings_bsp(
         buildings.push(Building { x: bx, y: by, w: bw, h: bh, kind });
     }
 
-    (buildings, open_lots)
+    (buildings, parks, open_lots)
 }
 
 /// Places alley floor tiles in the gaps between adjacent buildings.
@@ -1697,7 +1796,8 @@ fn set_prop(map: &mut GameMap, x: CoordinateUnit, y: CoordinateUnit, prop: Props
     let pos = GridVec::new(x, y);
     if let Some(voxel) = map.get_voxel_at_mut(&pos)
         && !matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall))
-        && !matches!(voxel.floor, Some(Floor::Dirt)) {
+        && !matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Beach)
+            | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Bridge)) {
             voxel.props = Some(prop);
         }
 }
@@ -2476,21 +2576,19 @@ fn place_grand_saloon(map: &mut GameMap, width: CoordinateUnit, height: Coordina
     set_prop(map, sx + sw - 2, sy + sh - 2, Props::Crate);
 }
 
-/// Places street props (benches, lamp posts, barrels, signs, hitching posts)
-/// along the main street sidewalks.
-fn place_street_props(
+/// Places street props (benches, barrels, signs, hitching posts, crates) on
+/// actual road-edge tiles so they follow road curvature. Props are never
+/// placed in a straight line unless the road itself is straight at that point.
+fn place_street_props_curved(
     map: &mut GameMap,
-    width: CoordinateUnit,
-    street_y: CoordinateUnit,
-    street_half_width: CoordinateUnit,
+    road_edge_tiles: &[(CoordinateUnit, CoordinateUnit)],
     seed: NoiseSeed,
 ) {
     let furn_seed = seed.wrapping_add(77777);
-    let sidewalk_north = street_y - street_half_width - 1;
-    let sidewalk_south = street_y + street_half_width + 1;
-
-    for x in (4..width - 4).step_by(4) {
-        let noise = value_noise(x, sidewalk_north, furn_seed);
+    // Place props every ~4 road-edge tiles for spacing.
+    for (idx, &(x, y)) in road_edge_tiles.iter().enumerate() {
+        if idx % 4 != 0 { continue; }
+        let noise = value_noise(x, y, furn_seed.wrapping_add(idx as u64));
         let prop = match (noise * 6.0) as u32 {
             0 => Props::HitchingPost,
             1 => Props::Bench,
@@ -2499,20 +2597,7 @@ fn place_street_props(
             4 => Props::Sign,
             _ => Props::Crate,
         };
-        set_prop(map, x, sidewalk_north, prop);
-    }
-
-    for x in (6..width - 4).step_by(4) {
-        let noise = value_noise(x, sidewalk_south, furn_seed.wrapping_add(1111));
-        let prop = match (noise * 6.0) as u32 {
-            0 => Props::Bench,
-            1 => Props::Crate,
-            2 => Props::WaterTrough,
-            3 => Props::Barrel,
-            4 => Props::HitchingPost,
-            _ => Props::Sign,
-        };
-        set_prop(map, x, sidewalk_south, prop);
+        set_prop(map, x, y, prop);
     }
 }
 
@@ -2740,36 +2825,53 @@ fn place_water_tower(map: &mut GameMap, width: CoordinateUnit, height: Coordinat
     set_prop(map, tx + 4, ty + 4, Props::WaterTower);
 }
 
-/// Places railroad tracks along the southern edge of the town.
+/// Places railroad tracks near the northern and southern edges of the map.
+/// Tracks never intersect the main road. Where tracks cross the river a
+/// rail bridge is placed automatically.
 fn place_railroad(map: &mut GameMap, width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) {
     if width < 80 || height < 80 { return; }
     let rail_seed = seed.wrapping_add(777999);
-    // Railroad runs horizontally near the southern third of the map
-    let rail_y = height * 3 / 4 + 15 + (value_noise(8, 8, rail_seed) * 6.0) as CoordinateUnit;
-    let rail_y = rail_y.clamp(40, height - 10);
 
-    for x in 4..width - 4 {
-        // Slight wobble for realism
-        let wobble = (value_noise(x, rail_y, rail_seed) * 1.5) as CoordinateUnit;
-        let y = rail_y + wobble;
-        if y <= 0 || y >= height - 1 { continue; }
-        let pos = GridVec::new(x, y);
-        if let Some(voxel) = map.get_voxel_at(&pos) {
-            // Don't place tracks over water or buildings
-            if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater)) { continue; }
-            if matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
-        }
-        if let Some(voxel) = map.get_voxel_at_mut(&pos) {
-            voxel.floor = Some(Floor::Gravel);
-            voxel.props = Some(Props::RailTrack);
-        }
-        // Gravel bed on either side of the track
-        for &dy in &[-1i32, 1] {
-            let side_pos = GridVec::new(x, y + dy);
-            if let Some(voxel) = map.get_voxel_at_mut(&side_pos)
-                && voxel.props.is_none() && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor) | Some(Floor::ShallowWater) | Some(Floor::DeepWater)) {
-                    voxel.floor = Some(Floor::Gravel);
+    // Two track lines: one near the north edge, one near the south edge.
+    let north_y = 10 + (value_noise(8, 8, rail_seed) * 6.0) as CoordinateUnit;
+    let north_y = north_y.clamp(6, 20);
+    let south_y = height - 10 - (value_noise(9, 9, rail_seed) * 6.0) as CoordinateUnit;
+    let south_y = south_y.clamp(height - 20, height - 6);
+
+    for &rail_y in &[north_y, south_y] {
+        for x in 4..width - 4 {
+            let wobble = (value_noise(x, rail_y, rail_seed) * 1.5) as CoordinateUnit;
+            let y = rail_y + wobble;
+            if y <= 0 || y >= height - 1 { continue; }
+            let pos = GridVec::new(x, y);
+            if let Some(voxel) = map.get_voxel_at(&pos) {
+                // Never place tracks on the main road or buildings
+                if matches!(voxel.floor, Some(Floor::Dirt) | Some(Floor::Sidewalk)) { continue; }
+                if matches!(voxel.props, Some(Props::Wall) | Some(Props::StoneWall)) { continue; }
+                // Rail bridge over water/beach — lay bridge tile with track
+                if matches!(voxel.floor, Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Beach)) {
+                    if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                        voxel.floor = Some(Floor::Bridge);
+                        voxel.props = Some(Props::RailTrack);
+                    }
+                    continue;
                 }
+            }
+            if let Some(voxel) = map.get_voxel_at_mut(&pos) {
+                voxel.floor = Some(Floor::Gravel);
+                voxel.props = Some(Props::RailTrack);
+            }
+            // Gravel bed on either side of the track
+            for &dy in &[-1i32, 1] {
+                let side_pos = GridVec::new(x, y + dy);
+                if let Some(voxel) = map.get_voxel_at_mut(&side_pos)
+                    && voxel.props.is_none()
+                    && !matches!(voxel.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor)
+                        | Some(Floor::ShallowWater) | Some(Floor::DeepWater) | Some(Floor::Dirt)
+                        | Some(Floor::Sidewalk) | Some(Floor::Bridge)) {
+                        voxel.floor = Some(Floor::Gravel);
+                    }
+            }
         }
     }
 }
@@ -3256,7 +3358,7 @@ mod tests {
                 }
             }
         }
-        assert!(alley_count > 0, "Map should have alley tiles between buildings");
+        assert!(alley_count > 0, "Map should have alley tiles between buildings (found {})", alley_count);
     }
 
     #[test]
@@ -3306,7 +3408,7 @@ mod tests {
     fn bsp_buildings_do_not_overlap() {
         // BSP guarantees non-overlapping plots — verify no building footprints
         // intersect.
-        let (buildings, _) = generate_buildings_bsp(400, 280, 42, &[60, 100, 140], &[80, 160, 240], 3, 2);
+        let (buildings, _, _) = generate_buildings_bsp(400, 280, 42, &[60, 100, 140], &[80, 160, 240], 3, 2);
         for (i, a) in buildings.iter().enumerate() {
             for b in &buildings[i + 1..] {
                 let overlaps = a.x < b.x + b.w && a.x + a.w > b.x
@@ -3343,7 +3445,7 @@ mod tests {
     fn bsp_landmark_anchors_placed_first() {
         // On sufficiently large maps, landmark anchors (sheriff, saloon,
         // church) should be placed before BSP subdivision.
-        let (buildings, _) = generate_buildings_bsp(200, 140, 42, &[60], &[80], 3, 2);
+        let (buildings, _, _) = generate_buildings_bsp(200, 140, 42, &[60], &[80], 3, 2);
         // Expect at least the 3 anchors
         assert!(buildings.len() >= 3,
             "Large map should have at least 3 landmark anchor buildings, found {}",

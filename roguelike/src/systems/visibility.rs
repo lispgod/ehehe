@@ -13,6 +13,10 @@ pub const FOV_MIN_RADIUS: CoordinateUnit = 80;
 /// Maximum FOV range when cursor is far from the player.
 pub const FOV_MAX_RANGE: CoordinateUnit = 120;
 
+/// Radius (Euclidean) of the circular awareness zone around NPCs.
+/// Tiles within this radius are always visible regardless of cone direction.
+pub const NPC_PROXIMITY_RADIUS: CoordinateUnit = 3;
+
 /// Recomputes the `visible_tiles` set for every entity whose `Viewshed` is
 /// dirty (e.g., because the entity moved). Uses recursive symmetric
 /// shadowcasting — the mathematically correct O(visible_tiles) algorithm
@@ -115,9 +119,7 @@ pub fn visibility_system(
             let (cdx, cdy) = (dir.x as f64, dir.y as f64);
             let cursor_len = (cdx * cdx + cdy * cdy).sqrt();
 
-            /// Radius of the circular awareness zone around NPCs (Euclidean).
-            const NPC_PROXIMITY_RADIUS: i32 = 3;
-            let prox_sq = (NPC_PROXIMITY_RADIUS * NPC_PROXIMITY_RADIUS) as i64;
+            let prox_sq = (NPC_PROXIMITY_RADIUS as i64) * (NPC_PROXIMITY_RADIUS as i64);
 
             viewshed.visible_tiles.retain(|&tile| {
                 let diff = tile - origin;
@@ -129,7 +131,7 @@ pub fn visibility_system(
                 if is_player && diff.x.abs() <= 1 && diff.y.abs() <= 1 {
                     return true;
                 }
-                // NPC circular proximity awareness: always see within 3 tiles.
+                // NPC circular proximity awareness: always see within NPC_PROXIMITY_RADIUS tiles.
                 if is_npc {
                     let dist_sq = (diff.x as i64) * (diff.x as i64) + (diff.y as i64) * (diff.y as i64);
                     if dist_sq <= prox_sq {

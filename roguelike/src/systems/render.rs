@@ -14,6 +14,7 @@ use crate::resources::{
     InputState, KillCount, SoundEvents, SpellParticles, TurnCounter, SOUND_RANGE,
 };
 use crate::systems::input::KEYBINDINGS;
+use crate::systems::visibility::NPC_PROXIMITY_RADIUS;
 use crate::typedefs::{CoordinateUnit, MyPoint, RatColor};
 
 /// Lifetime (in frames) for combat particle animations.
@@ -29,6 +30,10 @@ const MIN_EXPLOSION_INTENSITY: f32 = 0.15;
 /// Number of render frames between water animation symbol cycles.
 /// At 60 FPS, 20 → water ripples change ~3 times per second.
 const WATER_ANIM_FRAMES: u32 = 20;
+
+/// Number of render frames over which the death red-tint effect fades in.
+/// At 60 FPS, 120 → full red overlay appears over ~2 seconds.
+const DEATH_FADE_FRAMES: u32 = 120;
 
 /// Ticks and renders combat particles each frame. Also computes which
 /// sound indicators should be visible on the map from `SoundEvents`.
@@ -221,8 +226,6 @@ pub fn draw_system(
         {
             /// Maximum Chebyshev distance from an NPC for direction tint.
             const FOV_TINT_ARC_RADIUS: i32 = 8;
-            /// Proximity radius excluded from tinting (matches visibility.rs).
-            const NPC_PROXIMITY_RADIUS: i32 = 3;
 
             let mut enemy_visible: HashSet<MyPoint> = HashSet::new();
             for (vs, faction, npc_pos, ai_look) in &npc_viewsheds {
@@ -500,8 +503,6 @@ pub fn draw_system(
         let player_is_dead = player_hp.is_some_and(|hp| hp.is_dead());
         if player_is_dead {
             death_fade.frames = death_fade.frames.saturating_add(1);
-            // Fade-in over 120 frames: 0.0 → 1.0
-            const DEATH_FADE_FRAMES: u32 = 120;
             let fade = (death_fade.frames as f32 / DEATH_FADE_FRAMES as f32).min(1.0);
 
             let player_screen = player_world_pos
@@ -562,7 +563,7 @@ pub fn draw_system(
         render_lines.reverse();
 
         let game_bg = if player_is_dead {
-            let fade = (death_fade.frames as f32 / 120.0).min(1.0);
+            let fade = (death_fade.frames as f32 / DEATH_FADE_FRAMES as f32).min(1.0);
             let r = (80.0 * fade) as u8;
             RatColor::Rgb(r, 0, 0) // gradually darken to dark red when dead
         } else {

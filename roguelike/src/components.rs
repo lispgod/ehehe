@@ -307,7 +307,8 @@ pub struct AiAimCursor {
 
 /// Persistent target tracking for NPC AI.
 /// Once an NPC acquires a target, it pursues and attacks that target
-/// until the target is dead or escapes the NPC's awareness range.
+/// until the target is dead or has been fully out of awareness range
+/// for at least `TARGET_LOCK_TIMEOUT` turns with no new sightings.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct AiTarget {
     /// The entity being pursued.
@@ -316,6 +317,19 @@ pub struct AiTarget {
     pub last_pos: GridVec,
     /// Turn number when target was last seen.
     pub last_seen: u32,
+    /// Hard lock: set when NPC has fired at or taken fire from this target.
+    /// When locked, only death or `TARGET_LOCK_TIMEOUT` turns unseen can break it.
+    pub locked: bool,
+}
+
+/// Extended awareness range during active pursuit.
+/// Decays gradually back to baseline once the target has not been re-spotted.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct AiPursuitBoost {
+    /// Extra awareness range (in tiles) added during pursuit.
+    pub extra_range: i32,
+    /// Turn when the target was last spotted (for decay calculation).
+    pub last_spotted_turn: u32,
 }
 
 /// Faction affiliation for group-based spawning.

@@ -4068,14 +4068,16 @@ fn ai_memory_updates_on_each_sighting() {
 #[test]
 fn ai_idle_does_not_chase_without_visibility() {
     let mut app = test_app_with_ai();
-    for dx in -5..=5 {
-        for dy in -5..=5 {
+    for dx in -8..=8 {
+        for dy in -8..=8 {
             clear_tile(&mut app, 60 + dx, 40 + dy);
         }
     }
 
     let _player = spawn_test_player(&mut app, 60, 40);
-    let npc = spawn_ai_npc(&mut app, 63, 40, "Outlaw", Faction::Outlaws);
+    // Place NPC beyond the proximity override range (5 tiles) so that
+    // pure proximity alone doesn't force combat.
+    let npc = spawn_ai_npc(&mut app, 67, 40, "Outlaw", Faction::Outlaws);
 
     // NPC viewshed does NOT contain the player position
     app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
@@ -4086,7 +4088,7 @@ fn ai_idle_does_not_chase_without_visibility() {
     assert_eq!(
         *state,
         AiState::Idle,
-        "NPC should remain Idle when player is not in viewshed",
+        "NPC should remain Idle when player is not in viewshed and beyond proximity override range",
     );
 }
 

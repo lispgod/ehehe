@@ -509,7 +509,7 @@ impl Default for Collectibles {
     fn default() -> Self {
         Self {
             caps: 10,
-            bullets_31: 10,
+            bullets_31: 0,
             bullets_36: 0,
             bullets_44: 0,
             bullets_50: 0,
@@ -518,6 +518,16 @@ impl Default for Collectibles {
             bullets_69: 0,
             powder: 10,
         }
+    }
+}
+
+impl Collectibles {
+    /// Creates a new `Collectibles` pool with 10 starting bullets of the
+    /// given caliber (matching the player's starting gun).
+    pub fn for_starting_caliber(caliber: Caliber) -> Self {
+        let mut c = Self::default();
+        *c.bullets_mut(caliber) = 10;
+        c
     }
 }
 
@@ -874,7 +884,7 @@ mod tests {
     fn collectibles_default_has_starting_supplies() {
         let c = Collectibles::default();
         assert_eq!(c.caps, 10);
-        assert_eq!(c.bullets_31, 10);
+        assert_eq!(c.bullets_31, 0, "Default has no .31 bullets — use for_starting_caliber()");
         assert_eq!(c.bullets_36, 0);
         assert_eq!(c.bullets_44, 0);
         assert_eq!(c.powder, 10);

@@ -738,6 +738,8 @@ impl GameMap {
     /// retries). In debug builds, panics if no valid map is produced.
     pub fn new(width: CoordinateUnit, height: CoordinateUnit, seed: NoiseSeed) -> Self {
         const MAX_RETRIES: u32 = 10;
+        let mut last_map = None;
+        let mut last_reason = String::new();
         for attempt in 0..=MAX_RETRIES {
             let current_seed = if attempt == 0 { seed } else { seed.wrapping_add(attempt as u64 * 7919) };
             let (map, data) = Self::generate_with_seed(width, height, current_seed);
@@ -749,20 +751,19 @@ impl GameMap {
                         "World gen verification failed (seed={}, attempt {}): {}",
                         current_seed, attempt, reason
                     );
-                    if attempt == MAX_RETRIES {
-                        #[cfg(debug_assertions)]
-                        panic!(
-                            "World generation failed after {} retries. Last failure (seed={}): {}",
-                            MAX_RETRIES, current_seed, reason
-                        );
-                        // In release builds, return the last attempt anyway.
-                        #[allow(unreachable_code)]
-                        return map;
-                    }
+                    last_reason = reason;
+                    last_map = Some(map);
                 }
             }
         }
-        unreachable!()
+        #[cfg(debug_assertions)]
+        panic!(
+            "World generation failed after {} retries. Last failure: {}",
+            MAX_RETRIES, last_reason
+        );
+        // In release builds, return the last attempt.
+        #[allow(unreachable_code)]
+        last_map.unwrap()
     }
 
     /// Internal: run all generation phases with a specific seed.
@@ -1452,33 +1453,34 @@ fn generate_buildings_bsp(
         });
         let (bx, bw) = if building_on_cross {
             // Try to fit on either side of the cross street
-            let mut fit_x = bx;
-            let mut fit_w = bw;
-            let mut found = false;
+            let mut result: Option<(CoordinateUnit, CoordinateUnit)> = None;
             for &cx in cross_xs {
                 // Try placing to the left of the cross street
-                let left_w = (cx - cross_half_width - 1 - bx).min(bw);
-                if left_w >= 4 {
-                    fit_x = bx;
-                    fit_w = left_w;
-                    found = true;
-                    break;
+                let left_edge = cx - cross_half_width - 1;
+                if left_edge > bx {
+                    let left_w = (left_edge - bx).min(bw);
+                    if left_w >= 4 {
+                        result = Some((bx, left_w));
+                        break;
+                    }
                 }
                 // Try placing to the right of the cross street
                 let right_x = cx + cross_half_width + 1;
-                let right_w = (bx + bw - right_x).min(bw);
-                if right_x >= lx && right_w >= 4 {
-                    fit_x = right_x;
-                    fit_w = right_w;
-                    found = true;
-                    break;
+                if right_x >= lx && right_x < bx + bw {
+                    let right_w = (bx + bw - right_x).min(bw);
+                    if right_w >= 4 {
+                        result = Some((right_x, right_w));
+                        break;
+                    }
                 }
             }
-            if !found {
-                open_lots.push((lx, ly, lw, lh));
-                continue;
+            match result {
+                Some(fit) => fit,
+                None => {
+                    open_lots.push((lx, ly, lw, lh));
+                    continue;
+                }
             }
-            (fit_x, fit_w)
         } else {
             (bx, bw)
         };

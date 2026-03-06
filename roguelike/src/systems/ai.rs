@@ -326,7 +326,7 @@ fn assign_aiming_style(
     entity: Entity,
     turn: u32,
     chase_target: Option<(Entity, GridVec)>,
-    existing_cursor: Option<&AiAimCursor>,
+    cursor: Option<&AiAimCursor>,
     npc_pos: GridVec,
 ) {
     let aim_hash = (entity.to_bits() ^ turn as u64).wrapping_mul(HASH_KNUTH);
@@ -337,7 +337,7 @@ fn assign_aiming_style(
     };
     commands.entity(entity).insert(style);
     // Preserve cursor position if one exists — only create fresh if brand new.
-    if existing_cursor.is_none() {
+    if cursor.is_none() {
         commands.entity(entity).insert(AiAimCursor { pos: npc_pos, steps_remaining: 0 });
     }
     if let Some((te, tv)) = chase_target {
@@ -711,10 +711,11 @@ pub fn ai_system(
                         let dist = my_pos.chebyshev_distance(ov);
                         let visible = viewshed.as_ref().is_some_and(|vs| vs.visible_tiles.contains(&ov));
                         if visible || dist <= PROXIMITY_OVERRIDE_RANGE {
-                            // Check if this hostile is aiming at us (has us as AiTarget)
-                            let aiming_at_me = false; // simplified: can't query other NPC's AiTarget from here without extra query
-                            let ally_engaged = false; // simplified for now
-                            let score = threat_score(dist, aiming_at_me, ally_engaged);
+                            // Note: aiming_at_me and ally_engaged are secondary scoring
+                            // factors. They default to false because the current ECS query
+                            // structure prevents accessing other NPCs' AiTarget during this
+                            // iteration. Distance is the dominant scoring factor regardless.
+                            let score = threat_score(dist, false, false);
                             visible_hostiles.push((other_ent, ov, score));
                         }
                     }
@@ -846,10 +847,12 @@ pub fn ai_system(
                 }
             }
 
-        // Update AiTarget: preserve locked status, update position & last_seen
+        // Update AiTarget: preserve locked status, update position & last_seen.
+        // Locked status is only set when the NPC fires at or takes fire from
+        // the target (see gun/bow/melee attack sections below). Visibility
+        // alone does NOT lock — it only extends the last_seen timer.
         if let Some((te, tv)) = chase_target {
             let was_locked = ai_target.is_some_and(|t| t.locked && t.entity == te);
-            let is_locked = was_locked || target_currently_visible; // seeing extends lock
             let last_seen = if target_currently_visible { turn_counter.0 } else {
                 ai_target.map(|t| t.last_seen).unwrap_or(turn_counter.0)
             };
@@ -857,7 +860,7 @@ pub fn ai_system(
                 entity: te,
                 last_pos: tv,
                 last_seen,
-                locked: is_locked,
+                locked: was_locked,
             });
 
             // Update/create pursuit boost when target is visible
@@ -2192,9 +2195,12 @@ mod tests {
         }
 
         // Cursor should have moved toward new target, NOT toward NPC pos.
-        assert!(cursor_pos.chebyshev_distance(new_target) < 10 - steps + 1,
-            "Cursor at {:?} should have advanced {} steps toward {:?} (not reset to NPC {:?})",
-            cursor_pos, steps, new_target, npc_pos);
+        // Initial distance from cursor (10,10) to target (10,15) is 5.
+        // After 3 steps, distance should be 5 - 3 = 2.
+        let initial_dist = 5;
+        assert!(cursor_pos.chebyshev_distance(new_target) < initial_dist,
+            "Cursor at {:?} should have advanced toward {:?} (not reset to NPC {:?})",
+            cursor_pos, new_target, npc_pos);
         // Cursor should be at (10, 13) after 3 steps along Y axis.
         assert_eq!(cursor_pos, GridVec::new(10, 13),
             "After 3 south steps, cursor should be at (10,13)");

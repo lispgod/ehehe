@@ -33,6 +33,12 @@ pub enum Floor {
     Alley,
     /// Stone floor — used in churches, missions, and other stone buildings.
     StoneFloor,
+    /// Packed-dirt carriage road — distinct from plain Dirt so placement
+    /// checks can reject road tiles unambiguously. Nothing may spawn here.
+    DirtRoad,
+    /// Sandy beach buffer along the river — distinct from plain Sand.
+    /// Nothing may spawn here.
+    BeachSand,
 }
 
 /// Props (obstacles/structures) placed on tiles.

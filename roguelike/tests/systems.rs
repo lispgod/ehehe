@@ -1748,6 +1748,13 @@ fn ai_chasing_npc_moves_toward_player() {
     for dx in -10..=10 {
         for dy in -5..=5 {
             clear_tile(&mut app, 60 + dx, 40 + dy);
+            // Also ensure floor is passable (not water)
+            let map = &mut app.world_mut().resource_mut::<GameMapResource>().0;
+            if let Some(voxel) = map.get_voxel_at_mut(&GridVec::new(60 + dx, 40 + dy)) {
+                if matches!(voxel.floor, Some(roguelike::typeenums::Floor::DeepWater) | Some(roguelike::typeenums::Floor::ShallowWater)) {
+                    voxel.floor = Some(roguelike::typeenums::Floor::Dirt);
+                }
+            }
         }
     }
 

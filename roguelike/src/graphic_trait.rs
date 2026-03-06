@@ -35,6 +35,8 @@ impl GraphicElement for Floor {
             Floor::Plaza => ".".into(),
             Floor::Alley => " ".into(),
             Floor::StoneFloor => ".".into(),
+            Floor::DirtRoad => " ".into(),
+            Floor::BeachSand => ".".into(),
         }
     }
 
@@ -59,6 +61,8 @@ impl GraphicElement for Floor {
             Floor::Plaza => RatColor::Rgb(170, 150, 110),
             Floor::Alley => RatColor::Rgb(70, 55, 35),
             Floor::StoneFloor => RatColor::Rgb(150, 145, 135),
+            Floor::DirtRoad => RatColor::Rgb(110, 85, 50),
+            Floor::BeachSand => RatColor::Rgb(210, 190, 130),
         }
     }
 
@@ -83,6 +87,8 @@ impl GraphicElement for Floor {
             Floor::Plaza => RatColor::Rgb(140, 125, 90),
             Floor::Alley => RatColor::Rgb(45, 35, 22),
             Floor::StoneFloor => RatColor::Rgb(120, 115, 105),
+            Floor::DirtRoad => RatColor::Rgb(88, 68, 38),
+            Floor::BeachSand => RatColor::Rgb(180, 160, 100),
         }
     }
 }

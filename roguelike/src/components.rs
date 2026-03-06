@@ -557,7 +557,7 @@ impl ItemKind {
             ItemKind::Knife { .. } => "Knife".into(),
             ItemKind::Tomahawk { .. } => "Tomahawk".into(),
             ItemKind::Grenade { .. } => "Dynamite".into(),
-            ItemKind::Whiskey { .. } => "Whiskey Bottle".into(),
+            ItemKind::Whiskey { .. } => "Whiskey".into(),
             ItemKind::Molotov { .. } => "Molotov".into(),
             ItemKind::Bow { .. } => "Bow".into(),
             ItemKind::Beer { .. } => "Beer".into(),

@@ -137,7 +137,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
         commands.spawn((
             Position { x, y },
             Item,
-            Name("Whiskey Bottle".into()),
+            Name("Whiskey".into()),
             Renderable { symbol: "w".into(), fg: RatColor::Rgb(180, 120, 60), bg: RatColor::Black },
             ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
         ));
@@ -145,7 +145,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
         commands.spawn((
             Position { x, y },
             Item,
-            Name("Bowie Knife".into()),
+            Name("Knife".into()),
             Renderable { symbol: "/".into(), fg: RatColor::Rgb(192, 192, 210), bg: RatColor::Black },
             ItemKind::Knife { attack: 4, blunt_damage: 6 },
         ));
@@ -153,7 +153,7 @@ fn spawn_container_loot(commands: &mut Commands, x: i32, y: i32, roll: f64) {
         commands.spawn((
             Position { x, y },
             Item,
-            Name("Dynamite Stick".into()),
+            Name("Dynamite".into()),
             Renderable { symbol: "*".into(), fg: RatColor::Rgb(255, 165, 0), bg: RatColor::Black },
             ItemKind::Grenade { damage: 8, radius: 2, blunt_damage: 3 },
         ));

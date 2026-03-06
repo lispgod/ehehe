@@ -219,7 +219,6 @@ impl Plugin for WorldPlugin {
                     ai::ai_system,
                     combat::ai_ranged_attack_system,
                     turn::fire_system,
-                    turn::star_level_system,
                 )
                     .chain()
                     .after(RoguelikeSet::Consequence)
@@ -228,7 +227,7 @@ impl Plugin for WorldPlugin {
             .add_systems(
                 Update,
                 turn::end_world_turn_system
-                    .after(turn::star_level_system)
+                    .after(turn::fire_system)
                     .run_if(in_state(TurnState::WorldTurn)),
             );
     }
@@ -289,61 +288,126 @@ fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
     // Clear props directly around the player spawn so they don't start blocked.
     crate::gamemap::clear_around(&mut map.0, spawn_pos, 3);
 
-    // Spawn starting weapon: Colt Pocket (.31 caliber)
-    let caliber = Caliber::Cal31;
-    let colt_pocket = commands.spawn((
+    // Use spawn position as seed for deterministic randomization.
+    let rng_seed = (spawn_pos.x.wrapping_mul(7919) ^ spawn_pos.y.wrapping_mul(6271)) as u32;
+
+    // Random starting gun from the full weapon pool
+    let weapon_pool: &[(&str, Caliber, i32, &str)] = &[
+        ("Colt Sheriff", Caliber::Cal36, 5, "p"),
+        ("Colt Army", Caliber::Cal44, 6, "p"),
+        ("Colt Pocket", Caliber::Cal31, 5, "p"),
+        ("Remington New Model Army", Caliber::Cal44, 6, "p"),
+        ("Starr 1858 DA", Caliber::Cal44, 6, "p"),
+        ("Savage 1856", Caliber::Cal36, 6, "p"),
+        ("Adams Revolver", Caliber::Cal44, 5, "p"),
+        ("Hawken Rifle", Caliber::Cal50, 1, "r"),
+        ("Springfield 1842", Caliber::Cal69, 1, "r"),
+        ("Springfield 1855", Caliber::Cal58, 1, "r"),
+        ("Enfield 1853", Caliber::Cal577, 1, "r"),
+    ];
+    let gun_idx = (rng_seed as usize) % weapon_pool.len();
+    let (gun_name, caliber, capacity, symbol) = weapon_pool[gun_idx];
+
+    let gun = commands.spawn((
         Item,
-        Name("Colt Pocket".into()),
+        Name(gun_name.into()),
         Renderable {
-            symbol: "p".into(),
+            symbol: symbol.into(),
             fg: RatColor::Rgb(160, 150, 140),
             bg: RatColor::Black,
         },
         ItemKind::Gun {
-            loaded: 5,
-            capacity: 5,
+            loaded: capacity,
+            capacity,
             caliber,
             attack: caliber.damage(),
-            name: "Colt Pocket".into(),
+            name: gun_name.into(),
             blunt_damage: 5,
         },
     )).id();
 
-    // Spawn starting knife
-    let knife = commands.spawn((
-        Item,
-        Name("Bowie Knife".into()),
-        Renderable {
-            symbol: "/".into(),
-            fg: RatColor::Rgb(192, 192, 210),
-            bg: RatColor::Black,
-        },
-        ItemKind::Knife { attack: 4, blunt_damage: 6 },
-    )).id();
+    // Random alcohol
+    let alcohol_idx = (rng_seed.wrapping_mul(31) as usize) % 6;
+    let alcohol = match alcohol_idx {
+        0 => commands.spawn((
+            Item,
+            Name("Whiskey".into()),
+            Renderable { symbol: "w".into(), fg: RatColor::Rgb(180, 120, 60), bg: RatColor::Black },
+            ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
+        )).id(),
+        1 => commands.spawn((
+            Item,
+            Name("Beer".into()),
+            Renderable { symbol: "b".into(), fg: RatColor::Rgb(200, 180, 80), bg: RatColor::Black },
+            ItemKind::Beer { heal: 5, blunt_damage: 3 },
+        )).id(),
+        2 => commands.spawn((
+            Item,
+            Name("Ale".into()),
+            Renderable { symbol: "a".into(), fg: RatColor::Rgb(190, 150, 70), bg: RatColor::Black },
+            ItemKind::Ale { heal: 7, blunt_damage: 3 },
+        )).id(),
+        3 => commands.spawn((
+            Item,
+            Name("Stout".into()),
+            Renderable { symbol: "s".into(), fg: RatColor::Rgb(80, 50, 30), bg: RatColor::Black },
+            ItemKind::Stout { heal: 8, blunt_damage: 4 },
+        )).id(),
+        4 => commands.spawn((
+            Item,
+            Name("Wine".into()),
+            Renderable { symbol: "w".into(), fg: RatColor::Rgb(140, 40, 60), bg: RatColor::Black },
+            ItemKind::Wine { heal: 6, blunt_damage: 3 },
+        )).id(),
+        _ => commands.spawn((
+            Item,
+            Name("Rum".into()),
+            Renderable { symbol: "r".into(), fg: RatColor::Rgb(160, 100, 40), bg: RatColor::Black },
+            ItemKind::Rum { heal: 12, blunt_damage: 4 },
+        )).id(),
+    };
 
-    // Spawn starting whiskey
-    let whiskey = commands.spawn((
-        Item,
-        Name("Whiskey Bottle".into()),
-        Renderable {
-            symbol: "w".into(),
-            fg: RatColor::Rgb(180, 120, 60),
-            bg: RatColor::Black,
-        },
-        ItemKind::Whiskey { heal: 10, blunt_damage: 4 },
-    )).id();
+    // Randomize between knife, tomahawk, or nothing
+    let melee_idx = (rng_seed.wrapping_mul(47) as usize) % 3;
+    let melee_item = match melee_idx {
+        0 => Some(commands.spawn((
+            Item,
+            Name("Knife".into()),
+            Renderable { symbol: "/".into(), fg: RatColor::Rgb(192, 192, 210), bg: RatColor::Black },
+            ItemKind::Knife { attack: 4, blunt_damage: 6 },
+        )).id()),
+        1 => Some(commands.spawn((
+            Item,
+            Name("Tomahawk".into()),
+            Renderable { symbol: "t".into(), fg: RatColor::Rgb(160, 120, 80), bg: RatColor::Black },
+            ItemKind::Tomahawk { attack: 5, blunt_damage: 7 },
+        )).id()),
+        _ => None, // nothing
+    };
 
-    // Spawn starting molotov cocktail
-    let molotov = commands.spawn((
-        Item,
-        Name("Molotov Cocktail".into()),
-        Renderable {
-            symbol: "m".into(),
-            fg: RatColor::Rgb(255, 100, 0),
-            bg: RatColor::Black,
-        },
-        ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
-    )).id();
+    // Randomize between dynamite and molotov
+    let explosive_idx = (rng_seed.wrapping_mul(59) as usize) % 2;
+    let explosive = if explosive_idx == 0 {
+        commands.spawn((
+            Item,
+            Name("Dynamite".into()),
+            Renderable { symbol: "d".into(), fg: RatColor::Rgb(200, 50, 50), bg: RatColor::Black },
+            ItemKind::Grenade { damage: 8, radius: 3, blunt_damage: 5 },
+        )).id()
+    } else {
+        commands.spawn((
+            Item,
+            Name("Molotov".into()),
+            Renderable { symbol: "m".into(), fg: RatColor::Rgb(255, 100, 0), bg: RatColor::Black },
+            ItemKind::Molotov { damage: 6, radius: 4, blunt_damage: 4 },
+        )).id()
+    };
+
+    let mut items = vec![gun, alcohol];
+    if let Some(m) = melee_item {
+        items.push(m);
+    }
+    items.push(explosive);
 
     commands.spawn((
         Position {
@@ -374,7 +438,7 @@ fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
         Speed(ACTION_COST),
         Energy(0),
     )).insert((
-        Inventory { items: vec![colt_pocket, knife, whiskey, molotov] },
+        Inventory { items },
         Viewshed {
             range: 40,
             visible_tiles: HashSet::new(),

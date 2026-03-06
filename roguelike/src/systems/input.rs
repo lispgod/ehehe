@@ -3,7 +3,7 @@ use bevy_ratatui::event::KeyMessage;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::components::{Dead, Faction, Health, Inventory, ItemKind, SPELL_STAMINA_COST, Stamina, PlayerControlled, Position, Viewshed};
-use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
+use crate::events::{MeleeWideIntent, MolotovCastIntent, MoveIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, GameState, InputMode, InputState, MapSeed, RestartRequested, SpectatingAfterDeath, TurnState};
 
@@ -11,11 +11,9 @@ use crate::resources::{CombatLog, CursorPosition, DynamicRng, ExtraWorldTicks, G
 #[derive(SystemParam)]
 pub struct IntentWriters<'w> {
     move_intents: MessageWriter<'w, MoveIntent>,
-    attack_intents: MessageWriter<'w, AttackIntent>,
     spell_intents: MessageWriter<'w, SpellCastIntent>,
     molotov_intents: MessageWriter<'w, MolotovCastIntent>,
     use_item_intents: MessageWriter<'w, UseItemIntent>,
-    pickup_intents: MessageWriter<'w, PickupItemIntent>,
     ranged_intents: MessageWriter<'w, RangedAttackIntent>,
     melee_wide_intents: MessageWriter<'w, MeleeWideIntent>,
     throw_item_intents: MessageWriter<'w, ThrowItemIntent>,
@@ -30,23 +28,17 @@ const RANGED_ATTACK_RANGE: i32 = 100;
 /// Maximum inventory slots for the player.
 pub const MAX_INVENTORY_SIZE: usize = 6;
 
-/// Stamina cost for the Dual Wield ability (7 key).
-const DUAL_WIELD_STAMINA_COST: i32 = 15;
-
-/// Stamina cost for the Fan Shot ability (8 key).
-const FAN_SHOT_STAMINA_COST: i32 = 20;
-
-/// Stamina cost for the Throw Sand ability (9 key).
+/// Stamina cost for the Throw Sand ability (G key).
 const SAND_STAMINA_COST: i32 = 5;
 
-/// Stamina cost for the Throw Item ability (0 key).
+/// Stamina cost for the Throw Item ability (E key).
 const THROW_ITEM_STAMINA_COST: i32 = 10;
 
-/// Stamina cost for the Dive ability (Z key).
-const DIVE_STAMINA_COST: i32 = 20;
+/// Stamina cost for the Roundhouse ability (F key).
+const ROUNDHOUSE_STAMINA_COST: i32 = 10;
 
-/// Number of tiles the Dive ability moves.
-const DIVE_DISTANCE: i32 = 3;
+/// Stamina cost per tile of movement (WASD / arrows).
+const MOVE_STAMINA_COST: i32 = 2;
 
 /// A single command binding entry: the key(s) that trigger it, a short name, and documentation.
 pub struct CommandBinding {
@@ -62,21 +54,16 @@ pub struct CommandBinding {
 /// Used by the `?` help overlay to display available commands.
 /// Related keys are grouped (WASD, IJKL) to reduce visual clutter.
 pub const KEYBINDINGS: &[CommandBinding] = &[
-    CommandBinding { key: "WASD / ↑↓←→", name: "Move (3 ticks)", docs: "Move the player one tile. Physical movement costs 3 ticks." },
+    CommandBinding { key: "WASD / ↑↓←→", name: "Move (3 ticks)", docs: "Move the player one tile. Physical movement costs 3 ticks and 2 stamina." },
     CommandBinding { key: "IJKL", name: "Cursor (1 tick)", docs: "Move the cursor one tile for aiming. Costs 1 tick." },
     CommandBinding { key: "C", name: "Center cursor", docs: "Snap cursor onto your position. Costs 1 tick." },
     CommandBinding { key: "V", name: "Auto-aim", docs: "Cursor steps toward nearest enemy. Costs 1 tick." },
     CommandBinding { key: "R", name: "Reload (6 ticks)", docs: "Reload gun (1 bullet + 1 cap + 1 powder). Costs 6 ticks." },
-    CommandBinding { key: "F", name: "Kick (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks." },
+    CommandBinding { key: "F", name: "Roundhouse (2 ticks)", docs: "Roundhouse kick all adjacent enemies. Costs 2 ticks + 10 stamina." },
     CommandBinding { key: "T", name: "Wait (1 tick)", docs: "Skip your turn. Costs 1 tick." },
-    CommandBinding { key: "G", name: "Punch (2 ticks)", docs: "Punch in cursor direction. Costs 2 ticks." },
-    CommandBinding { key: "E", name: "Pick up", docs: "Pick up item at your feet. Costs 1 tick." },
-    CommandBinding { key: "Z", name: "Dive (20 sta)", docs: "Move 3 tiles toward cursor instantly. Costs 20 stamina." },
+    CommandBinding { key: "G", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
+    CommandBinding { key: "E", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
     CommandBinding { key: "1-6", name: "Fire/Use (2 ticks)", docs: "Use item by slot. Guns/grenades fire toward cursor. Costs 2 ticks." },
-    CommandBinding { key: "7", name: "Dual wield (15 sta)", docs: "Fire two random revolvers at once." },
-    CommandBinding { key: "8", name: "Fan shot (20 sta)", docs: "Fire all rounds from a random revolver." },
-    CommandBinding { key: "9", name: "Throw sand (5 sta)", docs: "Create sand cloud blocking vision toward cursor." },
-    CommandBinding { key: "0", name: "Throw item (10 sta)", docs: "Throw a random inventory item toward cursor." },
     CommandBinding { key: "Q", name: "Menu", docs: "Toggle pause menu" },
 ];
 
@@ -92,7 +79,7 @@ pub fn input_system(
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>, Option<&Dead>), With<PlayerControlled>>,
     mut player_viewshed: Query<&mut Viewshed, With<PlayerControlled>>,
     item_kind_query: Query<&ItemKind>,
-    (hostiles_query, health_query): (Query<&Position, (With<Faction>, Without<PlayerControlled>)>, Query<Entity, With<Health>>),
+    (hostiles_query, _health_query): (Query<&Position, (With<Faction>, Without<PlayerControlled>)>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,
@@ -101,7 +88,7 @@ pub fn input_system(
     mut input_state: ResMut<InputState>,
     mut restart_requested: ResMut<RestartRequested>,
     mut cursor: ResMut<CursorPosition>,
-    (mut extra_world_ticks, spectating, dynamic_rng, seed, spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
+    (mut extra_world_ticks, spectating, dynamic_rng, seed, _spatial): (ResMut<ExtraWorldTicks>, ResMut<SpectatingAfterDeath>, Res<DynamicRng>, Res<MapSeed>, Res<crate::resources::SpatialIndex>),
     mut god_mode: ResMut<crate::resources::GodMode>,
 ) {
     // Handle Dead and Victory states: R to restart, auto-advance turns when dead.
@@ -227,21 +214,25 @@ pub fn input_system(
                 }
             }
             // ── Movement keys (only while awaiting input) ───────
-            // Normal movement — costs 3 ticks (physical movement is slower)
+            // Normal movement — costs 3 ticks (physical movement is slower) and 2 stamina
             KeyCode::Char('w') | KeyCode::Up if awaiting_input => {
                 extra_world_ticks.0 = 2;
+                input_state.ability_stamina_pending = MOVE_STAMINA_COST;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, 1);
             }
             KeyCode::Char('s') | KeyCode::Down if awaiting_input => {
                 extra_world_ticks.0 = 2;
+                input_state.ability_stamina_pending = MOVE_STAMINA_COST;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 0, -1);
             }
             KeyCode::Char('a') | KeyCode::Left if awaiting_input => {
                 extra_world_ticks.0 = 2;
+                input_state.ability_stamina_pending = MOVE_STAMINA_COST;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, -1, 0);
             }
             KeyCode::Char('d') | KeyCode::Right if awaiting_input => {
                 extra_world_ticks.0 = 2;
+                input_state.ability_stamina_pending = MOVE_STAMINA_COST;
                 emit_move(&mut intents.move_intents, &mut next_turn_state, player_entity, 1, 0);
             }
             // ── Wait / skip turn (T) ────────────────────────────
@@ -255,44 +246,65 @@ pub fn input_system(
                 input_state.reload_pending = true;
                 advance_turn(&mut next_turn_state);
             }
-            // ── Melee wide (roundhouse kick) attack — costs 2 ticks (F key) ────
+            // ── Melee wide (roundhouse) attack — costs 2 ticks + stamina (F key) ────
             KeyCode::Char('f') if awaiting_input => {
-                extra_world_ticks.0 = 1;
-                intents.melee_wide_intents.write(MeleeWideIntent {
-                    attacker: player_entity,
-                });
-                advance_turn(&mut next_turn_state);
-            }
-            // ── Punch in cursor direction (G key) — costs 2 ticks ──
-            KeyCode::Char('g') if awaiting_input => {
-                let delta = cursor.pos - player_pos.as_grid_vec();
-                let step = if delta == crate::grid_vec::GridVec::ZERO {
-                    GridVec::new(0, -1) // default: punch south
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= ROUNDHOUSE_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina for roundhouse!".into());
                 } else {
-                    delta.king_step()
-                };
-                let punch_target = player_pos.as_grid_vec() + step;
-                // Find any entity with Health on that tile
-                let target_entity = spatial.entities_at(&punch_target).iter().find(|&&e| {
-                    e != player_entity && health_query.contains(e)
-                }).copied();
-                if let Some(target) = target_entity {
                     extra_world_ticks.0 = 1;
-                    intents.attack_intents.write(AttackIntent {
+                    input_state.ability_stamina_pending = ROUNDHOUSE_STAMINA_COST;
+                    intents.melee_wide_intents.write(MeleeWideIntent {
                         attacker: player_entity,
-                        target,
                     });
                     advance_turn(&mut next_turn_state);
-                } else {
-                    combat_log.push("Nothing to punch there.".into());
                 }
             }
-            // ── Pickup item on ground (E key) ───────────────────
+            // ── Throw sand (G key): create sand cloud blocking vision (costs stamina) ──
+            KeyCode::Char('g') if awaiting_input => {
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= SAND_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina!".into());
+                } else {
+                    let delta = cursor.pos - player_pos.as_grid_vec();
+                    if delta == crate::grid_vec::GridVec::ZERO {
+                        combat_log.push("Cursor is on your position!".into());
+                    } else {
+                        let step = delta.king_step();
+                        let sand_center = player_pos.as_grid_vec() + step * 2;
+                        // Create sand cloud as spell particles (visual obstruction)
+                        intents.spell_intents.write(SpellCastIntent {
+                            caster: player_entity,
+                            radius: 2,
+                            target: sand_center,
+                            grenade_index: usize::MAX, // sentinel: no grenade consumed
+                        });
+                        input_state.ability_stamina_pending = SAND_STAMINA_COST;
+                        combat_log.push("You throw a handful of sand!".into());
+                        extra_world_ticks.0 = 0;
+                        advance_turn(&mut next_turn_state);
+                    }
+                }
+            }
+            // ── Throw random item (E key): throw inventory item toward cursor (costs stamina) ──
             KeyCode::Char('e') if awaiting_input => {
-                intents.pickup_intents.write(PickupItemIntent {
-                    picker: player_entity,
-                });
-                advance_turn(&mut next_turn_state);
+                let has_stamina = player_stamina
+                    .map(|m| m.current >= THROW_ITEM_STAMINA_COST)
+                    .unwrap_or(false);
+                if !has_stamina {
+                    combat_log.push("Not enough stamina to throw!".into());
+                } else {
+                    input_state.ability_stamina_pending = THROW_ITEM_STAMINA_COST;
+                    handle_throw_random(
+                        player_entity, player_pos, player_inv, &item_kind_query,
+                        &cursor, &mut intents, &mut extra_world_ticks,
+                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
+                    );
+                }
             }
             // ── Toggle God Mode (Shift+G) ───────────────────────
             KeyCode::Char('G') if awaiting_input => {
@@ -301,34 +313,6 @@ pub fn input_system(
                     combat_log.push("God mode ENABLED — you are invincible.".into());
                 } else {
                     combat_log.push("God mode DISABLED.".into());
-                }
-            }
-            // ── Dive (Z): move 3 tiles toward cursor, costs 20 stamina ──
-            KeyCode::Char('z') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= DIVE_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina to dive!".into());
-                } else {
-                    let delta = cursor.pos - player_pos.as_grid_vec();
-                    if delta == crate::grid_vec::GridVec::ZERO {
-                        combat_log.push("Cursor is on your position!".into());
-                    } else {
-                        let step = delta.king_step();
-                        // Emit 3 consecutive move intents in the dive direction
-                        for _ in 0..DIVE_DISTANCE {
-                            intents.move_intents.write(MoveIntent {
-                                entity: player_entity,
-                                dx: step.x,
-                                dy: step.y,
-                            });
-                        }
-                        input_state.dive_stamina_pending = DIVE_STAMINA_COST;
-                        extra_world_ticks.0 = 0;
-                        combat_log.push("You dive!".into());
-                        advance_turn(&mut next_turn_state);
-                    }
                 }
             }
             // ── Use inventory item by slot (1-6) / Fire gun toward cursor / Throw / Grenade ──
@@ -429,209 +413,12 @@ pub fn input_system(
                     advance_turn(&mut next_turn_state);
                 }
             }
-            // ── Special abilities (7-0) ─────────────────────────
-            // 7: Dual wield shot — shoot once using two random revolvers (costs stamina)
-            KeyCode::Char('7') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= DUAL_WIELD_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina for dual wield!".into());
-                } else {
-                    input_state.ability_stamina_pending = DUAL_WIELD_STAMINA_COST;
-                    handle_dual_wield(
-                        player_entity, player_pos, player_inv, &item_kind_query,
-                        &cursor, &mut intents, &mut extra_world_ticks,
-                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                    );
-                }
-            }
-            // 8: Fan shot — fire all rounds from a random revolver (costs stamina)
-            KeyCode::Char('8') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= FAN_SHOT_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina for fan shot!".into());
-                } else {
-                    input_state.ability_stamina_pending = FAN_SHOT_STAMINA_COST;
-                    handle_fan_shot(
-                        player_entity, player_pos, player_inv, &item_kind_query,
-                        &cursor, &mut intents, &mut extra_world_ticks,
-                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                    );
-                }
-            }
-            // 9: Throw sand — create sand cloud blocking vision (costs stamina)
-            KeyCode::Char('9') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= SAND_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina!".into());
-                } else {
-                    let delta = cursor.pos - player_pos.as_grid_vec();
-                    if delta == crate::grid_vec::GridVec::ZERO {
-                        combat_log.push("Cursor is on your position!".into());
-                    } else {
-                        let step = delta.king_step();
-                        let sand_center = player_pos.as_grid_vec() + step * 2;
-                        // Create sand cloud as spell particles (visual obstruction)
-                        intents.spell_intents.write(SpellCastIntent {
-                            caster: player_entity,
-                            radius: 2,
-                            target: sand_center,
-                            grenade_index: usize::MAX, // sentinel: no grenade consumed
-                        });
-                        input_state.ability_stamina_pending = SAND_STAMINA_COST;
-                        combat_log.push("You throw a handful of sand!".into());
-                        extra_world_ticks.0 = 0;
-                        advance_turn(&mut next_turn_state);
-                    }
-                }
-            }
-            // 0: Throw random item from inventory toward cursor (costs stamina)
-            KeyCode::Char('0') if awaiting_input => {
-                let has_stamina = player_stamina
-                    .map(|m| m.current >= THROW_ITEM_STAMINA_COST)
-                    .unwrap_or(false);
-                if !has_stamina {
-                    combat_log.push("Not enough stamina to throw!".into());
-                } else {
-                    input_state.ability_stamina_pending = THROW_ITEM_STAMINA_COST;
-                    handle_throw_random(
-                        player_entity, player_pos, player_inv, &item_kind_query,
-                        &cursor, &mut intents, &mut extra_world_ticks,
-                        &mut next_turn_state, &mut combat_log, &dynamic_rng, &seed,
-                    );
-                }
-            }
             _ => {}
         }
     }
 }
 
-/// Special ability 7: Dual wield shot — fire two random revolvers at once.
-fn handle_dual_wield(
-    player_entity: Entity,
-    player_pos: &Position,
-    player_inv: Option<&Inventory>,
-    item_kind_query: &Query<&ItemKind>,
-    cursor: &CursorPosition,
-    intents: &mut IntentWriters,
-    extra_world_ticks: &mut ExtraWorldTicks,
-    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
-    combat_log: &mut CombatLog,
-    dynamic_rng: &DynamicRng,
-    seed: &MapSeed,
-) {
-    let delta = cursor.pos - player_pos.as_grid_vec();
-    if delta == crate::grid_vec::GridVec::ZERO {
-        combat_log.push("Cursor is on your position!".into());
-        return;
-    }
-
-    let Some(inv) = player_inv else {
-        combat_log.push("No inventory!".into());
-        return;
-    };
-
-    // Find all loaded revolvers in inventory
-    let loaded_guns: Vec<Entity> = inv.items.iter()
-        .filter(|&&ent| {
-            item_kind_query.get(ent).ok().is_some_and(|k| {
-                matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
-            })
-        })
-        .copied()
-        .collect();
-
-    if loaded_guns.len() < 2 {
-        combat_log.push("Need at least 2 loaded revolvers for dual wield!".into());
-        return;
-    }
-
-    // Pick two random guns using dynamic RNG
-    let idx1 = dynamic_rng.random_index(seed.0, 0xDA01, loaded_guns.len());
-    let mut idx2 = dynamic_rng.random_index(seed.0, 0xDA02, loaded_guns.len().saturating_sub(1));
-    if idx2 >= idx1 { idx2 += 1; }
-    idx2 = idx2.min(loaded_guns.len() - 1);
-
-    for &gun in &[loaded_guns[idx1], loaded_guns[idx2]] {
-        intents.ranged_intents.write(RangedAttackIntent {
-            attacker: player_entity,
-            range: RANGED_ATTACK_RANGE,
-            dx: delta.x,
-            dy: delta.y,
-            gun_item: Some(gun),
-        });
-    }
-    extra_world_ticks.0 = 1;
-    advance_turn(next_turn_state);
-    combat_log.push("Dual wield shot!".into());
-}
-
-/// Special ability 8: Fan shot — fire all rounds from a random revolver.
-fn handle_fan_shot(
-    player_entity: Entity,
-    player_pos: &Position,
-    player_inv: Option<&Inventory>,
-    item_kind_query: &Query<&ItemKind>,
-    cursor: &CursorPosition,
-    intents: &mut IntentWriters,
-    extra_world_ticks: &mut ExtraWorldTicks,
-    next_turn_state: &mut Option<ResMut<NextState<TurnState>>>,
-    combat_log: &mut CombatLog,
-    dynamic_rng: &DynamicRng,
-    seed: &MapSeed,
-) {
-    let delta = cursor.pos - player_pos.as_grid_vec();
-    if delta == crate::grid_vec::GridVec::ZERO {
-        combat_log.push("Cursor is on your position!".into());
-        return;
-    }
-
-    let Some(inv) = player_inv else {
-        combat_log.push("No inventory!".into());
-        return;
-    };
-
-    // Find all loaded revolvers
-    let loaded_guns: Vec<(Entity, i32)> = inv.items.iter()
-        .filter_map(|&ent| {
-            item_kind_query.get(ent).ok().and_then(|k| {
-                if let ItemKind::Gun { loaded, .. } = k {
-                    if *loaded > 0 { Some((ent, *loaded)) } else { None }
-                } else { None }
-            })
-        })
-        .collect();
-
-    if loaded_guns.is_empty() {
-        combat_log.push("No loaded revolvers!".into());
-        return;
-    }
-
-    // Pick random gun
-    let idx = dynamic_rng.random_index(seed.0, 0xFA00, loaded_guns.len());
-    let (gun, rounds) = loaded_guns[idx];
-
-    // Fire all loaded rounds
-    for _ in 0..rounds {
-        intents.ranged_intents.write(RangedAttackIntent {
-            attacker: player_entity,
-            range: RANGED_ATTACK_RANGE,
-            dx: delta.x,
-            dy: delta.y,
-            gun_item: Some(gun),
-        });
-    }
-    extra_world_ticks.0 = 2;
-    advance_turn(next_turn_state);
-    combat_log.push(format!("Fan shot! {} rounds!", rounds));
-}
-
-/// Special ability 0: Throw random inventory item toward cursor.
+/// Special ability: Throw random inventory item toward cursor.
 fn handle_throw_random(
     player_entity: Entity,
     player_pos: &Position,

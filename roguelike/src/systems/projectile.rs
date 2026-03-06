@@ -140,13 +140,16 @@ pub fn spawn_arrow(
     ));
 }
 
+/// Fixed shrapnel damage per fragment.
+pub const SHRAPNEL_DAMAGE: i32 = 20;
+
 /// Spawns shrapnel projectile entities for a grenade blast.
 /// One projectile per radial direction within the blast radius.
 pub fn spawn_shrapnel(
     commands: &mut Commands,
     origin: GridVec,
     radius: i32,
-    damage: i32,
+    _damage: i32,
     source: Entity,
 ) {
     for dx in -radius..=radius {
@@ -172,8 +175,8 @@ pub fn spawn_shrapnel(
                     path,
                     path_index: 1,
                     tiles_per_tick: SHRAPNEL_TILES_PER_TICK,
-                    damage,
-                    penetration: damage,
+                    damage: SHRAPNEL_DAMAGE,
+                    penetration: SHRAPNEL_DAMAGE,
                     source,
                     tail_pos: None,
                     visual: ProjectileVisual::BulletTrail,

@@ -94,7 +94,6 @@ pub fn combat_system(
     faction_query: Query<(Option<&Faction>, Option<&Position>)>,
     npc_query: Query<(Entity, &Position, Option<&Faction>), Without<PlayerControlled>>,
     player_query: Query<Entity, With<PlayerControlled>>,
-    mut star_level: ResMut<crate::resources::StarLevel>,
 ) {
     // Collect aggro events to apply after processing all intents
     let mut aggro_targets: Vec<(Entity, Entity, Option<GridVec>)> = Vec::new(); // (attacker, target, target_pos)
@@ -159,14 +158,8 @@ pub fn combat_system(
 
     // Apply aggro: propagate alert to nearby NPCs.
     // Hostility is purely faction-based — no Hostile component needed.
-    let player_entity = player_query.single().ok();
+    let _player_entity = player_query.single().ok();
     for (attacker, target, target_pos) in aggro_targets {
-        // Increase star level when the player attacks someone
-        if player_entity == Some(attacker) {
-            star_level.level = (star_level.level + 1).min(5);
-            star_level.unseen_turns = 0;
-        }
-
         // Get target's faction for propagation
         let target_faction = faction_query.get(target).ok().and_then(|(f, _)| f.copied());
 
@@ -608,7 +601,7 @@ pub fn melee_wide_system(
                     amount: damage,
                     source: Some(intent.attacker),
                 });
-                combat_log.push(format!("{a_name} kicks {t_name} for {damage} damage!"));
+                combat_log.push(format!("{a_name} roundhouse kicks {t_name} for {damage} damage!"));
                 hit_count += 1;
             }
 

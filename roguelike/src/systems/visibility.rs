@@ -76,17 +76,15 @@ pub fn visibility_system(
             let cos_t = if cone_dir.is_some() { 0.6 } else { -1.0 };
             (range, cos_t)
         } else if is_npc {
-            // Human NPCs: very far sight (100 tiles) but extremely narrow cone.
-            // In real life we can see almost infinitely far, so NPCs have long
-            // range but a very narrow FOV like looking through a tunnel.
+            // Human NPCs: 60-tile sight range with a narrow cone.
             if let Some(_dir) = cone_dir {
-                let range = 100;
+                let range = 60;
                 // Extremely narrow cone: cos ≈ 0.97 (roughly ~14° full cone).
                 let cos_t = 0.97;
                 (range, cos_t)
             } else {
                 // NPC has no look direction set — use narrow forward cone.
-                (100, 0.97)
+                (60, 0.97)
             }
         } else {
             // PlayerControlled: use the original formula.

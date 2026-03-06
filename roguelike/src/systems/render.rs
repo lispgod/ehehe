@@ -93,7 +93,7 @@ pub fn draw_system(
     (turn_counter, kill_count, blood_map): (Res<TurnCounter>, Res<KillCount>, Res<BloodMap>),
     spell_particles: Res<SpellParticles>,
     input_state: Res<InputState>,
-    (cursor, collectibles, star_level): (Res<CursorPosition>, Res<Collectibles>, Res<crate::resources::StarLevel>),
+    (cursor, collectibles): (Res<CursorPosition>, Res<Collectibles>),
     mut death_fade: ResMut<crate::resources::DeathFade>,
 ) -> Result {
     context.draw(|frame| {
@@ -249,10 +249,10 @@ pub fn draw_system(
                 for &tile in &vs.visible_tiles {
                     let diff = tile - npc_gv;
                     let dist_sq = (diff.x as i64) * (diff.x as i64) + (diff.y as i64) * (diff.y as i64);
-                    // Don't tint the circular proximity zone
-                    if dist_sq <= prox_sq {
-                        continue;
-                    }
+                    // For tiles in the circular proximity zone, only tint
+                    // those in the forward-facing direction (fixes the gap
+                    // between NPC and their FOV tint).
+                    let in_proximity = dist_sq <= prox_sq;
                     if diff.x.abs().max(diff.y.abs()) <= FOV_TINT_ARC_RADIUS {
                         if let Some(look) = ai_look {
                             let dot = diff.x as i64 * look.0.x as i64
@@ -260,6 +260,9 @@ pub fn draw_system(
                             if dot <= 0 && diff != GridVec::ZERO {
                                 continue;
                             }
+                        } else if in_proximity {
+                            // No look direction and in proximity — skip.
+                            continue;
                         }
                         enemy_visible.insert(tile);
                     }
@@ -588,17 +591,7 @@ pub fn draw_system(
                             .and_then(|(_, k)| k)
                             .map_or("".to_string(), |k| match k {
                                 ItemKind::Gun { loaded, capacity, caliber, .. } => format!("{loaded}/{capacity} {caliber}"),
-                                ItemKind::Knife { attack, .. } => format!("+{attack} atk"),
-                                ItemKind::Tomahawk { attack, .. } => format!("+{attack} atk"),
-                                ItemKind::Grenade { damage, radius, .. } => format!("{damage} dmg r{radius}"),
-                                ItemKind::Whiskey { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Molotov { damage, radius, .. } => format!("{damage} dmg r{radius}"),
-                                ItemKind::Bow { .. } => "Bow".to_string(),
-                                ItemKind::Beer { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Ale { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Stout { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Wine { heal, .. } => format!("Heal {heal} HP"),
-                                ItemKind::Rum { heal, .. } => format!("Heal {heal} HP"),
+                                _ => "".to_string(),
                             });
                         (name_str, desc)
                     })
@@ -681,7 +674,6 @@ pub fn draw_system(
             &turn_counter,
             &kill_count,
             &collectibles,
-            &star_level,
             // cursor info
             &cursor_ground,
             &cursor_prop,
@@ -769,7 +761,6 @@ fn render_bottom_panel(
     turn_counter: &TurnCounter,
     kill_count: &KillCount,
     collectibles: &Collectibles,
-    star_level: &crate::resources::StarLevel,
     // Cursor info
     cursor_ground: &str,
     cursor_prop: &str,
@@ -796,7 +787,7 @@ fn render_bottom_panel(
     let cursor_info_area = horiz_chunks[2];
 
     // ── Stats Column (left) ─────────────────────────────────────
-    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles, star_level);
+    render_stats_column(frame, stats_area, player_hp, player_stamina, collectibles);
 
     // ── Central Log (middle) ────────────────────────────────────
     let log_height = log_area.height.saturating_sub(2) as usize;
@@ -830,14 +821,12 @@ fn render_stats_column(
     player_hp: Option<&Health>,
     player_stamina: Option<&Stamina>,
     collectibles: &Collectibles,
-    star_level: &crate::resources::StarLevel,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // HP gauge (compact, no border)
             Constraint::Length(1), // Stamina gauge
-            Constraint::Length(1), // Star level
             Constraint::Length(1), // Collectibles row 1
             Constraint::Length(1), // Collectibles row 2
             Constraint::Length(1), // Collectibles row 3
@@ -870,21 +859,6 @@ fn render_stats_column(
         frame.render_widget(gauge, chunks[1]);
     }
 
-    // Star level (wanted level)
-    let stars = "★".repeat(star_level.level as usize);
-    let star_text = if star_level.level > 0 {
-        format!("Wanted: {stars}")
-    } else {
-        "Wanted: (none)".into()
-    };
-    let star_color = if star_level.level >= 3 { ratatui::style::Color::Red }
-        else if star_level.level >= 1 { ratatui::style::Color::Yellow }
-        else { ratatui::style::Color::DarkGray };
-    frame.render_widget(
-        Paragraph::new(Line::from(star_text).fg(star_color)),
-        chunks[2],
-    );
-
     // Collectibles — 3 entries per row
     let row1 = format!(
         "Cap:{} Pdr:{} .31:{}",
@@ -898,9 +872,9 @@ fn render_stats_column(
         ".58:{} .577:{} .69:{}",
         collectibles.bullets_58, collectibles.bullets_577, collectibles.bullets_69,
     );
-    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[3]);
-    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[4]);
-    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[5]);
+    frame.render_widget(Paragraph::new(Line::from(row1).dark_gray()), chunks[2]);
+    frame.render_widget(Paragraph::new(Line::from(row2).dark_gray()), chunks[3]);
+    frame.render_widget(Paragraph::new(Line::from(row3).dark_gray()), chunks[4]);
 }
 
 /// Renders the cursor info panel as a two-column display.

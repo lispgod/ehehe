@@ -4431,4 +4431,97 @@ mod tests {
             kinds.len()
         );
     }
+
+    #[test]
+    fn lot_densification_fills_partially_covered_lots() {
+        // Lots that already have BSP buildings should still receive
+        // additional lot-grid buildings in uncovered areas.
+        let (buildings, _, _) = generate_buildings_bsp(
+            400, 280, 42, &[60, 100, 140, 180], &[80, 160, 240, 320], 3, 2,
+        );
+        // The denser approach should produce significantly more buildings
+        // than a system that skips lots with any BSP coverage.
+        assert!(
+            buildings.len() >= 30,
+            "Dense lot filling should place at least 30 buildings, found {}",
+            buildings.len()
+        );
+        // Verify no exact overlaps between any two buildings
+        for (i, a) in buildings.iter().enumerate() {
+            for b in &buildings[i + 1..] {
+                let overlaps = a.x < b.x + b.w && a.x + a.w > b.x
+                    && a.y < b.y + b.h && a.y + a.h > b.y;
+                assert!(!overlaps,
+                    "Buildings at ({},{}) {}x{} and ({},{}) {}x{} overlap",
+                    a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h);
+            }
+        }
+    }
+
+    #[test]
+    fn edge_lots_use_minimal_boundary_offset() {
+        // Lots adjacent to the map edge (not a road) should get a minimal
+        // boundary offset of 1 tile, not the full road+sidewalk width.
+        let avenue_ys: Vec<CoordinateUnit> = vec![100];
+        let cross_xs: Vec<CoordinateUnit> = vec![100];
+        let (buildings, _, _) = generate_buildings_bsp(
+            200, 200, 42, &avenue_ys, &cross_xs, 3, 2,
+        );
+        // With only one avenue and one cross street, there are 4 lots.
+        // Edge lots (adjacent to map border) should be large enough to
+        // hold buildings because they use a minimal 1-tile margin.
+        assert!(
+            buildings.len() >= 4,
+            "Edge lots should have buildings, found only {} buildings",
+            buildings.len()
+        );
+    }
+
+    #[test]
+    fn large_building_has_room_grid() {
+        // Buildings with interior ≥ 10×10 should have dividing walls
+        // creating a 2×2 room grid.
+        let map = GameMap::new(400, 280, 42);
+        // Find a building large enough to have a room grid (≥ 12×12)
+        let mut found_room_grid = false;
+        for y in 1..279 {
+            for x in 1..399 {
+                // Look for interior wall tiles that are NOT on the outer
+                // perimeter — these indicate room dividers.
+                let pos = GridVec::new(x as i32, y as i32);
+                if let Some(v) = map.get_voxel_at(&pos) {
+                    if v.props.as_ref().is_some_and(|p| p.is_wall())
+                        && matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+                    {
+                        // Check if it's surrounded by floor on opposite sides
+                        // (indicating an interior divider, not perimeter)
+                        let left = GridVec::new(x as i32 - 1, y as i32);
+                        let right = GridVec::new(x as i32 + 1, y as i32);
+                        let up = GridVec::new(x as i32, y as i32 - 1);
+                        let down = GridVec::new(x as i32, y as i32 + 1);
+                        let l_floor = map.get_voxel_at(&left).is_some_and(|v|
+                            matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+                            && !v.props.as_ref().is_some_and(|p| p.is_wall()));
+                        let r_floor = map.get_voxel_at(&right).is_some_and(|v|
+                            matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+                            && !v.props.as_ref().is_some_and(|p| p.is_wall()));
+                        let u_floor = map.get_voxel_at(&up).is_some_and(|v|
+                            matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+                            && !v.props.as_ref().is_some_and(|p| p.is_wall()));
+                        let d_floor = map.get_voxel_at(&down).is_some_and(|v|
+                            matches!(v.floor, Some(Floor::WoodPlanks) | Some(Floor::StoneFloor))
+                            && !v.props.as_ref().is_some_and(|p| p.is_wall()));
+                        // Interior divider: floor on both sides horizontally OR vertically
+                        if (l_floor && r_floor) || (u_floor && d_floor) {
+                            found_room_grid = true;
+                            break;
+                        }
+                    }
+                }
+                if found_room_grid { break; }
+            }
+            if found_room_grid { break; }
+        }
+        assert!(found_room_grid, "Large buildings should have interior dividing walls (room grid)");
+    }
 }

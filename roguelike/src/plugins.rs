@@ -72,7 +72,7 @@ impl Plugin for RoguelikePlugin {
                     .unwrap_or(42)
             });
 
-        let game_map = GameMap::new(400, 280, seed);
+        let game_map = GameMap::new(800, 560, seed);
         // Compute actual player spawn position so camera+cursor start centered on it.
         // Must match the spawn logic in do_spawn_player().
         let center = GridVec::new(game_map.width / 2, game_map.height / 2);
@@ -390,66 +390,32 @@ fn do_spawn_player(commands: &mut Commands, map: &mut GameMapResource) {
 }
 
 /// Helper: spawns NPCs in faction groups distributed across the full map.
-/// Spawns are significantly increased and spread across wider areas,
-/// with larger coherent gang groups including the outskirts.
+/// Enemy gangs spawn all over roads and inside buildings within a 150-tile
+/// radius of the player, with many more groups than before.
 fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) {
     let group_seed = seed.wrapping_add(54321);
     let player_spawn = map.0.find_spawnable_near(
         GridVec::new(map.0.width / 2, map.0.height / 2), 20
     ).unwrap_or(GridVec::new(map.0.width / 2, map.0.height / 2));
     let min_spawn_dist_sq = 8 * 8; // keep clear zone around player spawn
-    let max_spawn_dist_sq: i32 = 100 * 100; // non-civilian NPCs spawn within 100 tiles of player
-
-    // ── All factions near their anchor buildings ─────────────────
-    let anchor_radius = 12i32;
-    for (anchor_pos, faction, _name) in &map.0.faction_anchors {
-        let is_civilian = matches!(faction, crate::components::Faction::Civilians);
-        let (templates, seed_offset): (&[usize], u64) = match faction {
-            crate::components::Faction::Civilians => (&[1], 44444),
-            crate::components::Faction::Police => (&[4, 5], 66666),
-            crate::components::Faction::Outlaws => (&[6, 7], 77700),
-            crate::components::Faction::Lawmen => (&[8, 9], 77800),
-            crate::components::Faction::Apache => (&[2, 3], 77900),
-            crate::components::Faction::Vaqueros => (&[0], 78000),
-            _ => continue,
-        };
-        let base_size = 5 + (value_noise(anchor_pos.x, anchor_pos.y, group_seed.wrapping_add(seed_offset)) * 5.0) as i32;
-        let mut spawned = 0;
-        for dy in -anchor_radius..=anchor_radius {
-            for dx in -anchor_radius..=anchor_radius {
-                if spawned >= base_size { break; }
-                let pos = GridVec::new(anchor_pos.x + dx, anchor_pos.y + dy);
-                if pos.distance_squared(player_spawn) < min_spawn_dist_sq { continue; }
-                // Non-civilian NPCs must spawn within 100 tiles of the player.
-                if !is_civilian && pos.distance_squared(player_spawn) > max_spawn_dist_sq { continue; }
-                if !map.0.is_spawnable(&pos) { continue; }
-                let tile_noise = value_noise(pos.x, pos.y, group_seed.wrapping_add(seed_offset + 1111));
-                if tile_noise > 0.45 { continue; }
-                let template_idx = templates[(spawned as usize) % templates.len()];
-                let template = &MONSTER_TEMPLATES[template_idx];
-                spawn::spawn_monster(commands, template, pos.x, pos.y, 0, 0);
-                spawned += 1;
-            }
-            if spawned >= base_size { break; }
-        }
-    }
+    let max_spawn_dist_sq: i32 = 150 * 150; // non-civilian NPCs spawn within 150 tiles of player
 
     // ── Faction gang groups across the full map ──────────────────
-    // Each faction gets multiple larger groups (5-8 NPCs) spread over
-    // a wide area including the outskirts.
+    // Each faction gets many larger groups (5-8 NPCs) spread over
+    // a wide area including roads and building interiors.
     let gang_seed = group_seed.wrapping_add(99999);
     let center_x = map.0.width / 2;
     let center_y = map.0.height / 2;
-    let spawn_radius = (map.0.width.min(map.0.height) / 2).max(60);
+    let spawn_radius: i32 = 150;
 
     // (template indices, faction offset seed, number of groups, is_civilian)
     let gang_configs: &[(&[usize], u64, i32, bool)] = &[
-        (&[2, 3], 10, 5, false),   // Apache: 5 groups
-        (&[0], 20, 5, false),      // Vaqueros: 5 groups
-        (&[1], 30, 4, true),       // Civilians: 4 groups (exempt from radius)
-        (&[4, 5], 40, 4, false),   // Police: 4 groups
-        (&[6, 7], 50, 6, false),   // Outlaws: 6 groups
-        (&[8, 9], 60, 4, false),   // Lawmen: 4 groups
+        (&[2, 3], 10, 14, false),  // Apache: 14 groups
+        (&[0], 20, 14, false),     // Vaqueros: 14 groups
+        (&[1], 30, 8, true),       // Civilians: 8 groups (exempt from radius)
+        (&[4, 5], 40, 12, false),  // Police: 12 groups
+        (&[6, 7], 50, 16, false),  // Outlaws: 16 groups
+        (&[8, 9], 60, 12, false),  // Lawmen: 12 groups
     ];
 
     for &(templates, offset, num_groups, is_civilian_group) in gang_configs {
@@ -469,7 +435,7 @@ fn do_spawn_monsters(commands: &mut Commands, map: &GameMapResource, seed: u64) 
                     if spawned >= group_size { break; }
                     let pos = GridVec::new(anchor_x + dx, anchor_y + dy);
                     if pos.distance_squared(player_spawn) < min_spawn_dist_sq { continue; }
-                    // Non-civilian NPCs must spawn within 100 tiles of the player.
+                    // Non-civilian NPCs must spawn within 150 tiles of the player.
                     if !is_civilian_group && pos.distance_squared(player_spawn) > max_spawn_dist_sq { continue; }
                     if !map.0.is_spawnable(&pos) { continue; }
                     let tile_noise = value_noise(pos.x, pos.y, gs.wrapping_add(3333));
@@ -539,7 +505,7 @@ fn restart_system(
     res.turn_counter.0 = 0;
     res.spell_particles.particles.clear();
     *res.input_state = InputState::default();
-    *res.game_map = GameMapResource(GameMap::new(400, 280, res.seed.0));
+    *res.game_map = GameMapResource(GameMap::new(800, 560, res.seed.0));
     let center = GridVec::new(res.game_map.0.width / 2, res.game_map.0.height / 2);
     let player_spawn = res.game_map.0.find_building_interior(center, 40)
         .or_else(|| res.game_map.0.find_spawnable_near(center, 20))

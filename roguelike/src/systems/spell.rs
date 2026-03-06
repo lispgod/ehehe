@@ -265,8 +265,8 @@ pub fn explosive_projectile_system(
             proj_pos.x = tile.x;
             proj_pos.y = tile.y;
 
-            // Check for wall hit
-            if !game_map.0.is_passable(&tile) {
+            // Check for wall hit (windows let projectiles through)
+            if !game_map.0.is_passable_for_projectiles(&tile) {
                 detonate_pos = Some(tile);
                 break;
             }

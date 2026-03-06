@@ -290,8 +290,8 @@ pub fn projectile_system(
             // Check current tile for damage before advancing.
             let tile = proj.path[proj.path_index];
 
-            // Stop if hitting an impassable wall.
-            if !game_map.0.is_passable(&tile) {
+            // Stop if hitting an impassable wall (windows let projectiles through).
+            if !game_map.0.is_passable_for_projectiles(&tile) {
                 sound_events.add(tile);
                 despawn = true;
                 break;

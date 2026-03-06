@@ -92,7 +92,7 @@ pub fn input_system(
     player_query: Query<(Entity, &Position, Option<&Stamina>, Option<&Inventory>, Option<&Dead>), With<PlayerControlled>>,
     mut player_viewshed: Query<&mut Viewshed, With<PlayerControlled>>,
     item_kind_query: Query<&ItemKind>,
-    (hostiles_query, health_query): (Query<&Position, With<Faction>>, Query<Entity, With<Health>>),
+    (hostiles_query, health_query): (Query<&Position, (With<Faction>, Without<PlayerControlled>)>, Query<Entity, With<Health>>),
     game_state: Res<State<GameState>>,
     mut next_game_state: ResMut<NextState<GameState>>,
     turn_state: Option<Res<State<TurnState>>>,

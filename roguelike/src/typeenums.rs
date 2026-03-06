@@ -78,6 +78,8 @@ pub enum Props {
     StoneWall,
     /// Gunpowder barrel — explodes when destroyed, causing fire in a radius.
     GunpowderBarrel,
+    /// Window — blocks movement but allows vision and projectiles through.
+    Window,
 }
 
 impl Props {
@@ -89,9 +91,15 @@ impl Props {
 
     /// Returns `true` if this prop blocks entity movement.
     /// Most solid objects block movement; low/open objects like fences and
-    /// water troughs allow passage.
+    /// water troughs allow passage. Windows block movement but not projectiles.
     pub fn blocks_movement(&self) -> bool {
         !matches!(self, Props::Fence | Props::WaterTrough | Props::RailTrack)
+    }
+
+    /// Returns `true` if this prop blocks projectiles (bullets).
+    /// Windows allow projectiles through; all other movement-blocking props stop them.
+    pub fn blocks_projectiles(&self) -> bool {
+        self.blocks_movement() && !matches!(self, Props::Window)
     }
 
     /// Returns `true` if this prop blocks line-of-sight.
@@ -104,7 +112,7 @@ impl Props {
             | Props::Sign | Props::RailTrack | Props::LampPost
             | Props::Barrel | Props::Crate | Props::Table
             | Props::HitchingPost | Props::Rock | Props::Cactus
-            | Props::GunpowderBarrel => false,
+            | Props::GunpowderBarrel | Props::Window => false,
             _ => true,
         }
     }
@@ -119,6 +127,7 @@ impl Props {
             Props::Chair | Props::Sign | Props::Fence | Props::HayBale => 10,
             Props::Bush | Props::Cactus | Props::LampPost | Props::HitchingPost | Props::WaterTrough => 20,
             Props::GunpowderBarrel => 10,
+            Props::Window => 5,
             Props::RailTrack => i32::MAX,
         }
     }
@@ -132,7 +141,7 @@ impl Props {
             | Props::Chair | Props::Piano | Props::Bench
             | Props::HayBale | Props::Sign | Props::Fence
             | Props::Gallows | Props::WaterTower | Props::Windmill
-            | Props::GunpowderBarrel
+            | Props::GunpowderBarrel | Props::Window
         )
     }
 }
@@ -165,6 +174,7 @@ impl std::fmt::Display for Props {
             Props::LampPost => write!(f, "Lamp Post"),
             Props::StoneWall => write!(f, "Stone Wall"),
             Props::GunpowderBarrel => write!(f, "Gunpowder"),
+            Props::Window => write!(f, "Window"),
         }
     }
 }

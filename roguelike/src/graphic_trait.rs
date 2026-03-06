@@ -121,6 +121,7 @@ impl GraphicElement for Props {
             Props::LampPost => "i".into(),
             Props::StoneWall => "#".into(),
             Props::GunpowderBarrel => "0".into(),
+            Props::Window => "~".into(),
         }
     }
 
@@ -151,6 +152,7 @@ impl GraphicElement for Props {
             Props::LampPost => RatColor::Rgb(80, 80, 90),
             Props::StoneWall => RatColor::Rgb(140, 135, 125),
             Props::GunpowderBarrel => RatColor::Rgb(80, 60, 40),
+            Props::Window => RatColor::Rgb(150, 190, 220),
         }
     }
 

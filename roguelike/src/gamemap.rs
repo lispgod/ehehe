@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::components::Faction;
 use crate::grid_vec::GridVec;
 use crate::noise::{fbm, value_noise, NoiseSeed};
 use crate::typeenums::{Floor, Props};
@@ -27,9 +26,6 @@ pub struct GameMap {
     /// Stores the previous floor type before a sand cloud was placed.
     /// Used to restore the original floor when the cloud dissipates.
     pub sand_cloud_previous_floor: HashMap<GridVec, Option<Floor>>,
-    /// Faction anchor buildings: (center position, faction, building name).
-    /// Factions seed from these defensible positions rather than randomly.
-    pub faction_anchors: Vec<(GridVec, Faction, String)>,
     /// Shared spatial occupancy grid. True = tile is already occupied by
     /// a road, river, beach, or building. No later pass may place on it.
     pub occupancy: Vec<Vec<bool>>,
@@ -125,7 +121,6 @@ impl TerrainPhase {
             fire_previous_floor: HashMap::new(),
             sand_cloud_turns: HashMap::new(),
             sand_cloud_previous_floor: HashMap::new(),
-            faction_anchors: Vec::new(),
             occupancy: vec![vec![false; height as usize]; width as usize],
         };
 
@@ -686,9 +681,6 @@ impl WorldGenPhase for BuildingPhase {
         // Ensure every alley region connects to a road or sidewalk
         ensure_alley_connectivity(map, width, height);
 
-        // Assign faction anchors from building kinds
-        assign_faction_anchors(map, &data.buildings);
-
         // Transition zone scatter around town perimeter
         place_transition_zones(map, width, height, seed, &data.buildings);
     }
@@ -965,6 +957,19 @@ impl GameMap {
             .is_some_and(|v| {
                 match &v.props {
                     Some(f) => !f.blocks_movement(),
+                    None => true,
+                }
+            })
+    }
+
+    /// Returns `true` if a projectile can pass through this tile.
+    /// Windows allow projectiles through even though they block movement.
+    #[inline]
+    pub fn is_passable_for_projectiles(&self, point: &MyPoint) -> bool {
+        self.get_voxel_at(point)
+            .is_some_and(|v| {
+                match &v.props {
+                    Some(f) => !f.blocks_projectiles(),
                     None => true,
                 }
             })
@@ -2197,55 +2202,6 @@ fn in_bounds_neighbors(pos: GridVec, width: CoordinateUnit, height: CoordinateUn
         .filter(|nb| nb.x >= 0 && nb.x < width && nb.y >= 0 && nb.y < height)
         .collect()
 }
-/// Assigns faction anchor buildings — each faction seeds from a specific
-/// defensible building type rather than spawning randomly.
-fn assign_faction_anchors(map: &mut GameMap, buildings: &[Building]) {
-    // Map building kinds to factions:
-    // 1=Saloon → Outlaws, 2=Stable → Vaqueros, 4=Police Station → Police,
-    // 7=Bank → Lawmen, 8=Hotel → Civilians, 0=House → Apache (outskirts)
-    let mut used_kinds: HashSet<u32> = HashSet::new();
-    let mut apache_anchor_assigned = false;
-
-    for b in buildings {
-        let center = GridVec::new(b.x + b.w / 2, b.y + b.h / 2);
-        let (faction, name) = match b.kind {
-            1 if !used_kinds.contains(&1) => {
-                used_kinds.insert(1);
-                (Faction::Outlaws, "Cantina".to_string())
-            }
-            2 if !used_kinds.contains(&2) => {
-                used_kinds.insert(2);
-                (Faction::Vaqueros, "Livery Stable".to_string())
-            }
-            4 if !used_kinds.contains(&4) => {
-                used_kinds.insert(4);
-                (Faction::Police, "Marshal's Office".to_string())
-            }
-            7 if !used_kinds.contains(&7) => {
-                used_kinds.insert(7);
-                (Faction::Lawmen, "Bank".to_string())
-            }
-            8 if !used_kinds.contains(&8) => {
-                used_kinds.insert(8);
-                (Faction::Civilians, "Hotel".to_string())
-            }
-            0 if !apache_anchor_assigned => {
-                // Use first house on outskirts for Apache
-                let dist_to_center = center.distance_squared(GridVec::new(
-                    map.width / 2, map.height / 2
-                ));
-                if dist_to_center > (map.width / 4) * (map.width / 4) {
-                    apache_anchor_assigned = true;
-                    (Faction::Apache, "Hacienda".to_string())
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
-        };
-        map.faction_anchors.push((center, faction, name));
-    }
-}
 
 /// Places a building on the map: walls around the perimeter, wood plank floor,
 /// and interior props based on building kind.
@@ -2335,7 +2291,16 @@ fn place_building(map: &mut GameMap, b: &Building, seed: NoiseSeed) {
                         voxel.props = Some(Props::StoneWall);
                         voxel.floor = Some(Floor::StoneFloor);
                     } else {
-                        voxel.props = Some(Props::Wall);
+                        // Small chance to place a window instead of a wall.
+                        // Only on non-corner border tiles (skip first/last of each edge).
+                        let at_building_corner = (x == b.x || x == b.x + b.w - 1)
+                            && (y == b.y || y == b.y + b.h - 1);
+                        let window_noise = value_noise(x, y, seed.wrapping_add(88888));
+                        if !at_building_corner && window_noise < 0.12 {
+                            voxel.props = Some(Props::Window);
+                        } else {
+                            voxel.props = Some(Props::Wall);
+                        }
                         voxel.floor = Some(Floor::WoodPlanks);
                     }
                 } else {
@@ -3424,12 +3389,6 @@ fn place_mission_at(map: &mut GameMap, mx: CoordinateUnit, my: CoordinateUnit, m
     set_prop(map, divider_x + 2, my + mh / 2 + 2, Props::Barrel);
     set_prop(map, divider_x + 3, my + mh / 2 + 2, Props::Crate);
 
-    // Register mission as a faction anchor (contested/neutral)
-    map.faction_anchors.push((
-        GridVec::new(mx + mw / 2, my + mh / 2),
-        Faction::Civilians,
-        "Mission".to_string(),
-    ));
     map.mark_occupied(mx, my, mw, mh);
 }
 
@@ -4405,15 +4364,6 @@ mod tests {
     }
 
     #[test]
-    fn large_map_has_faction_anchors() {
-        let map = GameMap::new(400, 280, 42);
-        assert!(
-            !map.faction_anchors.is_empty(),
-            "Map should assign faction anchor buildings"
-        );
-    }
-
-    #[test]
     fn large_map_has_alleys() {
         let map = GameMap::new(400, 280, 42);
         let mut alley_count = 0;
@@ -4472,14 +4422,6 @@ mod tests {
         assert!(Props::Wall.is_wall());
         assert!(!Props::Table.is_wall());
         assert!(!Props::Barrel.is_wall());
-    }
-
-    #[test]
-    fn faction_anchors_deterministic() {
-        let map1 = GameMap::new(200, 140, 42);
-        let map2 = GameMap::new(200, 140, 42);
-        assert_eq!(map1.faction_anchors.len(), map2.faction_anchors.len(),
-            "Faction anchor count should be deterministic");
     }
 
     #[test]
@@ -4596,11 +4538,6 @@ mod tests {
             }
             assert!(has_wood, "Seed {seed}: map must have buildings (wood plank floors)");
             assert!(has_dirt, "Seed {seed}: map must have streets (dirt roads)");
-            // Must have faction anchors
-            assert!(
-                !map.faction_anchors.is_empty(),
-                "Seed {seed}: map must have faction anchors"
-            );
             // Spawn area must be clear
             let spawn_passable = map.is_passable(&SPAWN_POINT);
             assert!(spawn_passable, "Seed {seed}: spawn point must be passable");
@@ -4768,7 +4705,6 @@ mod tests {
             fire_previous_floor: HashMap::new(),
             sand_cloud_turns: HashMap::new(),
             sand_cloud_previous_floor: HashMap::new(),
-            faction_anchors: Vec::new(),
             occupancy: vec![vec![false; 10]; 10],
         };
         let bridge_pos = GridVec::new(5, 5);

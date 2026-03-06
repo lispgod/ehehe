@@ -3403,6 +3403,9 @@ fn ai_ranged_attack_via_ranged_intent() {
     app.world_mut().get_mut::<AiState>(npc).unwrap().clone_from(&AiState::Chasing);
     app.world_mut().get_mut::<Energy>(npc).unwrap().0 = ACTION_COST;
     app.world_mut().get_mut::<AiLookDir>(npc).unwrap().0 = GridVec::new(-1, 0);
+    // Cursor already on-target so the NPC can fire immediately.
+    app.world_mut().entity_mut(npc).insert(Cursor { pos: GridVec::new(50, 40) });
+    app.world_mut().entity_mut(npc).insert(AimingStyle::SnapShot);
     {
         let mut vs = app.world_mut().get_mut::<Viewshed>(npc).unwrap();
         vs.visible_tiles.insert(GridVec::new(50, 40));
@@ -4237,99 +4240,95 @@ fn two_shots_produce_at_most_two_bullets() {
     );
 }
 
-// ─── AiAimCursor Tests ──────────────────────────────────────────
+// ─── Cursor Tests (shared NPC/player cursor) ────────────────────
 
 #[test]
-fn ai_aim_cursor_initialised_at_npc_position() {
-    // When an NPC transitions to Chasing, its AiAimCursor should start at
+fn ai_cursor_initialised_at_npc_position() {
+    // When an NPC transitions to Chasing, its Cursor should start at
     // the NPC's own position, not at the target's.
-    let cursor = AiAimCursor {
+    let cursor = Cursor {
         pos: GridVec::new(10, 10),
-        steps_remaining: 0,
     };
     assert_eq!(cursor.pos, GridVec::new(10, 10));
-    assert_eq!(cursor.steps_remaining, 0);
 }
 
 #[test]
-fn ai_aim_cursor_advances_toward_target() {
-    // Simulate cursor advancing king-steps toward a target.
-    let mut cursor = AiAimCursor {
+fn ai_cursor_advances_one_step_per_turn() {
+    // Cursor advances exactly one king-step per turn (no dice roll).
+    let mut cursor = Cursor {
         pos: GridVec::new(10, 10),
-        steps_remaining: 3,
     };
     let target = GridVec::new(15, 10);
 
-    while cursor.steps_remaining > 0 && cursor.pos != target {
-        let step = (target - cursor.pos).king_step();
-        cursor.pos = cursor.pos + step;
-        cursor.steps_remaining -= 1;
+    // Simulate 3 turns of cursor advancement (1 step each)
+    for _ in 0..3 {
+        if cursor.pos != target {
+            let step = (target - cursor.pos).king_step();
+            cursor.pos = cursor.pos + step;
+        }
     }
     // After 3 king-steps east, cursor should be at (13, 10).
     assert_eq!(cursor.pos, GridVec::new(13, 10));
-    assert_eq!(cursor.steps_remaining, 0);
 }
 
 #[test]
-fn ai_aim_cursor_reaches_target_stops() {
-    // If cursor is close enough, it should stop at the target.
-    let mut cursor = AiAimCursor {
+fn ai_cursor_reaches_target_stops() {
+    // Once cursor is on the target, it stops advancing.
+    let mut cursor = Cursor {
         pos: GridVec::new(13, 10),
-        steps_remaining: 6,
     };
     let target = GridVec::new(15, 10);
 
-    while cursor.steps_remaining > 0 && cursor.pos != target {
-        let step = (target - cursor.pos).king_step();
-        cursor.pos = cursor.pos + step;
-        cursor.steps_remaining -= 1;
+    // Simulate 6 turns — cursor should stop at target after 2
+    for _ in 0..6 {
+        if cursor.pos != target {
+            let step = (target - cursor.pos).king_step();
+            cursor.pos = cursor.pos + step;
+        }
     }
-    // Should stop at target (15, 10), not overshoot. 4 steps remaining unused.
     assert_eq!(cursor.pos, target);
-    assert_eq!(cursor.steps_remaining, 4);
 }
 
 #[test]
-fn ai_aim_cursor_d6_roll_range() {
-    // The 1d6 roll should produce values 1-6.
-    for i in 0..100u64 {
-        let roll_hash = (i ^ 42u64).wrapping_mul(6364136223846793005);
-        let result = ((roll_hash % 6) as u8) + 1;
-        assert!((1..=6).contains(&result), "1d6 roll out of range: {result}");
-    }
+fn ai_cursor_one_step_per_turn() {
+    // Each turn the cursor advances exactly 1 king-step, matching player cursor speed.
+    let mut cursor = Cursor { pos: GridVec::new(0, 0) };
+    let target = GridVec::new(5, 3);
+    let old_pos = cursor.pos;
+    let step = (target - cursor.pos).king_step();
+    cursor.pos = cursor.pos + step;
+    let moved = cursor.pos.chebyshev_distance(old_pos);
+    assert_eq!(moved, 1, "Cursor should advance exactly 1 king-step per turn");
 }
 
 #[test]
-fn ai_aim_cursor_persists_between_shots() {
+fn ai_cursor_persists_between_shots() {
     // The cursor should NOT reset between shots — it stays where it was.
-    let mut cursor = AiAimCursor {
+    let mut cursor = Cursor {
         pos: GridVec::new(13, 10),
-        steps_remaining: 0,
     };
     let target = GridVec::new(15, 10);
 
-    // Simulate first "shot": roll 2 steps
-    cursor.steps_remaining = 2;
-    while cursor.steps_remaining > 0 && cursor.pos != target {
-        let step = (target - cursor.pos).king_step();
-        cursor.pos = cursor.pos + step;
-        cursor.steps_remaining -= 1;
+    // Simulate 2 turns of advancement
+    for _ in 0..2 {
+        if cursor.pos != target {
+            let step = (target - cursor.pos).king_step();
+            cursor.pos = cursor.pos + step;
+        }
     }
     // Cursor should be at (15, 10) — exactly on target
     assert_eq!(cursor.pos, target);
-    cursor.steps_remaining = 0;
 
     // After "firing", cursor stays at (15, 10) — not reset to NPC pos
     assert_eq!(cursor.pos, GridVec::new(15, 10));
 
     // If target moves, cursor advances from current pos, not NPC pos
     let new_target = GridVec::new(18, 10);
-    cursor.steps_remaining = 2;
-    while cursor.steps_remaining > 0 && cursor.pos != new_target {
-        let step = (new_target - cursor.pos).king_step();
-        cursor.pos = cursor.pos + step;
-        cursor.steps_remaining -= 1;
+    for _ in 0..2 {
+        if cursor.pos != new_target {
+            let step = (new_target - cursor.pos).king_step();
+            cursor.pos = cursor.pos + step;
+        }
     }
     assert_eq!(cursor.pos, GridVec::new(17, 10));
-    assert_eq!(cursor.steps_remaining, 0);
 }

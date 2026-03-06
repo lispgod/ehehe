@@ -253,12 +253,27 @@ pub struct PatrolOrigin(pub GridVec);
 /// When an NPC loses sight of its target, it navigates to the remembered
 /// position before returning to patrol/idle.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-#[derive(Default)]
 pub struct AiMemory {
     /// Last known position of the chase target.
     pub last_known_pos: Option<GridVec>,
     /// Turn number when the target was last seen.
     pub last_seen_turn: u32,
+    /// Number of failed 360° search sweeps at the last-known position.
+    /// After 2 failed sweeps the NPC gives up and returns to patrol.
+    pub search_attempts: u8,
+    /// Cursor steps taken since last fire (for blind-fire after 4 steps).
+    pub cursor_steps: u8,
+}
+
+impl Default for AiMemory {
+    fn default() -> Self {
+        Self {
+            last_known_pos: None,
+            last_seen_turn: 0,
+            search_attempts: 0,
+            cursor_steps: 0,
+        }
+    }
 }
 
 /// Personality traits that modulate NPC AI behavior.
@@ -292,17 +307,14 @@ pub enum AimingStyle {
     Suppression,
 }
 
-/// NPC aiming cursor that advances toward the target before firing.
-/// Each time the NPC is ready to shoot, it rolls 1d6 to determine how
-/// many king-steps the internal cursor takes toward the target that turn.
-/// The cursor does *not* reset between shots — it continues from wherever
-/// it currently is.
+/// Shared cursor component for aiming.  Both the player and NPCs use this
+/// same component — the AI system drives the cursor position; it does not
+/// bypass it.  The cursor advances one king-step per turn, matching player
+/// cursor speed exactly.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct AiAimCursor {
+pub struct Cursor {
     /// Current aim cursor position in world coordinates.
     pub pos: GridVec,
-    /// Remaining cursor steps to take this turn before firing.
-    pub steps_remaining: u8,
 }
 
 /// Persistent target tracking for NPC AI.

@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::components::{AiAimCursor, AiLookDir, AiMemory, AiPersonality, AiPursuitBoost, AiState, AiTarget, AimingStyle, BlocksMovement, CombatStats, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, PlayerControlled, Position, Speed, Stamina, Viewshed};
+use crate::components::{AiLookDir, AiMemory, AiPersonality, AiPursuitBoost, AiState, AiTarget, AimingStyle, BlocksMovement, CombatStats, Cursor, Energy, Faction, Health, Inventory, Item, ItemKind, PatrolOrigin, PlayerControlled, Position, Speed, Stamina, Viewshed};
 use crate::events::{AttackIntent, MeleeWideIntent, MolotovCastIntent, MoveIntent, PickupItemIntent, RangedAttackIntent, SpellCastIntent, ThrowItemIntent, UseItemIntent};
 use crate::grid_vec::GridVec;
 use crate::resources::{GameMapResource, SpatialIndex, TurnCounter};
@@ -316,7 +316,7 @@ const HASH_KNUTH: u64 = 2654435761;
 const HASH_LCG: u64 = 6364136223846793005;
 
 /// Assigns a random [`AimingStyle`], sets [`AiTarget`], and initialises
-/// the [`AiAimCursor`] on an entity transitioning to [`AiState::Chasing`].
+/// the [`Cursor`] on an entity transitioning to [`AiState::Chasing`].
 /// If an existing cursor is provided (e.g. during target switches), it is
 /// preserved so the cursor continues from wherever it currently is toward
 /// the new target without reset or delay. Otherwise a fresh cursor is
@@ -326,7 +326,7 @@ fn assign_aiming_style(
     entity: Entity,
     turn: u32,
     chase_target: Option<(Entity, GridVec)>,
-    cursor: Option<&AiAimCursor>,
+    cursor: Option<&Cursor>,
     npc_pos: GridVec,
 ) {
     let aim_hash = (entity.to_bits() ^ turn as u64).wrapping_mul(HASH_KNUTH);
@@ -338,7 +338,7 @@ fn assign_aiming_style(
     commands.entity(entity).insert(style);
     // Preserve cursor position if one exists — only create fresh if brand new.
     if cursor.is_none() {
-        commands.entity(entity).insert(AiAimCursor { pos: npc_pos, steps_remaining: 0 });
+        commands.entity(entity).insert(Cursor { pos: npc_pos });
     }
     if let Some((te, tv)) = chase_target {
         commands.entity(entity).insert(AiTarget { entity: te, last_pos: tv, last_seen: turn, locked: false });
@@ -505,6 +505,27 @@ const PURSUIT_AWARENESS_BOOST: i32 = 8;
 /// Number of turns of no-sighting before each point of pursuit boost decays.
 const PURSUIT_BOOST_DECAY_TURNS: u32 = 3;
 
+/// Maximum cursor steps before blind-fire is allowed.
+const BLIND_FIRE_STEPS: u8 = 4;
+
+/// Maximum number of failed 360° sweeps before giving up the search.
+const MAX_SEARCH_SWEEPS: u8 = 2;
+
+/// Macro that consolidates the "insert AiTarget locked, spend_action, continue"
+/// pattern used throughout the AI combat code.
+macro_rules! lock_and_act {
+    ($commands:expr, $entity:expr, $target_entity:expr, $target_vec:expr, $turn:expr, $energy:expr) => {{
+        $commands.entity($entity).insert(AiTarget {
+            entity: $target_entity,
+            last_pos: $target_vec,
+            last_seen: $turn,
+            locked: true,
+        });
+        $energy.spend_action();
+        continue;
+    }};
+}
+
 // ─────────────────────── AI Decision Helpers ───────────────────────
 
 /// Returns `true` if the NPC has an unloaded (but reloadable) gun.
@@ -537,12 +558,9 @@ fn should_flee(health: &Option<Mut<Health>>) -> bool {
 ///
 /// The resulting score is used by `pick_best_threat` to decide which hostile
 /// the NPC should focus on.
-fn threat_score(distance: i32, aiming_at_me: bool, _ally_engaged: bool) -> i32 {
+fn threat_score(distance: i32) -> i32 {
     // Distance: closer = higher. Max practical range ~30 tiles.
-    let dist_score = (40 - distance).max(0) * 3;
-    let aim_bonus = if aiming_at_me { 30 } else { 0 };
-    let ally_penalty = if _ally_engaged { 15 } else { 0 };
-    dist_score + aim_bonus - ally_penalty
+    (40 - distance).max(0) * 3
 }
 
 /// Computes the effective awareness range for an NPC, incorporating
@@ -626,7 +644,7 @@ fn flee_direction(
 pub fn ai_system(
     mut commands: Commands,
     mut ai_query: Query<
-        ((Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>), (Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>, Option<&AiTarget>, Option<&AimingStyle>, Option<&mut AiAimCursor>), Option<&AiPursuitBoost>),
+        ((Entity, &Position, &mut AiState, Option<&mut Viewshed>, &mut Energy, Option<&Faction>, Option<&mut AiLookDir>, Option<&PatrolOrigin>), (Option<&mut Inventory>, Option<&mut Health>, Option<&mut Stamina>, Option<&CombatStats>, Option<&mut AiMemory>, Option<&AiPersonality>, Option<&AiTarget>, Option<&AimingStyle>, Option<&mut Cursor>), Option<&AiPursuitBoost>),
         Without<PlayerControlled>,
     >,
     player_query: Query<(Entity, &Position, &Health), With<PlayerControlled>>,
@@ -689,7 +707,7 @@ pub fn ai_system(
             }
     }
 
-    for ((entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin), (mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality, ai_target, aiming_style, mut ai_aim_cursor), pursuit_boost) in &mut ai_query {
+    for ((entity, pos, mut ai, mut viewshed, mut energy, faction, mut ai_look_dir, patrol_origin), (mut inventory, health, mut stamina, combat_stats, mut ai_memory, _personality, ai_target, aiming_style, mut cursor), pursuit_boost) in &mut ai_query {
         if !energy.can_act() {
             continue;
         }
@@ -715,7 +733,7 @@ pub fn ai_system(
                             // factors. They default to false because the current ECS query
                             // structure prevents accessing other NPCs' AiTarget during this
                             // iteration. Distance is the dominant scoring factor regardless.
-                            let score = threat_score(dist, false, false);
+                            let score = threat_score(dist);
                             visible_hostiles.push((other_ent, ov, score));
                         }
                     }
@@ -733,7 +751,7 @@ pub fn ai_system(
             if let Some((pe, pp, _)) = player_info {
                 let pv = pp.as_grid_vec();
                 let dist = my_pos.chebyshev_distance(pv);
-                let score = threat_score(dist, false, false);
+                let score = threat_score(dist);
                 visible_hostiles.push((pe, pv, score));
             }
         }
@@ -784,7 +802,7 @@ pub fn ai_system(
             if !target_alive {
                 // Target is dead — clear
                 commands.entity(entity).remove::<AiTarget>();
-                commands.entity(entity).remove::<AiAimCursor>();
+                commands.entity(entity).remove::<Cursor>();
                 commands.entity(entity).remove::<AiPursuitBoost>();
                 None
             } else if ai_tgt.locked && turns_since_seen < TARGET_LOCK_TIMEOUT {
@@ -817,7 +835,7 @@ pub fn ai_system(
             } else {
                 // Target escaped — clear
                 commands.entity(entity).remove::<AiTarget>();
-                commands.entity(entity).remove::<AiAimCursor>();
+                commands.entity(entity).remove::<Cursor>();
                 commands.entity(entity).remove::<AiPursuitBoost>();
                 None
             }
@@ -878,7 +896,7 @@ pub fn ai_system(
         if let Some((pe, pv)) = proximity_hostile {
             if !matches!(*ai, AiState::Chasing) {
                 *ai = AiState::Chasing;
-                assign_aiming_style(&mut commands, entity, turn_counter.0, Some((pe, pv)), ai_aim_cursor.as_deref(), my_pos);
+                assign_aiming_style(&mut commands, entity, turn_counter.0, Some((pe, pv)), cursor.as_deref(), my_pos);
                 let toward = (pv - my_pos).king_step();
                 if !toward.is_zero() {
                     update_look_dir(toward, &mut ai_look_dir, &mut viewshed);
@@ -1087,96 +1105,21 @@ pub fn ai_system(
         }
 
         match *ai {
-            AiState::Idle => {
+            AiState::Idle | AiState::Patrolling => {
                 if chase_target.is_some() {
                     *ai = AiState::Chasing;
-                    assign_aiming_style(&mut commands, entity, turn_counter.0, chase_target, ai_aim_cursor.as_deref(), my_pos);
+                    assign_aiming_style(&mut commands, entity, turn_counter.0, chase_target, cursor.as_deref(), my_pos);
                     if let Some((_, tv)) = chase_target {
                         let toward = (tv - my_pos).king_step();
                         if !toward.is_zero() {
                             update_look_dir(toward, &mut ai_look_dir, &mut viewshed);
                         }
                     }
-                } else {
-                    // No enemy visible — prioritize reloading.
-                    let mut reloaded = false;
-                    if has_unloaded_gun(&inventory, &item_kinds)
-                        && let Some(ref mut inv) = inventory {
-                            let reloadable = inv.items.iter().copied().find(|&ent| {
-                                item_kinds.get(ent).ok().is_some_and(|k|
-                                    matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
-                                )
-                            });
-                            if let Some(gun_entity) = reloadable
-                                && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
-                                    && let ItemKind::Gun { ref mut loaded, .. } = *kind {
-                                        *loaded += 1;
-                                        reloaded = true;
-                                    }
-                        }
-                    if reloaded {
-                        energy.spend_action();
-                        continue;
-                    }
-
-                    // Scavenge items — but only when no remembered target exists.
-                    // Pursuit of a known threat always takes priority.
-                    if let Some(ref mem) = ai_memory
-                        && let Some(remembered_pos) = mem.last_known_pos
-                        && turn_counter.0.saturating_sub(mem.last_seen_turn) < MEMORY_DURATION
-                        && my_pos != remembered_pos
-                    {
-                        let step = a_star_first_step(my_pos, remembered_pos, |p| {
-                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
-                        });
-                        if let Some(step) = step
-                            && !step.is_zero() {
-                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                            }
-                        energy.spend_action();
-                    } else if let Some((_, item_vec)) = nearest_item {
-                        let step = a_star_first_step(my_pos, item_vec, |p| {
-                            tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
-                        });
-                        if let Some(step) = step
-                                && !step.is_zero() {
-                                    move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                                update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                            }
-                        energy.spend_action();
-                    } else {
-                        if let Some(ref mut mem) = ai_memory
-                            && turn_counter.0.saturating_sub(mem.last_seen_turn) >= MEMORY_DURATION {
-                                mem.last_known_pos = None;
-                            }
-                        // Circular rotation: if a rotation sequence is active,
-                        // continue it one CW step; otherwise start a new one on
-                        // the look-around interval.
-                        if is_rotating(&ai_look_dir) {
-                            rotate_look_dir(&mut ai_look_dir, &mut viewshed);
-                        } else {
-                            let look_hash = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
-                            let look_interval = LOOK_AROUND_BASE_INTERVAL + (look_hash % LOOK_AROUND_DICE_RANGE);
-                            if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval) {
-                                begin_circular_rotation(&mut ai_look_dir, &mut viewshed);
-                            } else {
-                                rotate_look_dir(&mut ai_look_dir, &mut viewshed);
-                            }
-                        }
-                        energy.spend_action();
-                    }
-                }
-            }
-            AiState::Patrolling => {
-                if chase_target.is_some() {
-                    *ai = AiState::Chasing;
-                    assign_aiming_style(&mut commands, entity, turn_counter.0, chase_target, ai_aim_cursor.as_deref(), my_pos);
                     continue;
                 }
 
                 // No enemy visible — prioritize reloading.
-                let mut reloaded_patrol = false;
+                let mut reloaded = false;
                 if has_unloaded_gun(&inventory, &item_kinds)
                     && let Some(ref mut inv) = inventory {
                         let reloadable = inv.items.iter().copied().find(|&ent| {
@@ -1188,10 +1131,10 @@ pub fn ai_system(
                             && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
                                 && let ItemKind::Gun { ref mut loaded, .. } = *kind {
                                     *loaded += 1;
-                                    reloaded_patrol = true;
+                                    reloaded = true;
                                 }
                     }
-                if reloaded_patrol {
+                if reloaded {
                     energy.spend_action();
                     continue;
                 }
@@ -1207,21 +1150,22 @@ pub fn ai_system(
                         tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
-                            && !step.is_zero() {
-                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                        && !step.is_zero() {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
                             update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     energy.spend_action();
                     continue;
                 }
 
+                // Scavenge items
                 if let Some((_, item_vec)) = nearest_item {
                     let step = a_star_first_step(my_pos, item_vec, |p| {
                         tile_cost_for_ai(p, entity, &game_map, &spatial, &blockers)
                     });
                     if let Some(step) = step
-                            && !step.is_zero() {
-                                move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                        && !step.is_zero() {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
                             update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     energy.spend_action();
@@ -1247,82 +1191,85 @@ pub fn ai_system(
                 let pause_hash = (my_pos.x.wrapping_mul(13) ^ my_pos.y.wrapping_mul(7))
                     .wrapping_add(turn_counter.0 as i32) as u32;
                 // Start a new circular look-around every LOOK_AROUND interval.
-                let look_hash_patrol = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
-                let look_interval_patrol = LOOK_AROUND_BASE_INTERVAL + (look_hash_patrol % LOOK_AROUND_DICE_RANGE);
-                if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval_patrol) {
+                let look_hash = (my_pos.x.wrapping_mul(7919) ^ my_pos.y.wrapping_mul(6271)).unsigned_abs();
+                let look_interval = LOOK_AROUND_BASE_INTERVAL + (look_hash % LOOK_AROUND_DICE_RANGE);
+                if turn_counter.0 > 0 && turn_counter.0.is_multiple_of(look_interval) {
                     begin_circular_rotation(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
                     continue;
                 }
-                if pause_hash.is_multiple_of(7) {
+                if matches!(*ai, AiState::Idle) {
+                    // Idle: gentle rotation when nothing happening
                     rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                     energy.spend_action();
-                    continue;
-                }
+                } else {
+                    // Patrolling: occasional pause + patrol movement
+                    if pause_hash.is_multiple_of(7) {
+                        rotate_look_dir(&mut ai_look_dir, &mut viewshed);
+                        energy.spend_action();
+                        continue;
+                    }
 
-                // Faction-specific patrol direction (preferred heading).
-                let patrol_heading: Option<GridVec> = match my_faction {
-                    Some(Faction::Lawmen) => {
-                        if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
-                            Some((origin - my_pos).king_step())
-                        } else {
-                            let offset = my_pos - origin;
-                            let rotated = offset.rotate_45_cw();
-                            let target = origin + rotated;
-                            Some((target - my_pos).king_step())
+                    // Faction-specific patrol direction (preferred heading).
+                    let patrol_heading: Option<GridVec> = match my_faction {
+                        Some(Faction::Lawmen) => {
+                            if my_pos.chebyshev_distance(origin) > PATROL_RADIUS {
+                                Some((origin - my_pos).king_step())
+                            } else {
+                                let offset = my_pos - origin;
+                                let rotated = offset.rotate_45_cw();
+                                let target = origin + rotated;
+                                Some((target - my_pos).king_step())
+                            }
                         }
-                    }
-                    Some(Faction::Wildlife) => {
-                        let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13));
-                        let dir_idx = dir_seed.unsigned_abs() as usize % 8;
-                        Some(GridVec::DIRECTIONS_8[dir_idx])
-                    }
-                    Some(Faction::Outlaws) => {
-                        if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
-                            Some((origin - my_pos).king_step())
-                        } else {
-                            let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(3) ^ my_pos.y.wrapping_mul(11));
+                        Some(Faction::Wildlife) => {
+                            let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(7) ^ my_pos.y.wrapping_mul(13));
                             let dir_idx = dir_seed.unsigned_abs() as usize % 8;
                             Some(GridVec::DIRECTIONS_8[dir_idx])
                         }
-                    }
-                    _ => {
-                        let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9));
-                        let dir_idx = dir_seed.unsigned_abs() as usize % 8;
-                        Some(GridVec::DIRECTIONS_8[dir_idx])
-                    }
-                };
+                        Some(Faction::Outlaws) => {
+                            if my_pos.chebyshev_distance(origin) > PATROL_RADIUS / 2 {
+                                Some((origin - my_pos).king_step())
+                            } else {
+                                let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(3) ^ my_pos.y.wrapping_mul(11));
+                                let dir_idx = dir_seed.unsigned_abs() as usize % 8;
+                                Some(GridVec::DIRECTIONS_8[dir_idx])
+                            }
+                        }
+                        _ => {
+                            let dir_seed = energy.0.wrapping_add(my_pos.x.wrapping_mul(5) ^ my_pos.y.wrapping_mul(9));
+                            let dir_idx = dir_seed.unsigned_abs() as usize % 8;
+                            Some(GridVec::DIRECTIONS_8[dir_idx])
+                        }
+                    };
 
-                // Influence-weighted patrol: score each neighbor tile by
-                // combining the preferred heading with the tile's influence
-                // cost. Lower tile cost (cover, safe terrain) is preferred;
-                // tiles aligned with the patrol heading get a bonus.
-                if let Some(heading) = patrol_heading
-                    && !heading.is_zero()
-                {
-                    let mut best_dir = None;
-                    let mut best_score = i32::MIN;
-                    for dir in GridVec::DIRECTIONS_8 {
-                        let candidate = my_pos + dir;
-                        let tc = match tile_cost_for_ai(candidate, entity, &game_map, &spatial, &blockers) {
-                            Some(c) => c,
-                            None => continue,
-                        };
-                        // Heading alignment bonus: dot product with heading.
-                        let alignment = dir.x * heading.x + dir.y * heading.y;
-                        let score = alignment * cost::BASE - tc;
-                        if score > best_score {
-                            best_score = score;
-                            best_dir = Some(dir);
+                    // Influence-weighted patrol step
+                    if let Some(heading) = patrol_heading
+                        && !heading.is_zero()
+                    {
+                        let mut best_dir = None;
+                        let mut best_score = i32::MIN;
+                        for dir in GridVec::DIRECTIONS_8 {
+                            let candidate = my_pos + dir;
+                            let tc = match tile_cost_for_ai(candidate, entity, &game_map, &spatial, &blockers) {
+                                Some(c) => c,
+                                None => continue,
+                            };
+                            let alignment = dir.x * heading.x + dir.y * heading.y;
+                            let score = alignment * cost::BASE - tc;
+                            if score > best_score {
+                                best_score = score;
+                                best_dir = Some(dir);
+                            }
+                        }
+                        if let Some(step) = best_dir {
+                            move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
+                            update_look_dir(step, &mut ai_look_dir, &mut viewshed);
                         }
                     }
-                    if let Some(step) = best_dir {
-                        move_intents.write(MoveIntent { entity, dx: step.x, dy: step.y });
-                        update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                    }
-                }
 
-                energy.spend_action();
+                    energy.spend_action();
+                }
             }
             AiState::Fleeing => {
                 let threat_pos = chase_target.map(|(_, tv)| tv)
@@ -1350,12 +1297,36 @@ pub fn ai_system(
                 energy.spend_action();
             }
             AiState::Chasing => {
+                // ── All guns empty → reload is top priority ─────────────
+                let all_guns_empty = inventory.as_ref().is_some_and(|inv| {
+                    let has_any_gun = inv.items.iter().any(|&ent| {
+                        item_kinds.get(ent).ok().is_some_and(|k| matches!(k, ItemKind::Gun { .. }))
+                    });
+                    let has_loaded_gun = inv.items.iter().any(|&ent| {
+                        item_kinds.get(ent).ok().is_some_and(|k|
+                            matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
+                        )
+                    });
+                    has_any_gun && !has_loaded_gun
+                });
+                if all_guns_empty {
+                    if let Some(ref mut inv) = inventory {
+                        let reloadable = inv.items.iter().copied().find(|&ent| {
+                            item_kinds.get(ent).ok().is_some_and(|k|
+                                matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
+                            )
+                        });
+                        if let Some(gun_entity) = reloadable
+                            && let Ok(mut kind) = item_kinds.get_mut(gun_entity)
+                                && let ItemKind::Gun { ref mut loaded, .. } = *kind {
+                                    *loaded += 1;
+                                    energy.spend_action();
+                                    continue;
+                                }
+                    }
+                }
+
                 // Use the pre-computed chase_target from threat scoring above.
-                // The chase_target already incorporates:
-                // - Threat priority scoring (distance, aiming, ally coverage)
-                // - Dynamic reprioritization (close threats override distant)
-                // - Target lock persistence (locked targets retained for TARGET_LOCK_TIMEOUT)
-                // - Continuous position updating (visible targets get real-time pos)
                 let target_info: Option<(Entity, GridVec)> = if chase_target.is_some() {
                     chase_target
                 } else {
@@ -1384,7 +1355,6 @@ pub fn ai_system(
                     // Check if we have a persistent AiTarget to pursue
                     if let Some(ai_tgt) = ai_target {
                         let turns_since_seen = turn_counter.0.saturating_sub(ai_tgt.last_seen);
-                        // Locked targets get TARGET_LOCK_TIMEOUT; unlocked get MEMORY_DURATION
                         let timeout = if ai_tgt.locked { TARGET_LOCK_TIMEOUT } else { MEMORY_DURATION };
                         if turns_since_seen < timeout {
                             if my_pos.chebyshev_distance(ai_tgt.last_pos) > 0 {
@@ -1401,30 +1371,35 @@ pub fn ai_system(
                                 energy.spend_action();
                                 continue;
                             }
-                            // Reached last known position — sweep the area by
-                            // performing a circular rotation before giving up.
+                            // Reached last known position — sweep the area.
                             if is_rotating(&ai_look_dir) {
                                 rotate_look_dir(&mut ai_look_dir, &mut viewshed);
                                 energy.spend_action();
                                 continue;
                             }
-                            // Start a full 360° sweep if we haven't done one yet
-                            // since arriving at the target's last position.
-                            if turns_since_seen < FULL_ROTATION_STEPS as u32 + 2 {
+                            // Check search_attempts — give up after MAX_SEARCH_SWEEPS
+                            let sweep_count = ai_memory.as_ref().map(|m| m.search_attempts).unwrap_or(0);
+                            if sweep_count < MAX_SEARCH_SWEEPS {
+                                // Start a full 360° sweep
                                 begin_circular_rotation(&mut ai_look_dir, &mut viewshed);
+                                if let Some(ref mut mem) = ai_memory {
+                                    mem.search_attempts += 1;
+                                }
                                 energy.spend_action();
                                 continue;
                             }
                         }
                     }
-                    // Only now fall back to patrolling — all pursuit exhausted
+                    // All pursuit exhausted — return to patrol
                     *ai = if patrol_origin.is_some() { AiState::Patrolling } else { AiState::Idle };
                     if let Some(ref mut mem) = ai_memory {
                         mem.last_known_pos = None;
+                        mem.search_attempts = 0;
+                        mem.cursor_steps = 0;
                     }
                     commands.entity(entity).remove::<AiTarget>();
                     commands.entity(entity).remove::<AimingStyle>();
-                    commands.entity(entity).remove::<AiAimCursor>();
+                    commands.entity(entity).remove::<Cursor>();
                     commands.entity(entity).remove::<AiPursuitBoost>();
                     energy.spend_action();
                     continue;
@@ -1435,10 +1410,11 @@ pub fn ai_system(
                     continue;
                 };
 
-                // Update memory with current target position
+                // Reset search_attempts since we have a live target
                 if let Some(ref mut mem) = ai_memory {
                     mem.last_known_pos = Some(target_vec);
                     mem.last_seen_turn = turn_counter.0;
+                    mem.search_attempts = 0;
                 }
 
                 let toward_target = (target_vec - my_pos).king_step();
@@ -1460,58 +1436,69 @@ pub fn ai_system(
                     }
                 }
 
-                // ── Aim-cursor cadence ──────────────────────────────────
-                // Before firing, advance the NPC's internal aim cursor
-                // toward the target.  Roll 1d6 to decide how many
-                // king-steps the cursor takes this turn.  The cursor is
-                // persistent — it does NOT reset between shots.
-                if let Some(ref mut cursor) = ai_aim_cursor {
-                    if cursor.steps_remaining == 0 {
-                        // Roll 1d6 for new step budget
-                        let roll_hash = (entity.to_bits() ^ turn_counter.0 as u64)
-                            .wrapping_mul(HASH_LCG);
-                        cursor.steps_remaining = ((roll_hash % 6) as u8) + 1; // 1-6
+                // ── Cursor cadence: advance one king-step per turn ─────
+                // The cursor is persistent and advances exactly one
+                // king-step toward the target each turn, matching player
+                // cursor speed.
+                if let Some(ref mut cur) = cursor {
+                    if cur.pos != target_vec {
+                        let step = (target_vec - cur.pos).king_step();
+                        cur.pos = cur.pos + step;
+                        if let Some(ref mut mem) = ai_memory {
+                            mem.cursor_steps = mem.cursor_steps.saturating_add(1);
+                        }
                     }
-                    // Advance cursor toward target
-                    while cursor.steps_remaining > 0 && cursor.pos != target_vec {
-                        let step = (target_vec - cursor.pos).king_step();
-                        cursor.pos = cursor.pos + step;
-                        cursor.steps_remaining -= 1;
-                    }
-                    // If cursor hasn't reached the target yet, spend the
-                    // turn aiming and don't fire.
-                    if cursor.pos != target_vec {
-                        energy.spend_action();
-                        continue;
-                    }
-                    // Cursor is on target — proceed to fire. Reset budget
-                    // so next shot rolls fresh.
-                    cursor.steps_remaining = 0;
                 }
 
                 let dist = my_pos.chebyshev_distance(target_vec);
+                let cursor_on_target = cursor.as_ref().is_some_and(|c| c.pos == target_vec);
+                let steps_taken = ai_memory.as_ref().map(|m| m.cursor_steps).unwrap_or(0);
+                let can_blind_fire = steps_taken >= BLIND_FIRE_STEPS;
+                let can_fire = cursor_on_target || can_blind_fire;
 
-                // ── PRIORITY 1: Ranged attack — fire guns when enemy is in sights ──
-                // NPCs shoot at enemies whenever they have a loaded gun and
-                // clear line of sight — no range limit. If they can see you,
-                // they shoot at you.
+                // ── PRIORITY 1: Ranged attack ──────────────────────────
                 let mut used_gun = false;
                 if dist > 1
+                    && can_fire
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
-                    && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
-                    && let Some(ref mut inv) = inventory {
+                {
+                    let friendly_blocked = has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions);
+                    if friendly_blocked {
+                        // Arc cursor around the friendly: try perpendicular tiles adjacent to target
+                        if let Some(ref mut cur) = cursor {
+                            let shot_dir = (target_vec - my_pos).king_step();
+                            let perp1 = GridVec::new(-shot_dir.y, shot_dir.x);
+                            let perp2 = GridVec::new(shot_dir.y, -shot_dir.x);
+                            let alt1 = target_vec + perp1;
+                            let alt2 = target_vec + perp2;
+                            // Pick the passable alternative with clear LOS
+                            let chosen = [alt1, alt2].into_iter().find(|&alt| {
+                                game_map.0.is_passable(&alt)
+                                    && has_clear_line_of_sight(my_pos, alt, &game_map, &sand_cloud_tiles)
+                                    && !has_friendly_in_path(my_pos, alt, my_faction, entity, &spatial, &npc_positions)
+                            });
+                            if let Some(alt) = chosen {
+                                let step = (alt - cur.pos).king_step();
+                                cur.pos = cur.pos + step;
+                            }
+                            // else: hold and wait one turn
+                        }
+                        energy.spend_action();
+                        continue;
+                    }
+                    // No friendly in path — attempt to fire
+                    if let Some(ref mut inv) = inventory {
                         let gun_ent = inv.items.iter().copied().find(|&ent| {
                             item_kinds.get(ent).ok().is_some_and(|k|
                                 matches!(k, ItemKind::Gun { loaded, .. } if *loaded > 0)
                             )
                         });
                         if let Some(gun_entity) = gun_ent {
-                            let mut dx = target_vec.x - my_pos.x;
-                            let mut dy = target_vec.y - my_pos.y;
-                            // Apply aiming style modifiers to ranged fire
+                            let aim_target = cursor.as_ref().map(|c| c.pos).unwrap_or(target_vec);
+                            let mut dx = aim_target.x - my_pos.x;
+                            let mut dy = aim_target.y - my_pos.y;
                             match aiming_style {
                                 Some(&AimingStyle::SnapShot) => {
-                                    // Wider spread: offset endpoint by a small pseudo-random amount
                                     let spread_hash = (entity.to_bits() ^ turn_counter.0 as u64).wrapping_mul(HASH_LCG);
                                     let spread_x = ((spread_hash % 3) as i32) - 1;
                                     let spread_y = (((spread_hash >> 16) % 3) as i32) - 1;
@@ -1519,8 +1506,7 @@ pub fn ai_system(
                                     dy += spread_y;
                                 }
                                 Some(&AimingStyle::Suppression) => {
-                                    // Approximate direction only: use king_step scaled up
-                                    let dir = (target_vec - my_pos).king_step();
+                                    let dir = (aim_target - my_pos).king_step();
                                     let range = dist.max(AI_RANGED_ATTACK_RANGE);
                                     dx = dir.x * range;
                                     dy = dir.y * range;
@@ -1534,9 +1520,12 @@ pub fn ai_system(
                                 dy,
                                 gun_item: Some(gun_entity),
                             });
+                            if let Some(ref mut mem) = ai_memory {
+                                mem.cursor_steps = 0;
+                            }
                             used_gun = true;
                         } else {
-                            // Gun empty but in combat — reload immediately.
+                            // Gun empty but in combat — reload
                             let reloadable_gun = inv.items.iter().copied().find(|&ent| {
                                 item_kinds.get(ent).ok().is_some_and(|k|
                                     matches!(k, ItemKind::Gun { loaded, capacity, .. } if *loaded < *capacity)
@@ -1550,21 +1539,15 @@ pub fn ai_system(
                                     }
                         }
                     }
+                }
                 if used_gun {
-                    // Lock the target — NPC has committed to this engagement
-                    commands.entity(entity).insert(AiTarget {
-                        entity: target_entity,
-                        last_pos: target_vec,
-                        last_seen: turn_counter.0,
-                        locked: true,
-                    });
-                    energy.spend_action();
-                    continue;
+                    lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 2: Bow attack (unlimited ammo) ──
+                // ── PRIORITY 2: Bow attack (unlimited ammo) ────────────
                 let mut used_bow = false;
                 if dist > 1
+                    && can_fire
                     && has_clear_line_of_sight(my_pos, target_vec, &game_map, &sand_cloud_tiles)
                     && !has_friendly_in_path(my_pos, target_vec, my_faction, entity, &spatial, &npc_positions)
                     && let Some(ref inv) = inventory {
@@ -1589,39 +1572,26 @@ pub fn ai_system(
                                         bow_atk,
                                         entity,
                                     );
+                                    if let Some(ref mut mem) = ai_memory {
+                                        mem.cursor_steps = 0;
+                                    }
                                     used_bow = true;
                                 }
                     }
                 if used_bow {
-                    // Lock the target — NPC has committed to this engagement
-                    commands.entity(entity).insert(AiTarget {
-                        entity: target_entity,
-                        last_pos: target_vec,
-                        last_seen: turn_counter.0,
-                        locked: true,
-                    });
-                    energy.spend_action();
-                    continue;
+                    lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 3: Adjacent melee attack ──
+                // ── PRIORITY 3: Adjacent melee attack ──────────────────
                 if dist == 1 {
                     attack_intents.write(AttackIntent {
                         attacker: entity,
                         target: target_entity,
                     });
-                    // Lock the target — melee engagement
-                    commands.entity(entity).insert(AiTarget {
-                        entity: target_entity,
-                        last_pos: target_vec,
-                        last_seen: turn_counter.0,
-                        locked: true,
-                    });
-                    energy.spend_action();
-                    continue;
+                    lock_and_act!(commands, entity, target_entity, target_vec, turn_counter.0, energy);
                 }
 
-                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range ──
+                // ── PRIORITY 4: Throwable items (grenade/molotov) at medium range
                 let mut used_throwable = false;
                 if (3..=6).contains(&dist)
                     && let Some(ref mut inv) = inventory {
@@ -1734,10 +1704,7 @@ pub fn ai_system(
                     }
                 }
 
-                // Weighted A* pathfinding toward target.
-                // The influence map naturally routes the NPC through cover
-                // and around hazards.  Occasionally attempt to flank by
-                // adding a perpendicular offset to the goal.
+                // ── Chase: A* pathfinding toward target ────────────────
                 let flank_hash = (my_pos.x.wrapping_mul(31) ^ my_pos.y.wrapping_mul(17))
                     .wrapping_add(turn_counter.0 as i32) as u32;
                 let flank_goal = if dist > 3 && flank_hash.is_multiple_of(3) {
@@ -1762,8 +1729,13 @@ pub fn ai_system(
                         dy: step.y,
                     });
                     update_look_dir(step, &mut ai_look_dir, &mut viewshed);
-                    energy.spend_action();
                 }
+
+                // ── Lowest priority: heal if wounded ───────────────────
+                // (Healing was already checked before the state machine if
+                // HP < 50%; this covers incremental healing during chase.)
+
+                energy.spend_action();
             }
         }
     }
@@ -2035,32 +2007,28 @@ mod tests {
     fn threat_score_closer_hostile_scores_higher() {
         // A hostile at distance 3 should outscore one at distance 15.
         // This validates dynamic reprioritization: NPCs switch to nearer threats.
-        let close_score = threat_score(3, false, false);
-        let far_score = threat_score(15, false, false);
+        let close_score = threat_score(3);
+        let far_score = threat_score(15);
         assert!(close_score > far_score,
             "Closer hostile (d=3, score={}) should outscore distant (d=15, score={})",
             close_score, far_score);
     }
 
     #[test]
-    fn threat_score_aiming_bonus_overrides_distance() {
-        // A hostile at distance 10 that is aiming at us should outscore
-        // a hostile at distance 8 that is not aiming.
-        let aiming_far = threat_score(10, true, false);
-        let idle_near = threat_score(8, false, false);
-        assert!(aiming_far > idle_near,
-            "Aiming hostile at d=10 (score={}) should outscore idle at d=8 (score={})",
-            aiming_far, idle_near);
+    fn threat_score_distance_dominates() {
+        // Closer targets always outscore distant ones — no aiming/ally modifiers.
+        let near = threat_score(5);
+        let far = threat_score(15);
+        assert!(near > far,
+            "Near hostile (d=5, score={}) should outscore distant (d=15, score={})",
+            near, far);
     }
 
     #[test]
-    fn threat_score_ally_penalty_reduces_priority() {
-        // If an ally is already engaging a hostile, its score should drop.
-        let alone = threat_score(5, false, false);
-        let ally_engaged = threat_score(5, false, true);
-        assert!(alone > ally_engaged,
-            "Hostile without ally engagement (score={}) should outscore ally-engaged (score={})",
-            alone, ally_engaged);
+    fn threat_score_zero_at_max_range() {
+        // At distance 40+, the score should be 0 (clamped).
+        let score = threat_score(50);
+        assert_eq!(score, 0, "Threat score at extreme range should be 0");
     }
 
     #[test]
@@ -2127,11 +2095,17 @@ mod tests {
         assert!(dist_dist > CLOSE_THREAT_RANGE,
             "Distance {} should be outside CLOSE_THREAT_RANGE ({})", dist_dist, CLOSE_THREAT_RANGE);
 
-        let close_score = threat_score(close_dist, false, false);
-        let distant_score = threat_score(dist_dist, false, false);
+        let close_score = threat_score(close_dist);
+        let distant_score = threat_score(dist_dist);
         assert!(close_score > distant_score,
             "Close hostile (d={}, score={}) must outscore distant (d={}, score={})",
             close_dist, close_score, dist_dist, distant_score);
+    }
+
+    #[test]
+    fn blind_fire_steps_and_search_sweeps_constants() {
+        assert_eq!(BLIND_FIRE_STEPS, 4, "Blind fire after 4 cursor steps");
+        assert_eq!(MAX_SEARCH_SWEEPS, 2, "Give up search after 2 failed sweeps");
     }
 
     #[test]
